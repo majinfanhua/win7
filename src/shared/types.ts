@@ -95,11 +95,29 @@ export interface ChatMessage {
   content: string
 }
 
+/**
+ * 一次对话的 token 用量。
+ *
+ * cachedTokens 是命中 prompt 缓存的输入 tokens。
+ * 中转站返回真实用量时 source 为 'api'；不返回时主进程会按
+ * “与上一次请求的公共前缀”估算一个量级，此时 source 为 'estimate'。
+ */
+export interface AiUsage {
+  promptTokens: number
+  completionTokens: number
+  cachedTokens: number
+  /** 缓存命中率，0 ~ 1 */
+  cacheHitRate: number
+  source: 'api' | 'estimate'
+}
+
 export interface AiStreamChunk {
   requestId: string
   kind: 'delta' | 'done' | 'error'
   text?: string
   message?: string
+  /** 只在 kind === 'done' 时给出 */
+  usage?: AiUsage
 }
 
 export interface AiTestResult {

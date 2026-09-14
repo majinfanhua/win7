@@ -3,6 +3,7 @@ import {
   IPC,
   type AiStreamChunk,
   type AiTestResult,
+  type AiUsage,
   type ChatMessage,
   type ModelListResult
 } from '../../shared/types'
@@ -65,25 +66,120 @@ function readBody(stream: Electron.IncomingMessage, done: (body: string) => void
   stream.on('error', () => done(raw))
 }
 
-/** 流式对话，SSE 逐块回推给渲染进程 */
-function runStream(requestId: string, messages: ChatMessage[], emit: (chunk: AiStreamChunk) => void): Promise<void> {
-  const invalid = configError()
-  if (invalid) {
-    emit({ requestId, kind: 'error', message: invalid })
-    return Promise.resolve()
-  }
+/* ------------------------------------------------------------------ *
+ * 缓存命中
+ * ------------------------------------------------------------------ */
 
+/** 上一次请求的 prompt 文本，用于本地估算缓存命中 */
+let lastPromptText = ''
+
+/** 把 messages 拍平成一段文本，方便比较前后两次请求的公共前缀 */
+function flattenPrompt(messages: ChatMessage[]): string {
+  return messages.map((m) => `${m.role}\u0000${m.content}`).join('\u0001')
+}
+
+function commonPrefixLength(a: string, b: string): number {
+  const max = Math.min(a.length, b.length)
+  let i = 0
+  while (i < max && a.charCodeAt(i) === b.charCodeAt(i)) i++
+  return i
+}
+
+/** 粗略 token 换算：中文约 1 字 1 个，英文约 4 字符 1 个，折中按 2 字符 1 个 */
+function roughTokens(text: string): number {
+  return Math.max(1, Math.round(text.length / 2))
+}
+
+/**
+ * 本地估算缓存命中。
+ *
+ * prompt 缓存是按“前缀”命中的，所以同一会话里的后续几轮通常能命中大部分前缀。
+ * 这里拿与上一次请求的公共前缀占比做估算 —— 只给量级，不是精确值：
+ * 真实缓存还有最小块大小与 TTL，估算结果一般会偏高。
+ */
+function estimateUsage(messages: ChatMessage[], completion: string): AiUsage {
+  const prompt = flattenPrompt(messages)
+  const promptTokens = roughTokens(prompt)
+  const hitRatio = commonPrefixLength(prompt, lastPromptText) / Math.max(1, prompt.length)
+  const cachedTokens = Math.round(promptTokens * hitRatio)
+  return {
+    promptTokens,
+    completionTokens: roughTokens(completion),
+    cachedTokens,
+    cacheHitRate: cachedTokens / promptTokens,
+    source: 'estimate'
+  }
+}
+
+/** 各家中转站报的 usage 字段名不一样，这里只声明可能出现的那几个 */
+interface RawUsage {
+  prompt_tokens?: number
+  completion_tokens?: number
+  prompt_cache_hit_tokens?: number
+  prompt_tokens_details?: { cached_tokens?: number }
+  cache_read_input_tokens?: number
+}
+
+/**
+ * 抠出缓存命中数。按常见程度依次尝试：
+ *   - DeepSeek：prompt_cache_hit_tokens
+ *   - OpenAI：prompt_tokens_details.cached_tokens
+ *   - Anthropic 风格（部分中转站转发时会保留）：cache_read_input_tokens
+ * 都没给就返回 null —— 说明这家不报缓存，只能走估算。
+ */
+function cachedTokensFrom(raw: RawUsage): number | null {
+  if (typeof raw.prompt_cache_hit_tokens === 'number') return raw.prompt_cache_hit_tokens
+  const details = raw.prompt_tokens_details
+  if (details && typeof details.cached_tokens === 'number') return details.cached_tokens
+  if (typeof raw.cache_read_input_tokens === 'number') return raw.cache_read_input_tokens
+  return null
+}
+
+/** token 数尽量用真实值，缓存命中率拿不到就用估算，并用 source 标明来源 */
+function buildUsage(raw: RawUsage | null, messages: ChatMessage[], completion: string): AiUsage {
+  const estimate = estimateUsage(messages, completion)
+  if (!raw) return estimate
+
+  const promptTokens = raw.prompt_tokens ?? estimate.promptTokens
+  const completionTokens = raw.completion_tokens ?? estimate.completionTokens
+  const cached = cachedTokensFrom(raw)
+  // 报了用量但不报缓存，那就只把 token 数换成真实值
+  if (cached === null) return { ...estimate, promptTokens, completionTokens }
+
+  return {
+    promptTokens,
+    completionTokens,
+    cachedTokens: cached,
+    cacheHitRate: promptTokens > 0 ? cached / promptTokens : 0,
+    source: 'api'
+  }
+}
+
+/**
+ * 单次流式尝试。
+ * 返回 'retry' 表示中转站不认 stream_options（HTTP 400/422），需要去掉它再试一次。
+ */
+function runStreamOnce(
+  requestId: string,
+  messages: ChatMessage[],
+  emit: (chunk: AiStreamChunk) => void,
+  includeUsage: boolean
+): Promise<'ok' | 'retry'> {
   const cfg = getConfig().ai
   const body = JSON.stringify({
     model: cfg.model,
     messages,
     temperature: cfg.temperature,
-    stream: true
+    stream: true,
+    // 只有带上它，OpenAI / DeepSeek 才会在流末尾补一块 usage
+    ...(includeUsage ? { stream_options: { include_usage: true } } : {})
   })
 
   return new Promise((resolve) => {
     let settled = false
     let timer: NodeJS.Timeout
+    let rawUsage: RawUsage | null = null
+    let completionText = ''
 
     const finish = (chunk: AiStreamChunk): void => {
       if (settled) return
@@ -91,15 +187,22 @@ function runStream(requestId: string, messages: ChatMessage[], emit: (chunk: AiS
       active.delete(requestId)
       clearTimeout(timer)
       emit(chunk)
-      resolve()
+      resolve('ok')
     }
+
+    /** 收尾时统一带上用量；中断 / 报错路径不给 */
+    const doneChunk = (): AiStreamChunk => ({
+      requestId,
+      kind: 'done',
+      usage: buildUsage(rawUsage, messages, completionText)
+    })
 
     let request: Electron.ClientRequest
     try {
       request = net.request({ method: 'POST', url: chatEndpoint(cfg.baseUrl), redirect: 'follow' })
     } catch (err) {
       emit({ requestId, kind: 'error', message: `请求创建失败: ${String(err)}` })
-      resolve()
+      resolve('ok')
       return
     }
 
@@ -118,7 +221,18 @@ function runStream(requestId: string, messages: ChatMessage[], emit: (chunk: AiS
     request.on('response', (response) => {
       const status = response.statusCode || 0
       if (status !== 200) {
-        readBody(response, (raw) => finish({ requestId, kind: 'error', message: describeHttpError(status, raw) }))
+        readBody(response, (raw) => {
+          if (includeUsage && (status === 400 || status === 422)) {
+            // 部分中转站不认 stream_options，去掉后重试一次，别把整个功能打挂
+            logger.warn('ai', `中转站拒绝了 stream_options（HTTP ${status}），去掉该参数重试`)
+            settled = true
+            active.delete(requestId)
+            clearTimeout(timer)
+            resolve('retry')
+            return
+          }
+          finish({ requestId, kind: 'error', message: describeHttpError(status, raw) })
+        })
         return
       }
 
@@ -132,19 +246,27 @@ function runStream(requestId: string, messages: ChatMessage[], emit: (chunk: AiS
           if (!line || line.startsWith(':') || !line.startsWith('data:')) continue
           const payload = line.slice(5).trim()
           if (payload === '[DONE]') {
-            finish({ requestId, kind: 'done' })
+            finish(doneChunk())
             return
           }
           try {
-            const json = JSON.parse(payload) as { choices?: Array<{ delta?: { content?: string } }> }
+            const json = JSON.parse(payload) as {
+              choices?: Array<{ delta?: { content?: string } }>
+              usage?: RawUsage
+            }
+            // usage 是单独一块送来的，那时 choices 是空数组
+            if (json.usage) rawUsage = json.usage
             const delta = json.choices && json.choices[0] && json.choices[0].delta?.content
-            if (delta) emit({ requestId, kind: 'delta', text: delta })
+            if (delta) {
+              completionText += delta
+              emit({ requestId, kind: 'delta', text: delta })
+            }
           } catch {
             /* 分片不完整，等下一个 chunk */
           }
         }
       })
-      response.on('end', () => finish({ requestId, kind: 'done' }))
+      response.on('end', () => finish(doneChunk()))
       response.on('error', (err: Error) =>
         finish({ requestId, kind: 'error', message: `响应中断: ${err.message}` })
       )
@@ -154,6 +276,27 @@ function runStream(requestId: string, messages: ChatMessage[], emit: (chunk: AiS
     request.write(body)
     request.end()
   })
+}
+
+/** 流式对话：先按带 usage 的方式请求，中转站不认就退回去重试一次 */
+async function runStream(
+  requestId: string,
+  messages: ChatMessage[],
+  emit: (chunk: AiStreamChunk) => void
+): Promise<void> {
+  const invalid = configError()
+  if (invalid) {
+    emit({ requestId, kind: 'error', message: invalid })
+    return
+  }
+
+  // 先记下本次 prompt，估算缓存命中要拿它当下一轮的对比基准
+  const promptText = flattenPrompt(messages)
+
+  const first = await runStreamOnce(requestId, messages, emit, true)
+  if (first === 'retry') await runStreamOnce(requestId, messages, emit, false)
+
+  lastPromptText = promptText
 }
 
 /** 连通性自检：用最小请求验证地址 / 密钥 / 模型三者是否可用 */

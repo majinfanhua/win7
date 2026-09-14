@@ -23,6 +23,7 @@ import { languageFromPath } from '@shared/language'
 import {
   DEFAULT_CONFIG,
   type AiStreamChunk,
+  type AiUsage,
   type AppConfig,
   type ChatMessage,
   type DoctorReport,
@@ -279,9 +280,35 @@ function fakeReply(question: string): string {
   ].join('\n')
 }
 
+/** 上一次请求的 prompt，用于和主进程同一套逻辑估算缓存命中 */
+let lastPromptText = ''
+
+function flatten(messages: ChatMessage[]): string {
+  return messages.map((m) => `${m.role}\u0000${m.content}`).join('\u0001')
+}
+
+/** 桩里没有真实用量，按“与上一次请求的公共前缀”估一个，和主进程的算法保持一致 */
+function buildStubUsage(messages: ChatMessage[], reply: string): AiUsage {
+  const prompt = flatten(messages)
+  const promptTokens = Math.max(1, Math.round(prompt.length / 2))
+  const max = Math.min(prompt.length, lastPromptText.length)
+  let common = 0
+  while (common < max && prompt.charCodeAt(common) === lastPromptText.charCodeAt(common)) common++
+  const cachedTokens = Math.round(promptTokens * (common / Math.max(1, prompt.length)))
+  return {
+    promptTokens,
+    completionTokens: Math.max(1, Math.round(reply.length / 2)),
+    cachedTokens,
+    cacheHitRate: cachedTokens / promptTokens,
+    source: 'estimate'
+  }
+}
+
 function streamReply(requestId: string, messages: ChatMessage[]): Promise<void> {
   const lastUser = [...messages].reverse().find((m) => m.role === 'user')
-  const chunks = `${fakeReply(lastUser?.content ?? '')}\n`.match(/[\s\S]{1,4}/g) ?? []
+  const reply = fakeReply(lastUser?.content ?? '')
+  const chunks = `${reply}\n`.match(/[\s\S]{1,4}/g) ?? []
+  const promptText = flatten(messages)
   const timers: number[] = []
 
   return new Promise<void>((resolve) => {
@@ -300,7 +327,8 @@ function streamReply(requestId: string, messages: ChatMessage[]): Promise<void> 
     timers.push(
       window.setTimeout(() => {
         pending.delete(requestId)
-        emitAi({ requestId, kind: 'done' })
+        emitAi({ requestId, kind: 'done', usage: buildStubUsage(messages, reply) })
+        lastPromptText = promptText
         finish()
       }, 40 * (chunks.length + 1))
     )
