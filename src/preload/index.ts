@@ -16,6 +16,7 @@ const api: AppApi = {
   runtime: () => ipcRenderer.invoke(IPC.appRuntime),
   doctor: () => ipcRenderer.invoke(IPC.appDoctor),
   openLogs: () => ipcRenderer.invoke(IPC.appOpenLogs),
+  capabilities: () => ipcRenderer.invoke(IPC.appCapabilities),
 
   getConfig: () => ipcRenderer.invoke(IPC.configGet),
   setConfig: (patch: Partial<AppConfig>) => ipcRenderer.invoke(IPC.configSet, patch),

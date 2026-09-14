@@ -44,6 +44,10 @@ npm run dev        # 开发模式（Vite HMR）
 npm run typecheck  # 类型检查
 npm run build      # 构建
 npm run smoke      # 无头启动自检（Linux 需 xvfb，其他平台会直接弹窗口）
+
+# 自检支持追加参数，用于在本地复现 CI 里那几次不同配置的运行
+npm run smoke -- --capability-profile=win7   # 强制 Win7 工具能力档
+npm run smoke -- --software --self-test-out=t.json
 ```
 
 > 开发态的用户数据目录是 **`AIEditor-dev`**，与打包版的 `AIEditor` 分开。
@@ -65,7 +69,30 @@ npm run smoke      # 无头启动自检（Linux 需 xvfb，其他平台会直接
 Linux 容器 / root 环境下 Electron 起不来（`chrome-sandbox` 非 setuid-root），改用
 `npx electron-vite dev --noSandbox`。
 
+## AI 工具能力（按系统分层）
+
+AI 能对文件做什么，由**两层**共同决定：
+
+| 层 | 来源 | 说明 |
+|---|---|---|
+| 设置 | `config.capability`，在「设置 → 工具能力」里改 | 你**愿意**放开到哪（自动 / 保守 / 全开） |
+| 探测 | 启动时读系统版本与解释器，只读 | 这台机器**实际**能做到哪 |
+
+最终生效 = 设置上限 ∩ 本机探测 − 逐个关掉的项。改完保存立即生效，不用重启。
+
+跨系统的文件工具（读取 / 写入 / 替换一处 / 替换多处 / 列出目录 / 撤销修改）
+在所有支持的系统上都能用；依赖命令执行的工具（执行命令 / 后台任务）
+只在 Windows 10 及以上启用 —— Win7 裸机只有 `cmd.exe`，PowerShell 需装 WMF 升级才有 5.1。
+
+门控作用在**发给模型的工具表**上，而不是界面上的按钮显隐：
+模型看不到的工具就不会去调，省掉一整轮白跑的 token。
+
+`--capability-profile=<tier>` 可以强制按某个系统等级计算能力集，
+用于测试 Win7 那条降级分支 —— CI runner 是 Server 2022，探测结果永远是 win10，
+不这样跑就永远测不到。CI 会跑两次自检（默认档 + Win7 档）并断言后者是前者的子集。
+
 ## 文档
 
 - `docs/技术框架方案.md` —— 完整技术方案
+- `docs/7gai工具对照与实现规划.md` —— 工具对照、取舍理由、门控设计
 - `docs/多系统-测试清单.md` —— 分发前真机验证清单

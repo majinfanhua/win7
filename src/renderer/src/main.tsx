@@ -91,6 +91,100 @@ window.__SELFTEST__ = async () => {
   // 浏览器预览模式下 api / ipc 都来自 dev 桩，是假的，不能当成真实环境通过自检
   checks.devApiStub = Boolean(window.__DEV_API_STUB__)
 
+  /*
+   * 工具能力。
+   *
+   * 它同时决定两件事：AI 拿到的工具表、设置界面显示什么。
+   * 算错了不会报错，只会静默地“AI 不会用工具”或“设置页写着空的”，
+   * 所以这里必须断言，不能靠肉眼看日志。
+   */
+  // checks 是 Record<string, unknown>，后续要参与运算的基准值先存在局部变量里
+  let baseEffectiveCount = 0
+  let baseMode = ''
+  try {
+    const caps = await window.api.capabilities()
+    baseEffectiveCount = caps.effective.length
+    baseMode = caps.mode
+    checks.capabilityProfile = caps.profile
+    checks.capabilityMode = caps.mode
+    checks.capabilityOverridden = caps.overridden
+    checks.capabilityDetected = caps.detected
+    checks.capabilityEffective = caps.effective
+    checks.capabilityEffectiveCount = caps.effective.length
+    // 被拦下的每一项都要有原因，否则用户看到“少了一个”却不知道为啥
+    checks.capabilityFiltered = caps.filtered.map((item) => `${item.name}: ${item.reason}`)
+    // 每个生效的工具都要有中文名，否则设置界面会漏出英文标识
+    checks.capabilityLabelsComplete = caps.effective.every((name) => Boolean(caps.labels[name]))
+    checks.capabilityReasonsComplete = caps.filtered.every((item) => Boolean(item.reason))
+    // 生效与未启用应当不重不漏地覆盖全部工具
+    checks.capabilityPartitionOk =
+      caps.effective.length + caps.filtered.length === Object.keys(caps.labels).length
+    checks.capabilityOk =
+      caps.effective.length > 0 &&
+      checks.capabilityLabelsComplete &&
+      checks.capabilityReasonsComplete &&
+      checks.capabilityPartitionOk &&
+      caps.notes.length > 0
+  } catch (err) {
+    checks.capabilityOk = false
+    checks.capabilityError = String(err)
+  }
+
+  /*
+   * 设置那一层得单独验。
+   *
+   * --capability-profile 只能验探测，验不了「设置改了到底生不生效」。
+   * 而设置这条路有两个容易静默出错的地方：
+   *   1. normalize() 是白名单式的 —— 新增的顶层 section 没加进去，
+   *      改完存盘、重启就没了，而且不报错；
+   *   2. setConfig(patch) 顶层是浅合并 —— 少传一个字段会把整个 section 替掉。
+   * 两个坑都不会抛异常，只会“设置页显示成功但 AI 还是用不了工具”，
+   * 所以必须真写一次、真读一次。
+   *
+   * 自检跑在带 -selftest 后缀的独立 userData 里，改配置不会影响正常使用；
+   * 但不管成败都要恢复，否则下次自检的起点就变了。
+   */
+  try {
+    const before = await window.api.getConfig()
+
+    // 挑一个确定会生效的保守设置：只放开文件读写，并单独关掉一个
+    await window.api.setConfig({
+      capability: { mode: 'conservative', disabled: ['readFile'] }
+    })
+    const changed = await window.api.capabilities()
+
+    // 读回来的配置也要真的变了 —— 这一条同时盖住 normalize() 白名单陷阱
+    const persisted = (await window.api.getConfig()).capability
+    checks.capabilitySavedMode = persisted.mode
+    checks.capabilitySavedDisabled = persisted.disabled
+    checks.capabilitySettingsPersisted =
+      persisted.mode === 'conservative' && persisted.disabled.includes('readFile')
+
+    checks.capabilityModeApplied = changed.mode === 'conservative'
+    checks.capabilityDisabledApplied = !changed.effective.includes('readFile')
+    checks.capabilityDisabledReason =
+      changed.filtered.find((item) => item.name === 'readFile')?.reason || ''
+    // 保守模式不放开命令类工具（它们现在还没实现，所以换个角度验：
+    // 生效集必须真的变小了，否则说明设置没起作用）
+    checks.capabilityShrank = changed.effective.length < baseEffectiveCount
+
+    // 恢复现场
+    await window.api.setConfig({ capability: before.capability })
+    const restored = await window.api.capabilities()
+    checks.capabilityRestored =
+      restored.mode === baseMode && restored.effective.length === baseEffectiveCount
+
+    checks.capabilitySettingsOk =
+      checks.capabilitySettingsPersisted &&
+      checks.capabilityModeApplied &&
+      checks.capabilityDisabledApplied &&
+      checks.capabilityShrank &&
+      checks.capabilityRestored
+  } catch (err) {
+    checks.capabilitySettingsOk = false
+    checks.capabilitySettingsError = String(err)
+  }
+
   const ok = Boolean(
     checks.root &&
       checks.reactMounted &&
@@ -98,6 +192,8 @@ window.__SELFTEST__ = async () => {
       checks.composer &&
       checks.apiReady &&
       checks.ipc &&
+      checks.capabilityOk &&
+      checks.capabilitySettingsOk &&
       !checks.devApiStub
   )
   return { ok, checks }

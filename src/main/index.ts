@@ -5,6 +5,7 @@ import { IPC } from '../shared/types'
 import { getConfig, initConfig, setConfig } from './config'
 import { initLogger, installCrashHandlers, logger, setLogSink } from './logger'
 import { applyPlatformCompat, detectPlatform } from './platform-compat'
+import { describeCapability, getCapabilityInfo, setCapabilityProfileOverride } from './capabilities'
 import { getRuntimeInfo, registerDiagnosticsIpc, setCompatState } from './ipc/diagnostics'
 import { registerWorkspaceIpc, restoreLastWorkspace } from './ipc/workspace'
 import { registerAiIpc } from './ipc/ai'
@@ -14,6 +15,8 @@ interface CliOptions {
   forceSoftware: boolean
   selfTest: boolean
   selfTestOut: string
+  /** --capability-profile=win7 等，CI 用来跑降级分支 */
+  capabilityProfile: string
 }
 
 function parseArgs(argv: string[]): CliOptions {
@@ -21,7 +24,8 @@ function parseArgs(argv: string[]): CliOptions {
     forceGpu: argv.includes('--force-gpu'),
     forceSoftware: argv.includes('--software'),
     selfTest: argv.includes('--self-test'),
-    selfTestOut: (argv.find((a) => a.startsWith('--self-test-out=')) || '').split('=')[1] || ''
+    selfTestOut: (argv.find((a) => a.startsWith('--self-test-out=')) || '').split('=')[1] || '',
+    capabilityProfile: (argv.find((a) => a.startsWith('--capability-profile=')) || '').split('=')[1] || ''
   }
 }
 
@@ -113,6 +117,8 @@ function sendMenu(action: string): void {
 function registerConfigIpc(): void {
   ipcMain.handle(IPC.configGet, () => getConfig())
   ipcMain.handle(IPC.configSet, (_e, patch: Parameters<typeof setConfig>[0]) => setConfig(patch))
+  // 每次调用都重新与设置求交，所以设置改完立即生效，不用重启
+  ipcMain.handle(IPC.appCapabilities, () => getCapabilityInfo())
 }
 
 function buildMenu(): void {
@@ -260,6 +266,11 @@ function main(): void {
   initLogger()
   installCrashHandlers()
   initConfig()
+
+  // 必须在任何能力计算之前：CI 用这个开关跑 Win7 降级分支
+  setCapabilityProfileOverride(cli.capabilityProfile)
+
+  logger.info('app', describeCapability(getCapabilityInfo()))
 
   logger.info(
     'app',

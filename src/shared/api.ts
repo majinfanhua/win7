@@ -2,6 +2,7 @@ import type {
   AiStreamChunk,
   AiTestResult,
   AppConfig,
+  CapabilityInfo,
   ChatMessage,
   DoctorReport,
   FileNode,
@@ -19,6 +20,8 @@ export interface AppApi {
   runtime(): Promise<RuntimeInfo>
   doctor(): Promise<DoctorReport>
   openLogs(): Promise<string>
+  /** 本机探测 ∩ 设置之后的工具能力，设置界面与自检用 */
+  capabilities(): Promise<CapabilityInfo>
 
   getConfig(): Promise<AppConfig>
   setConfig(patch: Partial<AppConfig>): Promise<AppConfig>

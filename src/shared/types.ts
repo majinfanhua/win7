@@ -42,10 +42,26 @@ export interface LegacyGraphicsConfig {
   softwareRendering: boolean
 }
 
+/**
+ * 工具能力的放开程度。
+ *
+ * 最终生效的工具表 = 设置上限 ∩ 本机探测能力 − disabled（见 src/main/capabilities.ts）。
+ * 设置只回答「愿意放开到哪」，探测只回答「这台机器实际能做到哪」，两者不混。
+ */
+export type CapabilityMode = 'auto' | 'conservative' | 'full'
+
+export interface CapabilityConfig {
+  /** auto：按本机探测；conservative：只放开跨系统那几个；full：忽略探测全开 */
+  mode: CapabilityMode
+  /** 在上一层范围内再逐项关掉，值是工具名（ToolName） */
+  disabled: string[]
+}
+
 export interface AppConfig {
   ai: AIConfig
   editor: EditorConfig
   legacyGraphics: LegacyGraphicsConfig
+  capability: CapabilityConfig
   lastWorkspace: string
 }
 
@@ -113,11 +129,13 @@ export interface AiUsage {
 
 export interface AiStreamChunk {
   requestId: string
-  kind: 'delta' | 'done' | 'error'
+  kind: 'delta' | 'done' | 'error' | 'tool'
   text?: string
   message?: string
   /** 只在 kind === 'done' 时给出 */
   usage?: AiUsage
+  /** 只在 kind === 'tool' 时给出：AI 正在调用哪个工具 */
+  tool?: ToolProgress
 }
 
 export interface AiTestResult {
@@ -130,6 +148,53 @@ export interface ModelListResult {
   ok: boolean
   models: string[]
   detail: string
+}
+
+/* ------------------------------------------------------------------ *
+ * 工具调用
+ * ------------------------------------------------------------------ */
+
+/** 工具对运行环境的要求；none 表示纯文件操作，任何系统都能跑 */
+export type ToolRequirement = 'none' | 'commandExec' | 'backgroundJobs'
+
+export type ToolName =
+  | 'readFile'
+  | 'writeFile'
+  | 'editFile'
+  | 'multiEdit'
+  | 'listDir'
+  | 'undoSnapshot'
+  | 'runCommand'
+  | 'jobRun'
+  | 'jobPoll'
+  | 'jobKill'
+
+/** 工具执行过程，推给界面展示「AI 正在做什么」 */
+export interface ToolProgress {
+  name: string
+  phase: 'start' | 'done'
+  /** 一行人类可读摘要，如「读取 hello.py」 */
+  summary: string
+  ok?: boolean
+}
+
+/** 本机能力探测 + 设置求交后的结果，供设置界面展示 */
+export interface CapabilityInfo {
+  /** 探测依据，如「Windows 7 SP1 (6.1.7601)」 */
+  profile: string
+  /** 本机是否满足各项要求 */
+  detected: Record<ToolRequirement, boolean>
+  /** 探测说明，如「未找到 powershell.exe」 */
+  notes: string[]
+  mode: CapabilityMode
+  /** 最终生效的工具名 */
+  effective: ToolName[]
+  /** 被过滤掉的工具及原因 */
+  filtered: Array<{ name: ToolName; reason: string }>
+  /** 工具名 -> 中文短名，设置界面直接用 */
+  labels: Record<string, string>
+  /** 是否由 --capability-profile 强制覆盖（CI 用） */
+  overridden: boolean
 }
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
@@ -146,6 +211,7 @@ export const IPC = {
   appRuntime: 'app:runtime',
   appDoctor: 'app:doctor',
   appOpenLogs: 'app:open-logs',
+  appCapabilities: 'app:capabilities',
 
   configGet: 'config:get',
   configSet: 'config:set',
@@ -188,5 +254,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   },
   editor: { fontSize: 14, tabSize: 2, wordWrap: true, minimap: false },
   legacyGraphics: { softwareRendering: true },
+  // 默认按本机探测，不额外关任何工具
+  capability: { mode: 'auto', disabled: [] },
   lastWorkspace: ''
 }

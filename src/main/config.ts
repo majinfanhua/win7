@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { app } from 'electron'
-import { DEFAULT_CONFIG, type AppConfig } from '../shared/types'
+import { DEFAULT_CONFIG, type AppConfig, type CapabilityMode } from '../shared/types'
 import { logger } from './logger'
 
 let cached: AppConfig | null = null
@@ -12,13 +12,33 @@ function resolveConfigPath(): string {
   return configPath
 }
 
-/** 只做顶层 section 合并，旧配置文件缺字段时自动补默认值 */
+const CAPABILITY_MODES: CapabilityMode[] = ['auto', 'conservative', 'full']
+
+/**
+ * 配置标准化。
+ *
+ * ⚠️ 这里是**白名单式**的：只合并下面列出的 section。
+ * 新增顶层 section 必须同时加到这里，否则每次读取都会被静默吞掉
+ * —— 表现为「设置里改完、重启就没了」，而且不报任何错。
+ *
+ * 另外 setConfig 的顶层是浅合并，所以每个 section 内部在这里做完整补齐，
+ * 保证只传一半字段进来也不会丢其他字段。
+ */
 function normalize(raw: unknown): AppConfig {
   const input = (raw && typeof raw === 'object' ? raw : {}) as Partial<AppConfig>
+  const rawCap = (input.capability || {}) as Partial<AppConfig['capability']>
+  const mode = CAPABILITY_MODES.includes(rawCap.mode as CapabilityMode)
+    ? (rawCap.mode as CapabilityMode)
+    : DEFAULT_CONFIG.capability.mode
+  const disabled = Array.isArray(rawCap.disabled)
+    ? rawCap.disabled.filter((x): x is string => typeof x === 'string')
+    : DEFAULT_CONFIG.capability.disabled
+
   return {
     ai: { ...DEFAULT_CONFIG.ai, ...(input.ai || {}) },
     editor: { ...DEFAULT_CONFIG.editor, ...(input.editor || {}) },
     legacyGraphics: { ...DEFAULT_CONFIG.legacyGraphics, ...(input.legacyGraphics || {}) },
+    capability: { mode, disabled },
     lastWorkspace: typeof input.lastWorkspace === 'string' ? input.lastWorkspace : ''
   }
 }

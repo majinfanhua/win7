@@ -5,6 +5,12 @@
  * 页面内自检（React 挂载 / Monaco 实例化 / IPC 可用）→ 输出 JSON 并退出。
  *
  * Linux 上无 DISPLAY 时自动套 xvfb；CI 里同样用这个入口（见 .github/workflows/build.yml）。
+ *
+ * 支持追加参数，方便在本地复现 CI 的那几次不同配置的运行：
+ *
+ *   npm run smoke                                  # 默认档
+ *   npm run smoke -- --capability-profile=win7     # 强制 Win7 能力档
+ *   npm run smoke -- --software --self-test-out=t.json
  */
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -25,7 +31,13 @@ if (!fs.existsSync(electronBin)) {
   process.exit(1)
 }
 
-const appArgs = ['.', '--self-test', '--self-test-out=selftest.json']
+// 追加参数直接透传给应用。
+// 之所以需要它：CI 里跑了几次不同配置的自检（默认档 / Win7 档），
+// 若本地不能照跑，那些分支就只能在 CI 上试错，改一行等一次流水线。
+const extra = process.argv.slice(2)
+const hasOut = extra.some((arg) => arg.startsWith('--self-test-out='))
+
+const appArgs = ['.', '--self-test', ...(hasOut ? [] : ['--self-test-out=selftest.json']), ...extra]
 // Linux 上 chrome-sandbox 通常不是 setuid-root（容器里、或普通用户解包都会这样），
 // Chromium 会直接 FATAL 退出（setuid_sandbox_host.cc: SUID sandbox helper binary
 // was found, but is not configured correctly）。这只是启动自检，降级关掉即可。
@@ -48,7 +60,10 @@ if (result.error) {
   process.exit(1)
 }
 
-const report = path.resolve('selftest.json')
+const report = path.resolve(
+  extra.find((arg) => arg.startsWith('--self-test-out='))?.slice('--self-test-out='.length) ||
+    'selftest.json'
+)
 if (fs.existsSync(report)) {
   console.log('\n[smoke] 自检报告：')
   console.log(fs.readFileSync(report, 'utf8'))

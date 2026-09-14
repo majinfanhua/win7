@@ -4,12 +4,23 @@ import { useAppStore } from '../store/useAppStore'
 
 type Role = 'user' | 'assistant' | 'system' | 'error'
 
+interface ToolStep {
+  id: string
+  name: string
+  summary: string
+  phase: 'start' | 'done'
+  /** 只有 done 阶段才有意义 */
+  ok?: boolean
+}
+
 interface ChatItem {
   id: string
   role: Role
   text: string
   /** 本轮用量的统计，流结束时才有 */
   usage?: AiUsage
+  /** AI 对文件做过什么，按发生顺序排 */
+  tools?: ToolStep[]
 }
 
 function formatTokens(n: number): string {
@@ -51,6 +62,37 @@ export default function AiPanel({ onOpenSettings }: { onOpenSettings: () => void
           prev.map((it) =>
             it.id === chunk.requestId ? { ...it, text: it.text + (chunk.text || '') } : it
           )
+        )
+      } else if (chunk.kind === 'tool') {
+        const step = chunk.tool
+        if (!step) return
+        setItems((prev) =>
+          prev.map((it) => {
+            if (it.id !== chunk.requestId) return it
+            const tools = [...(it.tools || [])]
+            if (step.phase === 'start') {
+              tools.push({
+                id: `${tools.length}-${step.name}`,
+                name: step.name,
+                summary: step.summary,
+                phase: 'start'
+              })
+            } else {
+              // 从后往前找最近一个同名的未完成步骤，收尾
+              for (let i = tools.length - 1; i >= 0; i--) {
+                if (tools[i].name === step.name && tools[i].phase === 'start') {
+                  tools[i] = {
+                    ...tools[i],
+                    phase: 'done',
+                    summary: step.summary || tools[i].summary,
+                    ok: step.ok
+                  }
+                  break
+                }
+              }
+            }
+            return { ...it, tools }
+          })
         )
       } else if (chunk.kind === 'error') {
         setItems((prev) =>
@@ -139,9 +181,27 @@ export default function AiPanel({ onOpenSettings }: { onOpenSettings: () => void
             items.map((it) => (
               <div key={it.id} className={`msg-row ${it.role}`}>
                 <div className="msg-col">
+                  {it.tools && it.tools.length > 0 && (
+                    <div className="tool-trace">
+                      {it.tools.map((step) => (
+                        <div
+                          key={step.id}
+                          className={[
+                            'tool-step',
+                            step.phase === 'start' ? 'running' : step.ok === false ? 'failed' : 'ok'
+                          ].join(' ')}
+                        >
+                          <span className="tool-mark" />
+                          <span className="tool-text">{step.summary}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   <div className="bubble">
                     {it.text ? (
                       it.text
+                    ) : it.tools && it.tools.length > 0 ? (
+                      <span className="muted">正在处理…</span>
                     ) : (
                       <span className="dots">
                         <i />

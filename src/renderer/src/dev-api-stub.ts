@@ -25,13 +25,15 @@ import {
   type AiStreamChunk,
   type AiUsage,
   type AppConfig,
+  type CapabilityInfo,
   type ChatMessage,
   type DoctorReport,
   type FileNode,
   type LoadedFile,
   type LogLevel,
   type LogLine,
-  type RuntimeInfo
+  type RuntimeInfo,
+  type ToolName
 } from '@shared/types'
 
 /* ------------------------------------------------------------------ *
@@ -311,6 +313,16 @@ function streamReply(requestId: string, messages: ChatMessage[]): Promise<void> 
   const promptText = flatten(messages)
   const timers: number[] = []
 
+  /**
+   * 模拟工具调用过程，让「工具能力」这个功能在浏览器预览里也能看见。
+   * 真实环境里这些事件由主进程的工具循环发出，格式完全一致。
+   */
+  const demoCalls: Array<{ name: string; summary: string }> = [
+    { name: 'listDir', summary: '列出目录 demo' },
+    { name: 'readFile', summary: '读取 hello.py' },
+    { name: 'editFile', summary: '替换一处 hello.py' }
+  ]
+
   return new Promise<void>((resolve) => {
     let settled = false
     const finish = (): void => {
@@ -319,9 +331,36 @@ function streamReply(requestId: string, messages: ChatMessage[]): Promise<void> 
       resolve()
     }
 
+    const lead = demoCalls.length * 200 + 120
+    demoCalls.forEach((call, index) => {
+      const at = 120 + index * 200
+      timers.push(
+        window.setTimeout(
+          () =>
+            emitAi({
+              requestId,
+              kind: 'tool',
+              tool: { name: call.name, phase: 'start', summary: call.summary }
+            }),
+          0
+        )
+      )
+      timers.push(
+        window.setTimeout(
+          () =>
+            emitAi({
+              requestId,
+              kind: 'tool',
+              tool: { name: call.name, phase: 'done', summary: call.summary, ok: true }
+            }),
+          at
+        )
+      )
+    })
+
     chunks.forEach((text, index) => {
       timers.push(
-        window.setTimeout(() => emitAi({ requestId, kind: 'delta', text }), 40 * (index + 1))
+        window.setTimeout(() => emitAi({ requestId, kind: 'delta', text }), lead + 40 * (index + 1))
       )
     })
     timers.push(
@@ -330,7 +369,7 @@ function streamReply(requestId: string, messages: ChatMessage[]): Promise<void> 
         emitAi({ requestId, kind: 'done', usage: buildStubUsage(messages, reply) })
         lastPromptText = promptText
         finish()
-      }, 40 * (chunks.length + 1))
+      }, lead + 40 * (chunks.length + 1))
     )
 
     pending.set(requestId, { timers, finish })
@@ -343,6 +382,68 @@ function streamReply(requestId: string, messages: ChatMessage[]): Promise<void> 
 
 let stubConfig: AppConfig = JSON.parse(JSON.stringify(DEFAULT_CONFIG)) as AppConfig
 
+/** 跨系统的文件工具，与主进程的 CROSS_OS_TOOLS 一致 */
+const STUB_FILE_TOOLS: ToolName[] = [
+  'readFile',
+  'writeFile',
+  'editFile',
+  'multiEdit',
+  'listDir',
+  'undoSnapshot'
+]
+
+/** 需要命令执行能力的工具，尚未实现 */
+const STUB_COMMAND_TOOLS: ToolName[] = ['runCommand', 'jobRun', 'jobPoll', 'jobKill']
+
+const STUB_TOOL_LABELS: Record<ToolName, string> = {
+  readFile: '读取文件',
+  writeFile: '写入文件',
+  editFile: '替换一处',
+  multiEdit: '替换多处',
+  listDir: '列出目录',
+  undoSnapshot: '撤销修改',
+  runCommand: '执行命令',
+  jobRun: '后台任务',
+  jobPoll: '查询任务',
+  jobKill: '终止任务'
+}
+
+/**
+ * 桩里的能力信息。
+ * 浏览器里没有系统探测，但「设置」这一层照算 —— 否则预览时改放开程度 /
+ * 逐个工具开关会看起来没反应，界面调不到真实效果。
+ * 过滤顺序与主进程 getCapabilityInfo() 保持一致。
+ */
+function stubCapability(): CapabilityInfo {
+  const { mode, disabled } = stubConfig.capability
+  const effective: ToolName[] = []
+  const filtered: Array<{ name: ToolName; reason: string }> = []
+
+  for (const name of [...STUB_FILE_TOOLS, ...STUB_COMMAND_TOOLS]) {
+    if (!STUB_FILE_TOOLS.includes(name)) {
+      // 命令类工具尚未实现 —— 与主进程一致，先于任何其他条件
+      filtered.push({ name, reason: '尚未实现' })
+      continue
+    }
+    if (disabled.includes(name)) {
+      filtered.push({ name, reason: '已在设置中关闭' })
+      continue
+    }
+    effective.push(name)
+  }
+
+  return {
+    profile: '浏览器预览（非 Electron，无系统探测）',
+    detected: { none: true, commandExec: false, backgroundJobs: false },
+    notes: ['浏览器预览模式：能力由 dev 桩给出，仅用于界面调试'],
+    mode,
+    effective,
+    filtered,
+    labels: STUB_TOOL_LABELS,
+    overridden: false
+  }
+}
+
 function createApi(): AppApi {
   return {
     runtime: async () => stubRuntime(),
@@ -351,6 +452,7 @@ function createApi(): AppApi {
       emitLog('stub', '浏览器预览模式没有日志文件，日志只显示在底部输出面板', 'warn')
       return '(浏览器预览模式：无日志文件)'
     },
+    capabilities: async () => stubCapability(),
 
     getConfig: async () => stubConfig,
     setConfig: async (patch: Partial<AppConfig>) => {

@@ -23,8 +23,11 @@ export function setWorkspaceRoot(root: string): void {
   setConfig({ lastWorkspace: workspaceRoot })
 }
 
-/** 所有文件操作必须落在工作区目录内，防止路径穿越 */
-function assertInsideRoot(target: string): string {
+/**
+ * 所有文件操作必须落在工作区目录内，防止路径穿越。
+ * 工具层（src/main/tools）也用这一份，不要另写一个 —— 两份守卫早晚会跑偏。
+ */
+export function assertInsideRoot(target: string): string {
   if (!workspaceRoot) throw new Error('尚未打开工作区')
   const resolved = path.resolve(target)
   const rel = path.relative(workspaceRoot, resolved)

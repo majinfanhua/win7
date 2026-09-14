@@ -385,6 +385,64 @@ textarea {
   border-color: rgba(240, 119, 110, 0.35);
 }
 
+/* AI 对文件做过什么，排在气泡上方 */
+.tool-trace {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0 2px 6px;
+  padding-left: 2px;
+  border-left: 2px solid var(--border-strong);
+}
+
+.tool-step {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding-left: 8px;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.tool-mark {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+
+.tool-step.ok .tool-mark {
+  background: var(--ok);
+}
+
+.tool-step.failed .tool-mark {
+  background: var(--danger);
+}
+
+.tool-step.failed .tool-text {
+  color: var(--danger);
+}
+
+/* 正在跑的那一步呼吸一下，让“它还在动”看得见 */
+.tool-step.running .tool-mark {
+  background: var(--accent);
+  animation: tool-pulse 1s infinite ease-in-out;
+}
+
+@keyframes tool-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.3;
+  }
+}
+
 /* 气泡下方的用量小字：输入 / 输出 token + 缓存命中率 */
 .usage {
   margin: 5px 2px 0;
@@ -640,6 +698,102 @@ textarea {
   align-items: center;
   gap: 8px;
   margin-top: 18px;
+}
+
+/* ==========================================================================
+ * 设置：工具能力区块
+ * ========================================================================== */
+
+.section-title {
+  margin: 22px 0 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.section-hint {
+  margin-top: 4px;
+  margin-bottom: 14px;
+}
+
+/* 只读状态面板：告诉用户「这台机器 + 当前设置」最后算出来是什么 */
+.cap-status {
+  margin-bottom: 14px;
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.cap-line {
+  word-break: break-word;
+}
+
+.cap-line + .cap-line {
+  margin-top: 2px;
+}
+
+.cap-line.muted {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.cap-line .muted {
+  margin-right: 4px;
+}
+
+.advanced {
+  margin-bottom: 14px;
+  padding: 10px 13px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.advanced summary {
+  cursor: pointer;
+  color: var(--text-2);
+  font-size: 12.5px;
+  user-select: none;
+}
+
+.advanced summary:hover {
+  color: var(--text);
+}
+
+.toggles {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 10px;
+  margin: 11px 0 8px;
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: var(--text-2);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.toggle input {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.toggle span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 @media (max-width: 640px) {

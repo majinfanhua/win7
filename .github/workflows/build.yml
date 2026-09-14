@@ -68,6 +68,49 @@ jobs:
           Write-Host "自检退出码=$($code) 报告 ok=$ok"
           if (-not $ok -or $code -ne 0) { throw "启动自检失败：退出码=$($code) 报告ok=$ok" }
 
+      - name: 启动自检（Win7 能力档，验证降级分支）
+        # CI runner 是 Server 2022，探测结果永远是 win10 ——
+        # 「Win7 上少一批工具」那条分支在这里永远跑不到，坏了也不知道。
+        # 用 --capability-profile=win7 强制走一遍，并与默认档对比。
+        # 断言写成「子集关系」而不是「数量不同」：现在命令类工具还没实现，
+        # 两档数量本来就一样；等它们上线后数量自然会分开，这里的断言不用改。
+        shell: pwsh
+        run: |
+          $exe = 'release/win-unpacked/AIEditor.exe'
+          if (-not (Test-Path $exe)) { throw "未找到可执行文件 $exe" }
+          if (-not (Test-Path 'selftest.json')) { throw '缺少默认档的 selftest.json，上一步可能未产出' }
+
+          $argList = @('--self-test', '--software', '--capability-profile=win7', '--self-test-out=selftest-win7.json')
+          $proc = Start-Process -FilePath $exe -ArgumentList $argList -WorkingDirectory (Get-Location).Path -NoNewWindow -Wait -PassThru
+          $code = $proc.ExitCode
+          if (-not (Test-Path 'selftest-win7.json')) { throw '未生成 selftest-win7.json，Win7 档自检未走完' }
+
+          $a = Get-Content 'selftest.json'      -Raw -Encoding UTF8 | ConvertFrom-Json
+          $b = Get-Content 'selftest-win7.json' -Raw -Encoding UTF8 | ConvertFrom-Json
+
+          Write-Host "默认档：$($a.checks.capabilityProfile) | 生效 $($a.checks.capabilityEffectiveCount) 个 [$($a.checks.capabilityEffective -join ', ')]"
+          Write-Host "Win7 档：$($b.checks.capabilityProfile) | 生效 $($b.checks.capabilityEffectiveCount) 个 [$($b.checks.capabilityEffective -join ', ')]"
+          Write-Host "Win7 档未启用：$($b.checks.capabilityFiltered -join '；')"
+
+          if ($code -ne 0) { throw "Win7 档自检退出码 $($code)" }
+          if (-not $b.ok) { throw "Win7 档自检未通过：$($b.checks | ConvertTo-Json -Compress)" }
+
+          # 1) 覆盖开关确实生效
+          if ($b.checks.capabilityOverridden -ne $true) { throw '--capability-profile=win7 未生效（overridden 应为 true）' }
+          if ($b.checks.capabilityProfile -notlike '*win7*') { throw "Win7 档的 profile 字符串异常：$($b.checks.capabilityProfile)" }
+
+          # 2) Win7 不启用命令执行（这是降级分支的核心结论）
+          if ($b.checks.capabilityDetected.commandExec -ne $false) { throw 'Win7 档不应启用命令执行' }
+          if ($a.checks.capabilityDetected.commandExec -ne $true) { Write-Warning '默认档未探测到命令执行能力，runner 环境可能变了' }
+
+          # 3) 更窄的一档不能多出工具来
+          $extra = @($b.checks.capabilityEffective | Where-Object { $a.checks.capabilityEffective -notcontains $_ })
+          if ($extra.Count -gt 0) { throw "Win7 档多出了默认档没有的工具：$($extra -join ', ')" }
+          if ($b.checks.capabilityEffectiveCount -gt $a.checks.capabilityEffectiveCount) {
+            throw "Win7 档工具数 $($b.checks.capabilityEffectiveCount) 多于默认档 $($a.checks.capabilityEffectiveCount)"
+          }
+          Write-Host '✓ Win7 能力档降级分支正常'
+
       - name: 启动自检（默认图形路径，仅记录不阻断）
         # 只用于观察默认路径在无 GPU 环境下的表现，不作为发布门禁
         continue-on-error: true
