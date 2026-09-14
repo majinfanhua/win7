@@ -1,0 +1,37 @@
+{
+  "ok": true,
+  "checks": {
+    "root": true,
+    "reactMounted": true,
+    "domNodes": 235,
+    "title": "AI 教学编辑器",
+    "apiReady": true,
+    "monacoMounted": true,
+    "monacoEditors": 1,
+    "ipc": true,
+    "osName": "linux (6.8.0-138-generic)",
+    "osTier": "other",
+    "softwareRendering": false,
+    "chrome": "108.0.5359.215"
+  },
+  "runtime": {
+    "appVersion": "0.1.0",
+    "electron": "22.3.27",
+    "chrome": "108.0.5359.215",
+    "node": "16.17.1",
+    "v8": "10.8.168.25-electron.0",
+    "platform": "linux",
+    "arch": "x64",
+    "osRelease": "6.8.0-138-generic",
+    "osName": "linux (6.8.0-138-generic)",
+    "osTier": "other",
+    "osBuild": 0,
+    "osSupport": "unsupported",
+    "osSupportNote": "非目标平台，仅用于开发调试",
+    "softwareRendering": false,
+    "compatNotes": [],
+    "userDataPath": "/home/cr/.config/win7-ai-editor",
+    "logsPath": "/home/cr/.config/win7-ai-editor/logs",
+    "locale": "zh-CN"
+  }
+}

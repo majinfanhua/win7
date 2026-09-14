@@ -99,6 +99,19 @@ export interface CompatOptions {
   softwareRendering: boolean
   /** 命令行 --force-gpu 强制开启硬件加速 */
   forceGpu: boolean
+  /**
+   * 命令行 --software 无视系统等级强制软件渲染。
+   * 用途：CI 无 GPU 的 runner 上让自检结果可复现；老显卡现场排障。
+   */
+  forceSoftware: boolean
+}
+
+/** 软件渲染的开关组合，Win7 兜底与 --software 共用同一套 */
+function enableSoftwareRendering(): void {
+  app.disableHardwareAcceleration()
+  app.commandLine.appendSwitch('disable-gpu')
+  app.commandLine.appendSwitch('disable-gpu-compositing')
+  app.commandLine.appendSwitch('disable-direct-composition')
 }
 
 export interface CompatResult {
@@ -125,6 +138,15 @@ export function applyPlatformCompat(profile: PlatformProfile, opts: CompatOption
     return { softwareRendering: false, notes }
   }
 
+  // --software 优先于系统等级判定：CI runner 报的是 Server 2022（判为 win10），
+  // 但机器上并没有可用的 D3D 设备，走默认路径会让自检结果随机。
+  if (opts.forceSoftware && !opts.forceGpu) {
+    enableSoftwareRendering()
+    notes.push('强制软件渲染(--software)')
+    logger.info('compat', `${profile.name}(${profile.release}) 图形策略: ${notes.join(' / ')}`)
+    return { softwareRendering: true, notes }
+  }
+
   if (!profile.needsLegacyGraphics) {
     notes.push('硬件加速')
     logger.info('compat', `${profile.name}(${profile.release}) 图形策略: ${notes.join(' / ')}`)
@@ -134,12 +156,9 @@ export function applyPlatformCompat(profile: PlatformProfile, opts: CompatOption
   app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion')
   notes.push('关闭窗口遮挡计算')
 
-  const software = opts.softwareRendering && !opts.forceGpu
+  const software = (opts.softwareRendering || opts.forceSoftware) && !opts.forceGpu
   if (software) {
-    app.disableHardwareAcceleration()
-    app.commandLine.appendSwitch('disable-gpu')
-    app.commandLine.appendSwitch('disable-gpu-compositing')
-    app.commandLine.appendSwitch('disable-direct-composition')
+    enableSoftwareRendering()
     notes.push('软件渲染（老显卡兼容）')
   } else {
     app.commandLine.appendSwitch('disable-gpu-compositing')

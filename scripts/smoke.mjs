@@ -26,8 +26,10 @@ if (!fs.existsSync(electronBin)) {
 }
 
 const appArgs = ['.', '--self-test', '--self-test-out=selftest.json']
-// root 环境下 Chromium 沙箱不可用，仅在这种情况下降级
-if (typeof process.getuid === 'function' && process.getuid() === 0) appArgs.push('--no-sandbox')
+// Linux 上 chrome-sandbox 通常不是 setuid-root（容器里、或普通用户解包都会这样），
+// Chromium 会直接 FATAL 退出（setuid_sandbox_host.cc: SUID sandbox helper binary
+// was found, but is not configured correctly）。这只是启动自检，降级关掉即可。
+if (process.platform === 'linux') appArgs.push('--no-sandbox')
 
 const useXvfb = process.platform === 'linux' && !process.env.DISPLAY
 const command = useXvfb ? 'xvfb-run' : electronBin

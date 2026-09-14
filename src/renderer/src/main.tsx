@@ -1,6 +1,5 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
-import * as monaco from 'monaco-editor'
 import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker'
 import jsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker'
 import cssWorker from 'monaco-editor/esm/vs/language/css/css.worker?worker'
@@ -38,23 +37,43 @@ ReactDOM.createRoot(container).render(
 /**
  * 自检入口：主进程 --self-test 时调用。
  * 不是检查“页面有没有返回”，而是检查 React 挂载、Monaco 实例化、IPC 通道可用。
+ *
+ * 关键点：这些事都是异步完成的，而 __SELFTEST__ 是在 did-finish-load 那一刻被调用的，
+ * 那时 React 18 并发渲染还没提交、store.init() 还没回来。所以不能瞬时采样，
+ * 每一项都要等（waitFor），否则自检会随机失败。
  */
 window.__SELFTEST__ = async () => {
   const checks: Record<string, unknown> = {}
 
+  const waitFor = async (predicate: () => boolean, timeoutMs: number): Promise<boolean> => {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      if (predicate()) return true
+      await new Promise((resolve) => setTimeout(resolve, 120))
+    }
+    return predicate()
+  }
+
   checks.root = Boolean(document.getElementById('root'))
-  checks.reactMounted = Boolean(document.querySelector('[data-app-ready="1"]'))
+
+  // App.tsx 在 store.init()（含 IPC 往返）完成后才把 data-app-ready 置为 1
+  checks.reactMounted = await waitFor(
+    () => Boolean(document.querySelector('[data-app-ready="1"]')),
+    20_000
+  )
   checks.domNodes = document.querySelectorAll('*').length
   checks.title = document.title
-  checks.apiReady = typeof window.api === 'object'
 
-  // 等 Monaco 真正实例化（最多 10 秒）
-  const deadline = Date.now() + 10_000
-  while (Date.now() < deadline && !document.querySelector('.monaco-editor')) {
-    await new Promise((resolve) => setTimeout(resolve, 120))
-  }
-  checks.monacoMounted = Boolean(document.querySelector('.monaco-editor'))
-  checks.monacoVersion = (monaco as unknown as { version?: string }).version || 'unknown'
+  // preload 的 contextBridge 注入时机也不保证早于页面脚本
+  checks.apiReady = await waitFor(() => typeof window.api === 'object', 5_000)
+
+  // Monaco 实例化最重，软件渲染下更慢
+  checks.monacoMounted = await waitFor(
+    () => Boolean(document.querySelector('.monaco-editor')),
+    25_000
+  )
+  // monaco-editor 的 ESM 入口不导出 version，不猜，改为报可观测的实例数
+  checks.monacoEditors = document.querySelectorAll('.monaco-editor').length
 
   // 验证 IPC 通道真的能通
   try {

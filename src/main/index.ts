@@ -11,6 +11,7 @@ import { registerAiIpc } from './ipc/ai'
 
 interface CliOptions {
   forceGpu: boolean
+  forceSoftware: boolean
   selfTest: boolean
   selfTestOut: string
 }
@@ -18,6 +19,7 @@ interface CliOptions {
 function parseArgs(argv: string[]): CliOptions {
   return {
     forceGpu: argv.includes('--force-gpu'),
+    forceSoftware: argv.includes('--software'),
     selfTest: argv.includes('--self-test'),
     selfTestOut: (argv.find((a) => a.startsWith('--self-test-out=')) || '').split('=')[1] || ''
   }
@@ -167,27 +169,34 @@ function buildMenu(): void {
 }
 
 /**
+ * 自检结果落盘。CI 读这个文件，而不是只靠 stdout（编码与缓冲都可能出问题）。
+ */
+function writeSelfTestOut(result: Record<string, unknown>): void {
+  if (!cli.selfTestOut) return
+  try {
+    fs.writeFileSync(cli.selfTestOut, JSON.stringify(result, null, 2), 'utf8')
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
  * 自检模式：启动 → 等渲染进程跑完 → 在页面里执行 __SELFTEST__ → 输出 JSON 并退出。
  * 用于 CI 和发布前回归，避免“能打包但一启动就白屏”。
  */
 function runSelfTest(win: BrowserWindow): void {
-  const outFile = cli.selfTestOut
   const fail = (reason: string): void => {
     const result = { ok: false, reason }
     logger.error('selftest', `失败: ${reason}`)
     // eslint-disable-next-line no-console
     console.log('SELFTEST_RESULT ' + JSON.stringify(result))
-    if (outFile) {
-      try {
-        fs.writeFileSync(outFile, JSON.stringify(result, null, 2), 'utf8')
-      } catch {
-        /* ignore */
-      }
-    }
+    writeSelfTestOut(result)
     app.exit(1)
   }
 
-  const timer = setTimeout(() => fail('渲染进程 30s 内未完成自检'), 30_000)
+  // 软件渲染 + 首次加载 Monaco 在低配机器上偏慢，给足余量；
+  // 这个超时只在真的卡死时才会触发
+  const timer = setTimeout(() => fail('渲染进程 90s 内未完成自检'), 90_000)
 
   win.webContents.once('did-finish-load', async () => {
     try {
@@ -202,13 +211,7 @@ function runSelfTest(win: BrowserWindow): void {
       }
       // eslint-disable-next-line no-console
       console.log('SELFTEST_RESULT ' + JSON.stringify(result))
-      if (outFile) {
-        try {
-          fs.writeFileSync(outFile, JSON.stringify(result, null, 2), 'utf8')
-        } catch {
-          /* ignore */
-        }
-      }
+      writeSelfTestOut(result)
       app.exit(result.ok === true ? 0 : 1)
     } catch (err) {
       clearTimeout(timer)
@@ -225,7 +228,8 @@ function main(): void {
   const platform = detectPlatform()
   const compat = applyPlatformCompat(platform, {
     softwareRendering: getConfig().legacyGraphics.softwareRendering,
-    forceGpu: cli.forceGpu
+    forceGpu: cli.forceGpu,
+    forceSoftware: cli.forceSoftware
   })
   setCompatState({ softwareRendering: compat.softwareRendering, notes: compat.notes, platform })
 
@@ -240,6 +244,14 @@ function main(): void {
 
   if (!app.requestSingleInstanceLock()) {
     logger.warn('app', '已有实例在运行，本次启动退出')
+    if (cli.selfTest) {
+      const result = { ok: false, reason: '已有实例在运行，自检无法继续' }
+      // eslint-disable-next-line no-console
+      console.log('SELFTEST_RESULT ' + JSON.stringify(result))
+      writeSelfTestOut(result)
+      app.exit(1)
+      return
+    }
     app.quit()
     return
   }
@@ -251,23 +263,47 @@ function main(): void {
     }
   })
 
-  app.whenReady().then(() => {
-    registerDiagnosticsIpc()
-    registerConfigIpc()
-    registerWorkspaceIpc()
-    registerAiIpc()
-    restoreLastWorkspace()
-    buildMenu()
+  if (cli.selfTest) {
+    // 硬看门狗：不论卡在哪一步（窗口创建失败、渲染进程无响应、app.whenReady 未兑现），
+    // 都在 120s 内给出结论。否则 CI 会一直挂到 job 超时，拿不到任何有效信息。
+    setTimeout(() => {
+      const result = { ok: false, reason: '自检硬超时（120s）：应用未能走完启动流程' }
+      logger.error('selftest', result.reason)
+      // eslint-disable-next-line no-console
+      console.log('SELFTEST_RESULT ' + JSON.stringify(result))
+      writeSelfTestOut(result)
+      app.exit(1)
+    }, 120_000)
+  }
 
-    mainWindow = createWindow()
-    setLogSink((line) => {
-      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC.evtLog, line)
+  app.whenReady()
+    .then(() => {
+      registerDiagnosticsIpc()
+      registerConfigIpc()
+      registerWorkspaceIpc()
+      registerAiIpc()
+      restoreLastWorkspace()
+      buildMenu()
+
+      mainWindow = createWindow()
+      setLogSink((line) => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC.evtLog, line)
+      })
+
+      if (cli.selfTest) runSelfTest(mainWindow)
+
+      logger.info('app', '启动完成')
     })
-
-    if (cli.selfTest) runSelfTest(mainWindow)
-
-    logger.info('app', '启动完成')
-  })
+    .catch((err: unknown) => {
+      const reason = `启动流程异常: ${err instanceof Error ? err.stack || err.message : String(err)}`
+      logger.error('app', reason)
+      if (cli.selfTest) {
+        // eslint-disable-next-line no-console
+        console.log('SELFTEST_RESULT ' + JSON.stringify({ ok: false, reason }))
+        writeSelfTestOut({ ok: false, reason })
+        app.exit(1)
+      }
+    })
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) mainWindow = createWindow()

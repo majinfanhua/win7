@@ -33,8 +33,11 @@ win:
         - ia32
   # 产物名带上系统范围，方便分发时判断该给谁
   artifactName: AIEditor-${version}-win7-win10-${arch}.${ext}
-  # 不签名：Win7 验签需要 KB4474419，免安装包也用不上
-  signtoolOptions: null
+  # 不签名：Win7 验签需要 KB4474419，免安装包也用不上。
+  # 注意：electron-builder 24.x 的 win 配置里没有 signtoolOptions（25+ 才引入），
+  # 且该对象 additionalProperties=false，写了会直接因 schema 校验失败中断打包。
+  # 真正的“不签名”由 CI 里的 CSC_IDENTITY_AUTO_DISCOVERY=false 保证。
+  forceCodeSigning: false
 
 # 不使用 electron-builder 的自动更新通道
 publish: null
