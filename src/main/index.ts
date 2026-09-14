@@ -221,9 +221,13 @@ function runSelfTest(win: BrowserWindow): void {
 }
 
 /**
- * 用户数据目录名。必须与随包《使用说明》、测试清单、CI 的日志导出路径一致。
+ * 用户数据目录名。
+ * 打包版必须是 AIEditor —— 随包《使用说明》、测试清单、CI 的日志导出路径写的都是它。
+ * 开发态（npm run dev / npm run smoke）另起一个 -dev 目录，原因有两个：
+ *   1. 不和本机已解压的打包版抢 requestSingleInstanceLock()
+ *   2. 开发调试不会写坏真实配置（apiKey / lastWorkspace 都在 config.json 里）
  */
-const USER_DATA_DIR = 'AIEditor'
+const USER_DATA_DIR = app.isPackaged ? 'AIEditor' : 'AIEditor-dev'
 
 function main(): void {
   // 必须在任何 getPath('userData') 之前固定目录名。
@@ -236,6 +240,11 @@ function main(): void {
   initLogger()
   installCrashHandlers()
   initConfig()
+
+  logger.info(
+    'app',
+    `用户数据目录: ${app.getPath('userData')}${app.isPackaged ? '' : '（开发态，与打包版分开）'}`
+  )
 
   const platform = detectPlatform()
   const compat = applyPlatformCompat(platform, {

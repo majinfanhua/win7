@@ -40,11 +40,15 @@ AIEditor-<version>-win7-win10-ia32.zip
 
 ```bash
 npm ci
-npm run dev        # 开发模式
+npm run dev        # 开发模式（Vite HMR）
 npm run typecheck  # 类型检查
 npm run build      # 构建
-npm run smoke      # 无头启动自检（Linux 需 xvfb）
+npm run smoke      # 无头启动自检（Linux 需 xvfb，其他平台会直接弹窗口）
 ```
+
+> 开发态的用户数据目录是 **`AIEditor-dev`**，与打包版的 `AIEditor` 分开。
+> 这样 `npm run dev` 不会和本机已解压的打包版抢单实例锁，也不会写坏真实配置。
+> 启动日志会打印实际目录。
 
 ## 文档
 
