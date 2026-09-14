@@ -50,6 +50,21 @@ npm run smoke      # 无头启动自检（Linux 需 xvfb，其他平台会直接
 > 这样 `npm run dev` 不会和本机已解压的打包版抢单实例锁，也不会写坏真实配置。
 > 启动日志会打印实际目录。
 
+### dev server
+
+| 项 | 值 |
+|---|---|
+| 地址 | `http://0.0.0.0:5173/`（绑所有网卡，局域网可访问）|
+| 端口 | `5173`；`strictPort` 打开，被占时直接报错，不会悄悄换端口 |
+
+只想本机访问：把 `electron.vite.config.ts` 里 `renderer.server.host` 改回 `'127.0.0.1'`。
+
+**不要用普通浏览器直接打开 5173** —— 渲染进程依赖 preload 注入的 `window.api`，
+缺了它 `App.tsx` 会直接报错白屏，5173 只能由 Electron 加载。
+
+Linux 容器 / root 环境下 Electron 起不来（`chrome-sandbox` 非 setuid-root），改用
+`npx electron-vite dev --noSandbox`。
+
 ## 文档
 
 - `docs/技术框架方案.md` —— 完整技术方案

@@ -35,6 +35,14 @@ export default defineConfig({
   renderer: {
     root: resolve(__dirname, 'src/renderer'),
     base: './',
+    server: {
+      // 绑所有网卡，便于从容器 / 局域网外部访问 dev server。
+      // 只想本机访问就改回 '127.0.0.1'。
+      host: '0.0.0.0',
+      port: 5173,
+      // 端口被占时直接报错，不要悄悄换成 5174 —— 免得「说好的 5173」对不上
+      strictPort: true
+    },
     build: {
       target: 'chrome108',
       outDir: resolve(__dirname, 'out/renderer'),
