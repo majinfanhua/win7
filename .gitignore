@@ -11,6 +11,10 @@ npm-debug.log*
 .vite/
 *.tsbuildinfo
 
+# ---- 自检产物（smoke / --self-test 的输出，CI 单独上传，不入库）----
+selftest.json
+selftest-*.json
+
 # ---- 环境与本地配置 ----
 .env
 .env.local
