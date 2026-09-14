@@ -226,8 +226,13 @@ function runSelfTest(win: BrowserWindow): void {
  * 开发态（npm run dev / npm run smoke）另起一个 -dev 目录，原因有两个：
  *   1. 不和本机已解压的打包版抢 requestSingleInstanceLock()
  *   2. 开发调试不会写坏真实配置（apiKey / lastWorkspace 都在 config.json 里）
+ *
+ * 自检（--self-test）再单独挂一个 -selftest 后缀。单实例锁是按 userData 目录判定的，
+ * 自检是一次性诊断进程，不能因为「用户正开着编辑器 / dev 里还跑着一个 Electron」
+ * 就直接失败退出（本地 npm run smoke 会稳定撞到），也不该把自检日志混进正常日志。
  */
-const USER_DATA_DIR = app.isPackaged ? 'AIEditor' : 'AIEditor-dev'
+const BASE_USER_DATA_DIR = app.isPackaged ? 'AIEditor' : 'AIEditor-dev'
+const USER_DATA_DIR = cli.selfTest ? `${BASE_USER_DATA_DIR}-selftest` : BASE_USER_DATA_DIR
 
 function main(): void {
   // 必须在任何 getPath('userData') 之前固定目录名。
@@ -243,7 +248,9 @@ function main(): void {
 
   logger.info(
     'app',
-    `用户数据目录: ${app.getPath('userData')}${app.isPackaged ? '' : '（开发态，与打包版分开）'}`
+    `用户数据目录: ${app.getPath('userData')}${
+      cli.selfTest ? '（自检专用）' : app.isPackaged ? '' : '（开发态，与打包版分开）'
+    }`
   )
 
   const platform = detectPlatform()
