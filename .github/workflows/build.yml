@@ -6,6 +6,10 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
+# 发布 Release 需要写权限；不显式声明的话默认 GITHUB_TOKEN 只有读权限
+permissions:
+  contents: write
+
 jobs:
   windows-portable:
     name: 打包免安装版
@@ -46,7 +50,7 @@ jobs:
           Write-Host "自检目标: $exe"
 
           # 关键：AIEditor.exe 是 GUI 子系统程序，PowerShell 用 & 调用它不会等待，
-          # 且 $LASTEXITCODE 不会被赋值 —— 上一轮 CI 因此把「自检其实已经通过」
+          # 且 $LASTEXITCODE 不会被赋值 —— 之前因此把「自检其实已经通过」
           # 误报成了「退出码为空」。必须用 Start-Process -Wait -PassThru 取退出码。
           # --software：runner 上没有真实 GPU，强制软件渲染让结果可复现
           $argList = @('--self-test', '--software', '--self-test-out=selftest.json')
@@ -87,7 +91,21 @@ jobs:
             Get-ChildItem $logDir | ForEach-Object { Write-Host "===== $($_.Name) ====="; Get-Content $_.FullName -Raw }
           } else { Write-Host "未生成日志目录 $($logDir)" }
 
-      - name: 上传产物
+      - name: 产物清单（日志即证据）
+        shell: pwsh
+        run: |
+          # 把打包结果写进日志：即使 Artifacts 面板没找到，日志里也能确认产物到底有没有生成
+          $files = Get-ChildItem release -File | Sort-Object Name
+          if (-not $files) { throw 'release 目录下没有任何文件，打包未产出产物' }
+          $files | Select-Object Name, @{ n = 'SizeMB'; e = { [math]::Round($_.Length / 1MB, 2) } } | Format-Table -AutoSize | Out-String | Write-Host
+          Get-ChildItem release -Filter *.zip | ForEach-Object {
+            Write-Host "SHA256 $((Get-FileHash $_.FullName -Algorithm SHA256).Hash)  $($_.Name)"
+          }
+          $zipCount = (Get-ChildItem release -Filter *.zip).Count
+          Write-Host "共 $($zipCount) 个 zip 产物"
+          if ($zipCount -lt 2) { throw "预期 2 个 zip（x64 / ia32），实际 $($zipCount) 个" }
+
+      - name: 上传产物（Artifacts）
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -96,3 +114,29 @@ jobs:
           path: |
             release/*.zip
             selftest*.json
+
+      # 以下两步让产物出现在 Releases 页，比 Artifacts 面板好找，链接也能长期分享
+      - name: 发布滚动 Release（main 每次推送）
+        if: github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Actions 的 pwsh 默认 $ErrorActionPreference='Stop'，
+          # 删一个不存在的 release 会往 stderr 写字，可能直接中断步骤，所以显式放宽。
+          $ErrorActionPreference = 'Continue'
+          gh release delete latest --yes --cleanup-tag 2>$null
+          gh release create latest release/*.zip --title "最新构建（main，非正式）" --prerelease --notes "自动构建，随 main 分支滚动更新，非正式版本。x64 包用于 64 位系统，ia32 包用于 32 位系统。支持 Windows 7 SP1 ~ Windows 10。"
+          # gh 是控制台程序，$LASTEXITCODE 可用（和 GUI 子系统程序不同）
+          if ($LASTEXITCODE -ne 0) { throw "发布滚动 Release 失败，退出码 $($LASTEXITCODE)" }
+          Write-Host "已发布: $($env:GITHUB_SERVER_URL)/$($env:GITHUB_REPOSITORY)/releases/tag/latest"
+
+      - name: 发布正式 Release（推送 v* tag）
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Continue'
+          gh release create "${{ github.ref_name }}" release/*.zip --title "AI 教学编辑器 ${{ github.ref_name }}" --notes "免安装版 zip：x64 包用于 64 位系统，ia32 包用于 32 位系统。支持 Windows 7 SP1 ~ Windows 10，不支持 Windows 11。解压到纯英文无空格目录后双击 AIEditor.exe，详见包内使用说明。"
+          if ($LASTEXITCODE -ne 0) { throw "发布正式 Release 失败，退出码 $($LASTEXITCODE)" }

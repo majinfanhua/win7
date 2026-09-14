@@ -25,6 +25,17 @@ AIEditor-<version>-win7-win10-ia32.zip
 > Windows 版本不是打包维度。同一份包在 Win7 SP1 / Win8 / Win10 上都能跑，
 > 系统差异在启动时自适应（Win7/8 走软件渲染，Win10 走硬件加速）。
 
+### 产物从哪拿
+
+| 位置 | 在哪 | 说明 |
+|---|---|---|
+| **Releases 页**（推荐）| 仓库 → Releases | `latest` 是 main 的滚动构建（prerelease）；推 `v*` tag 生成正式 Release |
+| Artifacts | 工作流**运行页**（不是任务日志页）底部 | 带自检报告，默认 90 天后过期 |
+
+> 两个常见困惑：
+> 1. **任务日志页看不到 Artifacts**，必须点进工作流的运行页，在最下方。
+> 2. 构建成功**不会自动产生 Release**（除非推 tag），这是刻意的：Release 只从 tag 或滚动 `latest` 来。
+
 ## 本地开发
 
 ```bash
