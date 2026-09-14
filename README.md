@@ -1,1 +1,41 @@
-# win7
+# win7-ai-editor
+
+面向教学场景的 AI 代码编辑器，分发为 **Windows 免安装版**，覆盖 **Windows 7 SP1 ~ Windows 10**（32/64 位）。
+
+## 关键约束
+
+| 项 | 取值 | 原因 |
+|---|---|---|
+| Electron | **22.3.27**（锁定） | 22.x 是最后一个支持 Win7 的版本，23 起要求 Win10 1809+ |
+| 渲染目标 | Chrome 108 | Electron 22 内置 Chromium |
+| 主进程目标 | Node 16 | Electron 22 内置 Node 16.17.1（无全局 fetch） |
+| 原生模块 | **禁止引入** | ABI 110，预编译包不可用 |
+
+## 打包方式
+
+**只通过 GitHub Actions 打包**，开发环境不做 Windows 打包（`npm run dist:win` 会直接拒绝执行）。
+
+产物（免安装 zip，x64 + ia32）：
+
+```
+AIEditor-<version>-win7-win10-x64.zip
+AIEditor-<version>-win7-win10-ia32.zip
+```
+
+> Windows 版本不是打包维度。同一份包在 Win7 SP1 / Win8 / Win10 上都能跑，
+> 系统差异在启动时自适应（Win7/8 走软件渲染，Win10 走硬件加速）。
+
+## 本地开发
+
+```bash
+npm ci
+npm run dev        # 开发模式
+npm run typecheck  # 类型检查
+npm run build      # 构建
+npm run smoke      # 无头启动自检（Linux 需 xvfb）
+```
+
+## 文档
+
+- `docs/技术框架方案.md` —— 完整技术方案
+- `docs/多系统-测试清单.md` —— 分发前真机验证清单

@@ -1,0 +1,65 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  windows-portable:
+    name: 打包免安装版
+    runs-on: windows-2022
+    timeout-minutes: 30
+    env:
+      # 不签名，也不去自动探测证书
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      CI: 'true'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 类型检查
+        run: npm run typecheck
+
+      - name: 构建（含 chrome108 / node16 目标护栏）
+        run: npm run build
+
+      - name: 打包 x64 + ia32
+        run: npm run dist:win
+
+      - name: 启动自检（x64）
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path release/win-unpacked -Filter *.exe | Select-Object -First 1
+          if (-not $exe) { throw "未找到可执行文件" }
+          Write-Host "自检目标: $($exe.FullName)"
+          & $exe.FullName --self-test --self-test-out=selftest.json
+          $code = $LASTEXITCODE
+          if (Test-Path selftest.json) { Get-Content selftest.json -Raw }
+          if ($code -ne 0) { throw "启动自检失败，退出码 $code" }
+
+      - name: 失败时导出日志
+        if: failure()
+        shell: pwsh
+        run: |
+          $logDir = Join-Path $env:APPDATA 'AIEditor\logs'
+          if (Test-Path $logDir) { Get-ChildItem $logDir | ForEach-Object { Get-Content $_.FullName -Raw } }
+          else { Write-Host '未生成日志目录' }
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: AIEditor-win7-win10-portable
+          if-no-files-found: error
+          path: |
+            release/*.zip
+            selftest.json

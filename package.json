@@ -1,0 +1,35 @@
+{
+  "name": "win7-ai-editor",
+  "version": "0.1.0",
+  "description": "面向教学的 AI 代码编辑器（Windows 7 / 10 免安装版）",
+  "main": "out/main/index.js",
+  "author": "majinfanhua",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "dev": "electron-vite dev",
+    "check:node16": "node scripts/check-node16-api.mjs",
+    "build": "npm run check:node16 && electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck:node": "tsc --noEmit -p tsconfig.json",
+    "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
+    "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "smoke": "node scripts/smoke.mjs",
+    "dist:win": "node scripts/guard-ci.mjs && electron-builder --win --x64 --ia32 --publish never"
+  },
+  "devDependencies": {
+    "@types/node": "20.17.9",
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "@vitejs/plugin-react": "4.3.4",
+    "electron": "22.3.27",
+    "electron-builder": "24.13.3",
+    "electron-vite": "2.3.0",
+    "monaco-editor": "0.44.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "typescript": "5.6.3",
+    "vite": "5.4.11",
+    "zustand": "4.5.5"
+  }
+}

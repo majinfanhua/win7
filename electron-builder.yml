@@ -1,0 +1,40 @@
+appId: com.majinfanhua.aieditor
+# productName 用 ASCII：它同时决定 %APPDATA% 下的用户数据目录名，
+# 避开 Win7 上非 ASCII 路径可能引发的异常
+productName: AIEditor
+copyright: Copyright © 2026 majinfanhua
+
+directories:
+  output: release
+  buildResources: build
+
+# 所有依赖都在 devDependencies 里（主进程/渲染进程都经过打包），
+# 因此不需要把 node_modules 塞进 asar
+files:
+  - out/**/*
+  - package.json
+
+# 解压后摆在 exe 旁边，方便老师直接看
+extraFiles:
+  - from: resources/使用说明.txt
+    to: 使用说明.txt
+
+asar: true
+
+# 零原生依赖，跳过 node-gyp 重建
+npmRebuild: false
+
+win:
+  # 只出免安装 zip，不做 NSIS 安装器
+  target:
+    - target: zip
+      arch:
+        - x64
+        - ia32
+  # 产物名带上系统范围，方便分发时判断该给谁
+  artifactName: AIEditor-${version}-win7-win10-${arch}.${ext}
+  # 不签名：Win7 验签需要 KB4474419，免安装包也用不上
+  signtoolOptions: null
+
+# 不使用 electron-builder 的自动更新通道
+publish: null

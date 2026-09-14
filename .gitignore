@@ -1,23 +1,26 @@
-### AL ###
-#Template for AL projects for Dynamics 365 Business Central
-#launch.json folder
-.vscode/
-#Cache folder
-.alcache/
-#Symbols folder
-.alpackages/
-#Snapshots folder
-.snapshots/
-#Testing Output folder
-.output/
-#Extension App-file
-*.app
-#Rapid Application Development File
-rad.json
-#Translation Base-file
-*.g.xlf
-#License-files
-*.bclicense
-*.flf
-#Test results file
-TestResults.xml
+# ---- Node / Electron ----
+node_modules/
+out/
+dist/
+release/
+*.log
+npm-debug.log*
+.npm/
+
+# ---- 构建缓存 ----
+.vite/
+*.tsbuildinfo
+
+# ---- 环境与本地配置 ----
+.env
+.env.local
+.dev-config/
+
+# ---- 编辑器 ----
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# ---- 系统 ----
+.DS_Store
+Thumbs.db

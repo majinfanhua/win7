@@ -1,0 +1,407 @@
+:root {
+  --bg: #1b1d22;
+  --bg-2: #22252b;
+  --bg-3: #2a2e36;
+  --border: #34383f;
+  --text: #e6e8eb;
+  --text-2: #9aa1ab;
+  --text-3: #6b7280;
+  --accent: #4f8ff7;
+  --danger: #e5534b;
+  --ok: #3fb950;
+  --warn: #d29922;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  /* Win7 没有 Microsoft YaHei UI，字体栈必须回退到 Microsoft YaHei */
+  font-family: "Microsoft YaHei", "微软雅黑", "Segoe UI", system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+button {
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+input,
+select,
+textarea {
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  width: 100%;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.app {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+
+.toolbar .spacer {
+  flex: 1;
+}
+
+.body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.sidebar {
+  width: 240px;
+  flex: none;
+  border-right: 1px solid var(--border);
+  background: var(--bg-2);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.right {
+  width: 380px;
+  flex: none;
+  border-left: 1px solid var(--border);
+  background: var(--bg-2);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.panel-title {
+  flex: none;
+  padding: 7px 10px;
+  font-size: 12px;
+  color: var(--text-2);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.scroll {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+}
+
+.statusbar {
+  flex: none;
+  display: flex;
+  gap: 14px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--text-2);
+  background: var(--bg-2);
+  border-top: 1px solid var(--border);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.node {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  user-select: none;
+}
+
+.node:hover {
+  background: var(--bg-3);
+}
+
+.node.active {
+  background: #2c3b55;
+}
+
+.node .icon {
+  color: var(--text-3);
+  width: 12px;
+  flex: none;
+  text-align: center;
+}
+
+.tabs {
+  display: flex;
+  flex: none;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-right: 1px solid var(--border);
+  cursor: pointer;
+  white-space: nowrap;
+  color: var(--text-2);
+}
+
+.tab.active {
+  background: var(--bg);
+  color: var(--text);
+}
+
+.tab .close {
+  color: var(--text-3);
+  border: none;
+  background: none;
+  padding: 0 2px;
+}
+
+.tab .dirty {
+  color: var(--warn);
+}
+
+.editor-host {
+  flex: 1;
+  min-height: 0;
+}
+
+.empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+  text-align: center;
+  padding: 24px;
+}
+
+.chat {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+}
+
+.msg {
+  border-radius: 8px;
+  padding: 7px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.msg.user {
+  background: #2c3b55;
+  align-self: flex-end;
+  max-width: 92%;
+}
+
+.msg.assistant {
+  background: var(--bg-3);
+}
+
+.msg.system {
+  background: #3a2b1d;
+  color: #e8c07d;
+  font-size: 12px;
+}
+
+.msg.error {
+  background: #3d2224;
+  color: #f0a7a1;
+}
+
+.composer {
+  flex: none;
+  border-top: 1px solid var(--border);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.composer .row {
+  display: flex;
+  gap: 6px;
+}
+
+.logs {
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
+.logs div {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.logs .warn {
+  color: var(--warn);
+}
+
+.logs .error {
+  color: var(--danger);
+}
+
+.logs .debug {
+  color: var(--text-3);
+}
+
+.output {
+  flex: none;
+  height: 150px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-2);
+  display: flex;
+  flex-direction: column;
+}
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+
+.dialog {
+  width: 560px;
+  max-height: 82vh;
+  overflow: auto;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.dialog h2 {
+  margin: 0 0 12px;
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.field {
+  margin-bottom: 10px;
+}
+
+.field label {
+  display: block;
+  color: var(--text-2);
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+
+.hint {
+  color: var(--text-3);
+  font-size: 12px;
+  margin-top: 3px;
+}
+
+.dialog .actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.report {
+  font-size: 12px;
+}
+
+.report .row {
+  display: flex;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.report .tag {
+  flex: none;
+  width: 40px;
+  text-align: center;
+  border-radius: 4px;
+  font-size: 11px;
+  height: 18px;
+  line-height: 18px;
+}
+
+.report .pass {
+  background: #1c3a24;
+  color: var(--ok);
+}
+
+.report .warn {
+  background: #3a2f1a;
+  color: var(--warn);
+}
+
+.report .fail {
+  background: #3d2224;
+  color: var(--danger);
+}
+
+.report .detail {
+  color: var(--text-2);
+  word-break: break-all;
+}
