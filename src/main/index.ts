@@ -220,7 +220,19 @@ function runSelfTest(win: BrowserWindow): void {
   })
 }
 
+/**
+ * 用户数据目录名。必须与随包《使用说明》、测试清单、CI 的日志导出路径一致。
+ */
+const USER_DATA_DIR = 'AIEditor'
+
 function main(): void {
+  // 必须在任何 getPath('userData') 之前固定目录名。
+  // Electron 的 app.getName() 默认取 package.json 的 name（也就是 win7-ai-editor），
+  // 不是 productName —— 上一轮 CI 实际落在 %APPDATA%\win7-ai-editor\logs，
+  // 而使用说明和 CI 里写的都是 AIEditor，文档会指向一个不存在的目录。
+  app.setName(USER_DATA_DIR)
+  app.setPath('userData', path.join(app.getPath('appData'), USER_DATA_DIR))
+
   initLogger()
   installCrashHandlers()
   initConfig()

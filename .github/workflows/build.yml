@@ -44,11 +44,25 @@ jobs:
           $exe = Join-Path $dir 'AIEditor.exe'
           if (-not (Test-Path $exe)) { throw "未找到可执行文件 $exe" }
           Write-Host "自检目标: $exe"
+
+          # 关键：AIEditor.exe 是 GUI 子系统程序，PowerShell 用 & 调用它不会等待，
+          # 且 $LASTEXITCODE 不会被赋值 —— 上一轮 CI 因此把「自检其实已经通过」
+          # 误报成了「退出码为空」。必须用 Start-Process -Wait -PassThru 取退出码。
           # --software：runner 上没有真实 GPU，强制软件渲染让结果可复现
-          & $exe --self-test --software --self-test-out=selftest.json
-          $code = $LASTEXITCODE
-          if (Test-Path selftest.json) { Get-Content selftest.json -Raw }
-          if ($code -ne 0) { throw "启动自检失败，退出码 $code" }
+          $argList = @('--self-test', '--software', '--self-test-out=selftest.json')
+          $proc = Start-Process -FilePath $exe -ArgumentList $argList -WorkingDirectory (Get-Location).Path -NoNewWindow -Wait -PassThru
+          $code = $proc.ExitCode
+
+          # 以报告内容为准，退出码作为辅助证据（两者应当一致）
+          $ok = $false
+          if (Test-Path selftest.json) {
+            Get-Content selftest.json -Raw -Encoding UTF8
+            $ok = ((Get-Content selftest.json -Raw -Encoding UTF8 | ConvertFrom-Json).ok -eq $true)
+          } else {
+            Write-Warning '未生成 selftest.json，自检未走完'
+          }
+          Write-Host "自检退出码=$($code) 报告 ok=$ok"
+          if (-not $ok -or $code -ne 0) { throw "启动自检失败：退出码=$($code) 报告ok=$ok" }
 
       - name: 启动自检（默认图形路径，仅记录不阻断）
         # 只用于观察默认路径在无 GPU 环境下的表现，不作为发布门禁
@@ -57,19 +71,21 @@ jobs:
         run: |
           $exe = 'release/win-unpacked/AIEditor.exe'
           if (-not (Test-Path $exe)) { throw "未找到可执行文件 $exe" }
-          & $exe --self-test --self-test-out=selftest-default-gpu.json
-          $code = $LASTEXITCODE
-          if (Test-Path selftest-default-gpu.json) { Get-Content selftest-default-gpu.json -Raw }
-          if ($code -ne 0) { Write-Warning "默认图形路径自检未通过（退出码 $code），仅记录" }
+          $argList = @('--self-test', '--self-test-out=selftest-default-gpu.json')
+          $proc = Start-Process -FilePath $exe -ArgumentList $argList -WorkingDirectory (Get-Location).Path -NoNewWindow -Wait -PassThru
+          $code = $proc.ExitCode
+          if (Test-Path selftest-default-gpu.json) { Get-Content selftest-default-gpu.json -Raw -Encoding UTF8 }
+          if ($code -ne 0) { Write-Warning "默认图形路径自检未通过（退出码 $($code)），仅记录" }
 
       - name: 失败时导出日志
         if: failure()
         shell: pwsh
         run: |
+          # 目录名由 src/main/index.ts 的 app.setPath('userData') 固定为 AIEditor
           $logDir = Join-Path $env:APPDATA 'AIEditor\logs'
           if (Test-Path $logDir) {
             Get-ChildItem $logDir | ForEach-Object { Write-Host "===== $($_.Name) ====="; Get-Content $_.FullName -Raw }
-          } else { Write-Host '未生成日志目录' }
+          } else { Write-Host "未生成日志目录 $($logDir)" }
 
       - name: 上传产物
         if: always()

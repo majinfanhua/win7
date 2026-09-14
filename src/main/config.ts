@@ -24,8 +24,9 @@ function normalize(raw: unknown): AppConfig {
 }
 
 /**
- * 在 app ready 之前也要能拿到配置（图形开关依赖它），
- * 所以这里自己拼 userData 路径而不依赖 app.getPath 的就绪时机。
+ * 在 app ready 之前也要能拿到配置（图形开关依赖它）。
+ * app.getPath('userData') 在 ready 之前即可用，且 index.ts 的 main() 最前面
+ * 已用 app.setPath('userData') 固定了目录名，所以这里取到的路径是确定的。
  */
 export function initConfig(): AppConfig {
   const file = resolveConfigPath()
