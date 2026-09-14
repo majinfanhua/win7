@@ -243,12 +243,16 @@ TOOL_UNAVAILABLE: 本机（Windows 7 SP1）不支持命令执行，请改用直�
 
 ### 6.3 设置界面要有什么
 
-在现有设置弹窗里新增一个「工具能力」分区：
+设置是**独立页面**（不是弹窗），左侧分栏：
 
-- 下拉：自动（推荐）/ 保守 / 全开
-- **一行只读状态**：`本机 Windows 7 SP1 · 文件操作 ✓ · 命令执行 ✗ · 当前生效 6 个工具`
-  —— 没这行，老师改完不知道生效没有
-- 折叠的「高级」：逐工具勾选（写进 `disabled`）
+- 左导航：`AI 模型` / `工具能力`，各自带一句副标题
+- `工具能力` 那栏：
+  - 下拉：自动（推荐）/ 保守 / 全开
+  - **一块只读状态**：本机系统名、当前生效的工具数与名称、未启用清单及原因、探测备注
+    —— 没这块，老师改完不知道生效没有
+  - 折叠的「高级」：逐工具勾选（写进 `disabled`）
+
+页面级的两点：保存后留在本页（给一句「已保存」），返回时若有未保存改动先问一句。
 
 **改完必须立即生效**：工具表不能在启动时只组装一次，要在保存设置后（或每次发请求前）重建，
 否则老师改完得重启。工具表若有缓存，`setConfig` 后要失效。
@@ -345,7 +349,7 @@ npm run smoke -- --capability-profile=win7 --self-test-out=selftest-win7.json
 | 跨系统 6 个工具 + 快照撤销 | ✅ | `src/main/tools/file-tools.ts`、`snapshot.ts` |
 | 工具调度（过滤 + 执行 + 可读错误） | ✅ | `src/main/tools/index.ts` |
 | 对话工具调用循环（含 400/422 降级链） | ✅ | `src/main/ipc/ai.ts` |
-| 设置界面「工具能力」分区 | ✅ | `src/renderer/src/components/SettingsDialog.tsx` |
+| 设置页（分栏：AI 模型 / 工具能力） | ✅ | `src/renderer/src/components/SettingsPage.tsx` |
 | 对话里的工具调用过程展示 | ✅ | `src/renderer/src/components/AiPanel.tsx` |
 | 自检断言 + CI 双跑 | ✅ | `src/renderer/src/main.tsx`、`.github/workflows/build.yml` |
 | `RunCommand` + `job.*` | ⬜ 未实现 | 规划中，`ALL_TOOLS` 里已占位，门控已就绪 |

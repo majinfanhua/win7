@@ -171,7 +171,7 @@ export default function AiPanel({ onOpenSettings }: { onOpenSettings: () => void
               ) : (
                 <div className="welcome-actions">
                   <button className="primary" onClick={onOpenSettings}>
-                    先去配置 AI 模型
+                    先去设置里配置模型
                   </button>
                   <span className="muted">未配置也可以先翻翻界面</span>
                 </div>

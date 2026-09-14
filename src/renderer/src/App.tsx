@@ -1,11 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import AiPanel from './components/AiPanel'
-import SettingsDialog from './components/SettingsDialog'
+import SettingsPage from './components/SettingsPage'
 import { useAppStore } from './store/useAppStore'
 import { applyTheme, readTheme, type Theme } from './theme'
 
+/** 当前只有两个视图。以后加文件树 / 编辑器时，这里换成路由表即可 */
+type View = 'chat' | 'settings'
+
 /**
- * 当前版本只保留两块：对话 + AI 配置。
+ * 当前版本只保留两块：对话 + 设置。
  * 文件树 / 编辑器 / 输出面板 / 环境体检都先不渲染（源码还在 components 里，随时可以加回来）。
  */
 export default function App(): JSX.Element {
@@ -14,7 +17,7 @@ export default function App(): JSX.Element {
   const config = useAppStore((s) => s.config)
   const runtime = useAppStore((s) => s.runtime)
 
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [view, setView] = useState<View>('chat')
   const [theme, setTheme] = useState<Theme>(() => readTheme())
 
   useEffect(() => {
@@ -33,7 +36,30 @@ export default function App(): JSX.Element {
     if (runtime) document.documentElement.dataset.perf = runtime.softwareRendering ? 'low' : 'high'
   }, [runtime])
 
+  const openSettings = useCallback(() => setView('settings'), [])
+  const backToChat = useCallback(() => setView('chat'), [])
+
+  /**
+   * 主进程菜单发过来的动作。
+   *
+   * 以前整条 onMenu 都没人接 —— 菜单里的「设置…」「打开日志目录」和 Ctrl+, 都是摆设。
+   * 设置页上线后必须接上，否则 Ctrl+, 依旧没反应。
+   *
+   * 剩下 doctor / about 仍未接（DoctorDialog 组件在，但当前界面不渲染体检）；
+   * 要恢复的话在这里加分支即可。
+   */
+  useEffect(() => {
+    return window.api.onMenu((action) => {
+      if (action === 'settings') {
+        setView('settings')
+      } else if (action === 'open-logs') {
+        void window.api.openLogs()
+      }
+    })
+  }, [])
+
   const nextTheme: Theme = theme === 'dark' ? 'light' : 'dark'
+  const inSettings = view === 'settings'
 
   return (
     <div className="app" data-app-ready={ready ? '1' : '0'}>
@@ -51,19 +77,46 @@ export default function App(): JSX.Element {
           {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
           <span>{nextTheme === 'dark' ? '深色' : '浅色'}</span>
         </button>
-        <button className="icon-btn" onClick={() => setSettingsOpen(true)}>
+        {/*
+          设置成了独立页面，这个按钮就是导航项，不再是“打开弹窗”。
+          在设置页里再点它不做任何事（不切回）—— 因为返回要经过未保存确认，
+          绕开它会静默丢掉改动。返回请用设置页里的「返回」或 Esc。
+        */}
+        <button
+          className={`icon-btn${inSettings ? ' active' : ''}`}
+          aria-label="设置"
+          aria-current={inSettings ? 'page' : undefined}
+          title="设置（Ctrl+,）"
+          onClick={openSettings}
+        >
           <GearIcon />
           <span>设置</span>
         </button>
       </header>
 
-      <main className="stage">
-        <AiPanel onOpenSettings={() => setSettingsOpen(true)} />
-      </main>
+      <main className={`stage${inSettings ? ' stage-page' : ''}`}>
+        {/*
+          对话面板始终挂载，只靠 CSS 藏起来。
+          若写成条件渲染，去设置页转一圈回来聊天记录就没了 ——
+          而“改完设置接着问刚才那个问题”恰恰是最常见的动线。
+        */}
+        <div className={`view${inSettings ? '' : ' is-active'}`}>
+          <AiPanel onOpenSettings={openSettings} />
+        </div>
 
-      {settingsOpen && config && (
-        <SettingsDialog initial={config} onClose={() => setSettingsOpen(false)} />
-      )}
+        {inSettings &&
+          (config ? (
+            <SettingsPage initial={config} onBack={backToChat} />
+          ) : (
+            <div className="settings-page">
+              <div className="page-scroll">
+                <div className="page-body">
+                  <div className="muted">正在加载配置…</div>
+                </div>
+              </div>
+            </div>
+          ))}
+      </main>
     </div>
   )
 }

@@ -161,7 +161,9 @@ function buildMenu(): void {
     },
     {
       label: '设置',
-      submenu: [{ label: 'AI 模型与编辑器设置…', accelerator: 'CmdOrCtrl+,', click: () => sendMenu('settings') }]
+      submenu: [
+        { label: '打开设置页…', accelerator: 'CmdOrCtrl+,', click: () => sendMenu('settings') }
+      ]
     },
     {
       label: '帮助',

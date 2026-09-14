@@ -185,6 +185,47 @@ window.__SELFTEST__ = async () => {
     checks.capabilitySettingsError = String(err)
   }
 
+  /*
+   * 设置页的进出。
+   *
+   * 设置从弹窗改成了独立页面，而“改成页面”最容易坏的地方不是样式，是导航：
+   * 点了没反应、进去了出不来、或者切页时把对话面板卸载掉（聊天记录全丢）。
+   * 这三件事人工点一遍也能发现，但等发到学生机上才发现就太晚了。
+   */
+  try {
+    const openBtn = document.querySelector('.topbar [aria-label="设置"]') as HTMLElement | null
+    checks.settingsButtonFound = Boolean(openBtn)
+    openBtn?.click()
+
+    checks.settingsPageOpened = await waitFor(
+      () => Boolean(document.querySelector('.settings-page')),
+      5_000
+    )
+    // 对话面板必须还在 DOM 里（只是被 CSS 藏起来），否则回来聊天记录就没了
+    checks.chatPanelKeptMounted = Boolean(document.querySelector('.composer'))
+
+    const backBtn = document.querySelector(
+      '.settings-page [aria-label="返回"]'
+    ) as HTMLElement | null
+    checks.settingsBackButtonFound = Boolean(backBtn)
+    backBtn?.click()
+
+    checks.settingsPageClosed = await waitFor(
+      () => !document.querySelector('.settings-page'),
+      5_000
+    )
+
+    checks.settingsNavOk =
+      checks.settingsButtonFound &&
+      checks.settingsPageOpened &&
+      checks.chatPanelKeptMounted &&
+      checks.settingsBackButtonFound &&
+      checks.settingsPageClosed
+  } catch (err) {
+    checks.settingsNavOk = false
+    checks.settingsNavError = String(err)
+  }
+
   const ok = Boolean(
     checks.root &&
       checks.reactMounted &&
@@ -194,6 +235,7 @@ window.__SELFTEST__ = async () => {
       checks.ipc &&
       checks.capabilityOk &&
       checks.capabilitySettingsOk &&
+      checks.settingsNavOk &&
       !checks.devApiStub
   )
   return { ok, checks }
