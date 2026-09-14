@@ -82,9 +82,8 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   async init() {
     const [runtime, config] = await Promise.all([window.api.runtime(), window.api.getConfig()])
-    set({ runtime, config })
-    if (config.lastWorkspace) await get().loadRoot(config.lastWorkspace)
-    set({ ready: true })
+    // 当前版本没有文件树，不需要在启动时恢复上次的工作区
+    set({ runtime, config, ready: true })
   },
 
   async loadRoot(dir: string) {

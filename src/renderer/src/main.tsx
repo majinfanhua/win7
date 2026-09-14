@@ -1,12 +1,8 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
-import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker'
-import jsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker'
-import cssWorker from 'monaco-editor/esm/vs/language/css/css.worker?worker'
-import htmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker'
-import tsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker'
 import App from './App'
 import { installDevApiStub } from './dev-api-stub'
+import { applyTheme, readTheme } from './theme'
 import './styles/global.css'
 
 /**
@@ -16,24 +12,22 @@ import './styles/global.css'
  */
 installDevApiStub()
 
-/**
- * Monaco 的 Web Worker 必须显式注入，否则语言服务失效
- * （编辑器仍能显示，但没有补全与语法校验）。
- * Electron 下页面跑在 file:// 协议，worker 由 Vite 打包成独立 chunk 后按相对路径加载。
- */
-interface MonacoEnv {
-  getWorker(moduleId: string, label: string): Worker
-}
+// 主题要在首次渲染前落到 <html> 上，否则浅色主题会先闪一下深色
+applyTheme(readTheme())
 
-;(self as unknown as { MonacoEnvironment: MonacoEnv }).MonacoEnvironment = {
-  getWorker(_moduleId: string, label: string): Worker {
-    if (label === 'json') return new jsonWorker()
-    if (label === 'css' || label === 'scss' || label === 'less') return new cssWorker()
-    if (label === 'html' || label === 'handlebars' || label === 'razor') return new htmlWorker()
-    if (label === 'typescript' || label === 'javascript') return new tsWorker()
-    return new editorWorker()
-  }
-}
+/*
+ * 当前版本界面里没有编辑器，所以 Monaco 的 worker 注入也一并去掉了
+ * —— 那 5 个 worker import 会把渲染包从几百 KB 涨到 6 MB。
+ *
+ * 以后恢复 EditorPane 时，把下面这段和对应的 worker import 一起加回来，
+ * 否则编辑器能显示，但没有补全与语法校验：
+ *
+ *   import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker'
+ *   ...（json / css / html / ts）
+ *   ;(self as unknown as { MonacoEnvironment: MonacoEnv }).MonacoEnvironment = {
+ *     getWorker: (_id, label) => ...
+ *   }
+ */
 
 const container = document.getElementById('root')
 if (!container) throw new Error('未找到 #root 挂载点')
@@ -44,7 +38,7 @@ ReactDOM.createRoot(container).render(
 
 /**
  * 自检入口：主进程 --self-test 时调用。
- * 不是检查“页面有没有返回”，而是检查 React 挂载、Monaco 实例化、IPC 通道可用。
+ * 不是检查“页面有没有返回”，而是检查 React 挂载、对话界面渲染、IPC 通道可用。
  *
  * 关键点：这些事都是异步完成的，而 __SELFTEST__ 是在 did-finish-load 那一刻被调用的，
  * 那时 React 18 并发渲染还没提交、store.init() 还没回来。所以不能瞬时采样，
@@ -72,17 +66,14 @@ window.__SELFTEST__ = async () => {
   checks.domNodes = document.querySelectorAll('*').length
   checks.title = document.title
 
+  // 界面真的渲染出来了：顶栏 + 对话输入区
+  checks.topbar = Boolean(document.querySelector('.topbar'))
+  checks.composer = Boolean(document.querySelector('.composer'))
+  checks.theme = document.documentElement.dataset.theme || ''
+
   // preload 的 contextBridge 注入时机也不保证早于页面脚本；
   // 浏览器预览模式下这个值来自 dev 桩，不能算通过
   checks.apiReady = await waitFor(() => typeof window.api === 'object', 5_000)
-
-  // Monaco 实例化最重，软件渲染下更慢
-  checks.monacoMounted = await waitFor(
-    () => Boolean(document.querySelector('.monaco-editor')),
-    25_000
-  )
-  // monaco-editor 的 ESM 入口不导出 version，不猜，改为报可观测的实例数
-  checks.monacoEditors = document.querySelectorAll('.monaco-editor').length
 
   // 验证 IPC 通道真的能通
   try {
@@ -103,8 +94,9 @@ window.__SELFTEST__ = async () => {
   const ok = Boolean(
     checks.root &&
       checks.reactMounted &&
+      checks.topbar &&
+      checks.composer &&
       checks.apiReady &&
-      checks.monacoMounted &&
       checks.ipc &&
       !checks.devApiStub
   )

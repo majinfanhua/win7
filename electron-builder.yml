@@ -28,6 +28,9 @@ asar: true
 npmRebuild: false
 
 win:
+  # 应用图标（exe 图标 + 任务栏）。由 scripts/make-icon.py 生成，
+  # 里面含 16/24/32/48/64/128/256 七个尺寸，小图标不会糊。
+  icon: build/icon.ico
   # 只出免安装 zip，不做 NSIS 安装器
   target:
     - target: zip

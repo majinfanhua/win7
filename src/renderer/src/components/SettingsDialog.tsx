@@ -21,6 +21,7 @@ function formatHeaders(headers: Record<string, string>): string {
     .join('\n')
 }
 
+/** 当前只保留 AI 配置（编辑器 / 图形相关项暂时移除） */
 export default function SettingsDialog({
   initial,
   onClose
@@ -54,7 +55,7 @@ export default function SettingsDialog({
       await persistAi()
       const result = await window.api.aiListModels()
       setModels(result.models)
-      setStatus(result.ok ? `${result.detail}，请在左侧选择` : result.detail)
+      setStatus(result.ok ? `${result.detail}，可在上方选择` : result.detail)
     } finally {
       setBusy(false)
     }
@@ -76,8 +77,7 @@ export default function SettingsDialog({
     setBusy(true)
     try {
       const saved = await window.api.setConfig({
-        ai: { ...draft.ai, extraHeaders: parseHeaders(headerText) },
-        editor: draft.editor
+        ai: { ...draft.ai, extraHeaders: parseHeaders(headerText) }
       })
       applyConfig(saved)
       onClose()
@@ -88,8 +88,16 @@ export default function SettingsDialog({
 
   return (
     <div className="overlay" onClick={onClose}>
-      <div className="dialog" onClick={(e) => e.stopPropagation()}>
-        <h2>设置</h2>
+      <div className="dialog glass" onClick={(e) => e.stopPropagation()}>
+        <div className="dialog-head">
+          <div>
+            <h2>AI 配置</h2>
+            <div className="muted">填完保存即可开始对话</div>
+          </div>
+          <button className="icon-btn" title="关闭" onClick={onClose}>
+            ✕
+          </button>
+        </div>
 
         <div className="field">
           <label>中转站地址（OpenAI 兼容）</label>
@@ -114,7 +122,7 @@ export default function SettingsDialog({
 
         <div className="field">
           <label>模型</label>
-          <div style={{ display: 'flex', gap: 6 }}>
+          <div className="inline">
             {models.length > 0 ? (
               <select value={draft.ai.model} onChange={(e) => patchAi({ model: e.target.value })}>
                 <option value="">请选择</option>
@@ -131,7 +139,7 @@ export default function SettingsDialog({
                 onChange={(e) => patchAi({ model: e.target.value })}
               />
             )}
-            <button disabled={busy} onClick={() => void fetchModels()} style={{ flex: 'none' }}>
+            <button className="ghost" disabled={busy} onClick={() => void fetchModels()}>
               拉取列表
             </button>
           </div>
@@ -168,29 +176,17 @@ export default function SettingsDialog({
           />
         </div>
 
-        <div className="field">
-          <label>编辑器字号</label>
-          <input
-            type="number"
-            min={10}
-            max={28}
-            value={draft.editor.fontSize}
-            onChange={(e) =>
-              setDraft((p) => ({ ...p, editor: { ...p.editor, fontSize: Number(e.target.value) } }))
-            }
-          />
-        </div>
+        {status && <div className="status-line">{status}</div>}
 
-        {status && <div className="hint">{status}</div>}
-
-        <div className="actions">
-          <button disabled={busy} onClick={() => void testConnection()}>
+        <div className="dialog-actions">
+          <button className="ghost" disabled={busy} onClick={() => void testConnection()}>
             测试连接
           </button>
-          <button disabled={busy} onClick={onClose}>
+          <span className="spacer" />
+          <button className="ghost" disabled={busy} onClick={onClose}>
             取消
           </button>
-          <button disabled={busy} onClick={() => void save()}>
+          <button className="primary" disabled={busy} onClick={() => void save()}>
             保存
           </button>
         </div>

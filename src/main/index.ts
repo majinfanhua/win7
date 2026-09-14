@@ -36,8 +36,10 @@ function createWindow(): BrowserWindow {
     minWidth: 1024,
     minHeight: 640,
     show: false,
-    backgroundColor: '#1b1d22',
+    // 和默认主题（深色）的底色一致，避免启动瞬间闪一下别的颜色
+    backgroundColor: '#0e1116',
     title: 'AI 教学编辑器',
+    icon: windowIconPath(),
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -233,6 +235,19 @@ function runSelfTest(win: BrowserWindow): void {
  */
 const BASE_USER_DATA_DIR = app.isPackaged ? 'AIEditor' : 'AIEditor-dev'
 const USER_DATA_DIR = cli.selfTest ? `${BASE_USER_DATA_DIR}-selftest` : BASE_USER_DATA_DIR
+
+/**
+ * 窗口图标。由 scripts/make-icon.py 生成。
+ *
+ * 只有开发态需要显式指定：打包后 Windows 窗口会直接继承 exe 自带图标
+ * （build/icon.ico），不必再往用户目录里放一份 png。
+ * 写成函数是因为要等 app ready 之后才能问 __dirname 之外的东西。
+ */
+function windowIconPath(): string | undefined {
+  if (app.isPackaged) return undefined
+  const file = path.join(__dirname, '../../resources/icon.png')
+  return fs.existsSync(file) ? file : undefined
+}
 
 function main(): void {
   // 必须在任何 getPath('userData') 之前固定目录名。
