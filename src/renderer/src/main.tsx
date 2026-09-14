@@ -6,7 +6,15 @@ import cssWorker from 'monaco-editor/esm/vs/language/css/css.worker?worker'
 import htmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker'
 import tsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker'
 import App from './App'
+import { installDevApiStub } from './dev-api-stub'
 import './styles/global.css'
+
+/**
+ * 必须放在 render 之前：App 的 useEffect 一跑就会调 window.api。
+ * Electron 里 preload 已注入真实 api，这个函数会直接返回 false，什么也不做；
+ * 只有「用普通浏览器打开 dev server」时才会真的装上桩。
+ */
+installDevApiStub()
 
 /**
  * Monaco 的 Web Worker 必须显式注入，否则语言服务失效
@@ -64,7 +72,8 @@ window.__SELFTEST__ = async () => {
   checks.domNodes = document.querySelectorAll('*').length
   checks.title = document.title
 
-  // preload 的 contextBridge 注入时机也不保证早于页面脚本
+  // preload 的 contextBridge 注入时机也不保证早于页面脚本；
+  // 浏览器预览模式下这个值来自 dev 桩，不能算通过
   checks.apiReady = await waitFor(() => typeof window.api === 'object', 5_000)
 
   // Monaco 实例化最重，软件渲染下更慢
@@ -88,8 +97,16 @@ window.__SELFTEST__ = async () => {
     checks.ipcError = String(err)
   }
 
+  // 浏览器预览模式下 api / ipc 都来自 dev 桩，是假的，不能当成真实环境通过自检
+  checks.devApiStub = Boolean(window.__DEV_API_STUB__)
+
   const ok = Boolean(
-    checks.root && checks.reactMounted && checks.apiReady && checks.monacoMounted && checks.ipc
+    checks.root &&
+      checks.reactMounted &&
+      checks.apiReady &&
+      checks.monacoMounted &&
+      checks.ipc &&
+      !checks.devApiStub
   )
   return { ok, checks }
 }
