@@ -20,6 +20,7 @@
 
 // 编辑器 API（不含任何语言）
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api'
+import { SNIPPETS, isTriggeredAt } from './snippets'
 
 /*
  * Worker 注入。
@@ -175,5 +176,81 @@ monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions({
  */
 monaco.languages.typescript.javascriptDefaults.setEagerModelSync(false)
 monaco.languages.typescript.typescriptDefaults.setEagerModelSync(false)
+
+/* ------------------------------------------------------------------ *
+ * 片段补全（!+Tab 之类）
+ * ------------------------------------------------------------------ */
+
+/**
+ * 注册触发词片段。
+ *
+ * 覆盖 html / css / javascript / markdown / json 五种语言 —— 与
+ * FILE_TEMPLATES 的六种一一对应（纯文本没有骨架，不注册）。
+ *
+ * 两个关键点：
+ *   1. **必须用 `insertTextRules` 打开 InsertAsSnippet**，否则 `$0`
+ *      会被当字面量插进文件里，学生会看到代码里多了一串 `$0`
+ *   2. **不做「只在行首触发」的过滤**（snippets.ts 里的 shouldSuggest 目前没接）。
+ *      Monaco 的 CompletionItemProvider 拿不到「光标前这一行」的原文，
+ *      要自己从 model 里读；而为了不误触就算错也比不补全好 ——
+ *      学生敲 `!` 后看到补全列表弹出、不想要就不选，代价很小；
+ *      反过来若过滤写错导致该弹时不弹，他会以为这个功能没做。
+ *
+ * 触发词在补全列表里的排序靠 sortText 提前：`!` 这种要排在最前面，
+ * 否则会被语言服务自带的几百条建议压在下面，学生根本翻不到。
+ */
+/**
+ * 片段只在这几种语言里注册。
+ *
+ * typescript 也一起注册 —— 学生写 .ts 时同样想要 `!`。
+ * javascript 用 `monaco.languages.javascript`（不是 typescript）：
+ * 两个语言 id 各自独立注册，而 .js 文件的默认语言是 javascript。
+ */
+const SNIPPET_TARGETS: Array<{ id: string; api: monaco.languages.LanguageSelector }> = [
+  { id: 'html', api: 'html' },
+  { id: 'css', api: 'css' },
+  { id: 'javascript', api: 'javascript' },
+  { id: 'typescript', api: 'typescript' },
+  { id: 'markdown', api: 'markdown' },
+  { id: 'json', api: 'json' }
+]
+
+for (const target of SNIPPET_TARGETS) {
+  monaco.languages.registerCompletionItemProvider(target.api, {
+    // 触发字符：`!` 是 Emmet 习惯，敲下去就该弹；其余靠单词补全自动出现
+    triggerCharacters: ['!'],
+    provideCompletionItems(model, position) {
+      const word = model.getWordUntilPosition(position)
+      const line = model.getLineContent(position.lineNumber)
+      /** 光标之前这一行的原文，用来判断触发词是不是在行首 */
+      const beforeCursor = line.slice(0, position.column - 1)
+
+      const range = {
+        startLineNumber: position.lineNumber,
+        endLineNumber: position.lineNumber,
+        startColumn: word.startColumn,
+        endColumn: word.endColumn
+      }
+
+      const suggestions = SNIPPETS.filter((snippet) => isTriggeredAt(snippet, beforeCursor)).map(
+        (snippet, index) => ({
+          label: {
+            label: snippet.trigger,
+            description: snippet.detail
+          },
+          // 排在最前：片段是这个编辑器里最该先被看到的东西
+          sortText: `0${index}`,
+          kind: monaco.languages.CompletionItemKind.Snippet,
+          insertText: snippet.body,
+          insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+          documentation: { value: `展开${snippet.detail}的初始骨架` },
+          range
+        })
+      )
+
+      return { suggestions }
+    }
+  })
+}
 
 export default monaco
