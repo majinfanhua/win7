@@ -30,8 +30,14 @@ import * as monaco from 'monaco-editor/esm/vs/editor/editor.api'
  *
  * 用 ?worker 让 Vite 把每个 worker 打成独立文件。这点对 Win7 很重要：
  * 它们是**独立线程**，语法高亮与校验不占主线程，界面不会因为
- * 打开一个大文件而卡住。ts.worker 有 9 MB，但它是懒加载的 ——
- * 只有真的打开 .js/.ts 时才启动，纯 HTML 项目不会付这个代价。
+ * 打开一个大文件而卡住。
+ *
+ * ts.worker 单独走**动态导入**（见下面的 getWorker）。
+ * 它一个文件就 9.2 MB，而 `import ... from '...?worker'` 会在模块求值时
+ * 就把它的 URL 拉进来；对一个纯 HTML/CSS 的教学项目来说，
+ * 这份体积从头到尾都用不上，却要在启动时占着磁盘 IO ——
+ * 机械盘 + 杀软实时扫描下这是实打实的秒级差别。
+ * 改成懒加载后：只有真的打开 .js/.ts 才会去取那个 chunk。
  *
  * 按 label 分流：Monaco 用 label 区分语言服务类型，
  * 分流错了会把 TS 的 worker 拿去跑 CSS，表现是补全乱弹。
@@ -40,14 +46,57 @@ import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker'
 import jsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker'
 import cssWorker from 'monaco-editor/esm/vs/language/css/css.worker?worker'
 import htmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker'
-import tsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker'
+
+/**
+ * 懒加载 ts.worker。
+ *
+ * Monaco 的 `getWorker` 是**同步**接口，不能返回 Promise，
+ * 而 `MonacoEnvironment.getWorker` 之外还有一个 `getWorkerUrl`
+ * 是给 URL 形式用的 —— 两个都不接受异步。所以这里用一个
+ * 「占位 Worker + 转发」的办法：
+ *
+ *   1. 立刻返回一个用 Blob 造的空 Worker，Monaco 拿到它就能继续初始化
+ *   2. 动态 import 真正的 ts.worker，拿到后把它的实例挂上
+ *   3. 期间 Monaco 发来的消息先攒着，等真 worker 就绪后按序补发
+ *
+ * 为什么不用 `getWorkerUrl` 返回一个指向 chunk 的 URL：
+ * 那条路径要求自己算 chunk 的文件名（带 hash），
+ * 而 Vite 只在构建期知道 hash —— 等于把构建产物结构写死进源码，
+ * 换个打包版本就崩。
+ *
+ * 代价：第一次打开 .js/.ts 时，语言服务会晚几百毫秒才可用。
+ * 这个代价明显小于「每个用户启动时都读 9 MB」。
+ */
+function createLazyTsWorker(): Worker {
+  const queue: Array<[Transferable | undefined, unknown]> = []
+  let real: Worker | null = null
+
+  // 空壳：用一段什么都不做的脚本造一个合法的 Worker
+  const shell = new Worker(URL.createObjectURL(new Blob([''], { type: 'text/javascript' })))
+
+  // 拦下 Monaco 发往这个空壳的所有消息，转给稍后就绪的真 worker
+  shell.postMessage = ((message: unknown, transfer?: Transferable[]): void => {
+    if (real) real.postMessage(message, transfer as Transferable[])
+    else queue.push([transfer ? transfer[0] : undefined, message])
+  }) as Worker['postMessage']
+
+  void import('monaco-editor/esm/vs/language/typescript/ts.worker?worker').then((mod) => {
+    real = new mod.default()
+    // 真 worker 的 onmessage 要接回空壳上 —— Monaco 只持有空壳的引用
+    real.onmessage = (e): void => shell.onmessage?.(e as MessageEvent)
+    real.onerror = (e): void => shell.onerror?.(e as ErrorEvent)
+    for (const [, message] of queue.splice(0)) real.postMessage(message)
+  })
+
+  return shell
+}
 
 self.MonacoEnvironment = {
   getWorker(_workerId: string, label: string): Worker {
     if (label === 'json') return new jsonWorker()
     if (label === 'css' || label === 'scss' || label === 'less') return new cssWorker()
     if (label === 'html' || label === 'handlebars' || label === 'razor') return new htmlWorker()
-    if (label === 'typescript' || label === 'javascript') return new tsWorker()
+    if (label === 'typescript' || label === 'javascript') return createLazyTsWorker()
     return new editorWorker()
   }
 }
