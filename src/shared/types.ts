@@ -30,6 +30,15 @@ export interface AIConfig {
   systemPrompt: string
   /** 部分中转站需要额外的鉴权头或自定义头 */
   extraHeaders: Record<string, string>
+  /**
+   * 当前模型是否支持图片输入（多模态）。
+   *
+   * 由用户在设置里勾选，不做自动探测 —— 「支持多模态」这件事
+   * 中转站的 /models 接口不会告诉你，只有模型名能猜（而模型名千奇百怪）。
+   * 猜错的代价不对称：勾了但不支持 → 整个请求被拒（学生一脸茫然）；
+   * 不勾但支持 → 只是用不上图片，功能仍在。所以默认关闭，由人确认。
+   */
+  supportsVision: boolean
 }
 
 export interface EditorConfig {
@@ -275,9 +284,37 @@ export interface DoctorReport {
 
 export type ChatRole = 'system' | 'user' | 'assistant'
 
+/**
+ * 消息内容。
+ *
+ * 纯文本时是字符串；带图片时是内容块数组（OpenAI 兼容的多模态格式）。
+ * 用联合类型而不是「永远是数组」：绝大多数消息没有图，
+ * 强行数组化会让所有下游代码（会话落盘、拍平算缓存）都要处理一层解包。
+ */
+export type ChatContent = string | ChatContentBlock[]
+
+export type ChatContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } }
+
 export interface ChatMessage {
   role: ChatRole
-  content: string
+  content: ChatContent
+}
+
+/**
+ * 一条消息的纯文本部分。
+ *
+ * 拍平给「缓存命中估算」与「会话标题提取」用 —— 它们只关心文字，
+ * 图片的 base64 既不该参与前缀比较（每次都不同，会让命中率永远算成 0），
+ * 也不该进标题。
+ */
+export function textOf(content: ChatContent): string {
+  if (typeof content === 'string') return content
+  return content
+    .filter((block): block is { type: 'text'; text: string } => block.type === 'text')
+    .map((block) => block.text)
+    .join('\n')
 }
 
 /**
@@ -450,7 +487,9 @@ export const DEFAULT_CONFIG: AppConfig = {
     model: '',
     temperature: 0.3,
     systemPrompt: DEFAULT_SYSTEM_PROMPT,
-    extraHeaders: {}
+    extraHeaders: {},
+    // 默认关：见 AIConfig.supportsVision 的注释（猜错的代价不对称）
+    supportsVision: false
   },
   editor: { fontSize: 14, tabSize: 2, wordWrap: true, minimap: false },
   legacyGraphics: { softwareRendering: true },

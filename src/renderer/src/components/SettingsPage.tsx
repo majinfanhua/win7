@@ -341,6 +341,30 @@ export default function SettingsPage({
                   />
                 </div>
 
+                {/*
+                  图片支持是独立开关，不做自动探测。
+                  「这个模型能不能看图」中转站的 /models 接口不会告诉你，
+                  只能从模型名猜 —— 而模型名千奇百怪，猜错的代价不对称：
+                  勾了但不支持 → 整个请求被拒，学生一脸茫然；
+                  不勾但支持 → 只是用不上图片，别的功能都在。
+                  所以默认关闭，由人确认一次。
+                */}
+                <div className="field">
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={draft.ai.supportsVision}
+                      onChange={(e) => patchAi({ supportsVision: e.target.checked })}
+                    />
+                    <span>这个模型支持图片输入（多模态）</span>
+                  </label>
+                  <div className="hint">
+                    勾上之后输入框可以粘贴截图（Ctrl+V）或点工具条的「图片」选图。
+                    不确定就先别勾 —— 勾错了会让每次带图的消息都发送失败。
+                    图片在发送前会压到长边 1568px 的 JPEG，一张截图通常 100~200 KB。
+                  </div>
+                </div>
+
                 <div className="card-foot">
                   <button className="ghost" disabled={busy} onClick={() => void testConnection()}>
                     测试连接

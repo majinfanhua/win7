@@ -20,6 +20,7 @@
 
 import type { AppApi } from '@shared/api'
 import { languageFromPath } from '@shared/language'
+import { textOf } from '@shared/types'
 import {
   DEFAULT_CONFIG,
   RECENT_SESSIONS_MAX,
@@ -249,7 +250,8 @@ function buildStubUsage(messages: ChatMessage[], reply: string): AiUsage {
 
 function streamReply(requestId: string, messages: ChatMessage[]): Promise<void> {
   const lastUser = [...messages].reverse().find((m) => m.role === 'user')
-  const reply = fakeReply(lastUser?.content ?? '')
+  // 桩里只认文本部分：图片 base64 对假回答没有意义
+  const reply = fakeReply(lastUser?.content ? textOf(lastUser.content) : '')
   const chunks = `${reply}\n`.match(/[\s\S]{1,4}/g) ?? []
   const promptText = flatten(messages)
   const timers: number[] = []

@@ -1,5 +1,6 @@
 import { forwardRef, memo, useEffect, useImperativeHandle, useRef, useState } from 'react'
-import type { AiUsage, ChatMessage } from '@shared/types'
+import type { AiUsage, ChatContentBlock, ChatMessage } from '@shared/types'
+import { compressImage, humanBytes, withImages } from '../image-input'
 import { useAppStore } from '../store/useAppStore'
 import {
   AtIcon,
@@ -167,6 +168,16 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
   const [busy, setBusy] = useState(false)
   /** 待插入输入框的引用文件（来自文件树右键「插入引用」） */
   const [refs, setRefs] = useState<string[]>([])
+  /**
+   * 待发送的图片（已压缩）。
+   *
+   * 只存压缩后的 dataUrl，不存原始 File —— 原图可能几 MB，
+   * 留在内存里既没必要（发出去的是压缩版）也容易 OOM。
+   */
+  const [images, setImages] = useState<Array<{ dataUrl: string; bytes: number; name: string }>>([])
+  /** 压缩中：压缩是异步的，期间要禁用发送，否则会发出一条没有图的空消息 */
+  const [imageBusy, setImageBusy] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
   const requestRef = useRef('')
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
@@ -422,10 +433,73 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
     useAppStore.getState().setSessionMessages(payload)
   }
 
+  /** 当前模型是否支持图片。不支持时图片入口整体置灰 */
+  const visionOn = Boolean(config?.ai.supportsVision)
+
+  /**
+   * 把一批图片文件压缩后挂进待发队列。
+   *
+   * 逐张 try/catch：某一张损坏（或格式不支持）不该让整批都失败 ——
+   * 学生一次选了三张，一张坏了另外两张仍然应该能发出去。
+   */
+  const attachImages = async (files: File[]): Promise<void> => {
+    const picked = files.filter((file) => file.type.startsWith('image/'))
+    if (picked.length === 0) return
+    if (!visionOn) {
+      window.alert('当前模型没有开启图片支持。\n\n如果这个模型确实能看图，请到「设置 → AI 模型」里勾选「支持图片输入」。')
+      return
+    }
+    setImageBusy(true)
+    const added: Array<{ dataUrl: string; bytes: number; name: string }> = []
+    const failed: string[] = []
+    for (const file of picked) {
+      try {
+        const out = await compressImage(file)
+        added.push({
+          dataUrl: out.dataUrl,
+          bytes: out.bytes,
+          name: file.name || `粘贴的图片（${out.width}×${out.height}）`
+        })
+      } catch (err) {
+        failed.push(`${file.name || '图片'}：${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+    if (added.length) setImages((prev) => [...prev, ...added])
+    if (failed.length) {
+      useAppStore.getState().pushLog({
+        time: '',
+        level: 'warn',
+        scope: 'ai',
+        text: `有 ${failed.length} 张图片没能加入：${failed.join('；')}`
+      })
+    }
+    setImageBusy(false)
+  }
+
+  /**
+   * 粘贴图片。
+   *
+   * 这是图片输入的主路径：学生用 Win+Shift+S / QQ / 微信截完图，
+   * 直接 Ctrl+V 贴进来 —— 他们本来就这么发消息，不用学新操作。
+   * 不做内置截屏正是因为这个习惯已经覆盖了绝大多数场景。
+   *
+   * 只在剪贴板里真的有图片时才拦截：粘贴普通文本必须放过去，
+   * 否则「复制一段代码贴进输入框」这个高频操作就坏了。
+   */
+  const onPaste = (e: React.ClipboardEvent): void => {
+    const files = Array.from(e.clipboardData?.files || []).filter((f) =>
+      f.type.startsWith('image/')
+    )
+    if (files.length === 0) return
+    e.preventDefault()
+    void attachImages(files)
+  }
+
   const send = async (raw?: string): Promise<void> => {
     const typed = (raw ?? input).trim()
-    // 只挂了引用文件、一句话没写，也应该能发 —— 学生的意图是「就看看这个文件」
-    if ((!typed && refs.length === 0) || busy) return
+    // 只挂了引用文件 / 只贴了图、一句话没写，也应该能发 ——
+    // 学生的意图就是「看看这个文件」或「看看这张图」
+    if ((!typed && refs.length === 0 && images.length === 0) || busy || imageBusy) return
     // 正在读历史会话时就别发了：读回来的结果会把刚发出去的这条冲掉
     if (sessionLoading) return
 
@@ -439,13 +513,21 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
     const text = (typed || '请看这几个文件')
     const fullText = attached ? `${text}\n\n${attached}` : text
 
-    const userItem: ChatItem = { id: `u-${Date.now()}`, role: 'user', text: fullText }
+    // 图片随这一轮发出去。文本里加一行占位说明，
+    // 否则回看历史时只有「请看这张图」而看不到图，会以为消息发丢了
+    const sentImages = images
+    const withImageNote = sentImages.length
+      ? `${fullText}\n\n（附 ${sentImages.length} 张图片）`
+      : fullText
+
+    const userItem: ChatItem = { id: `u-${Date.now()}`, role: 'user', text: withImageNote }
     const aiItem: ChatItem = { id: requestId, role: 'assistant', text: '' }
 
     const history = [...items, userItem].filter((it) => it.role === 'user' || it.role === 'assistant')
     setItems((prev) => [...prev, userItem, aiItem])
     setInput('')
     setRefs([])
+    setImages([])
     setBusy(true)
 
     // 记一条会话索引。放在发送时而不是流结束时：
@@ -461,9 +543,27 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
       }))
     )
 
+    /*
+     * 历史上的消息只发文本，**只有最后这一轮带图**。
+     *
+     * 图片的 base64 有几 MB，每轮都重发的话：token 消耗爆炸（同一张图
+     * 被计费十几次），而且实测部分中转站会因为请求体过大直接 413。
+     * 需要模型回看之前的图时，让学生重新贴一次 —— 这比每轮烧几 MB 划算。
+     */
+    const historyMessages: ChatMessage[] = history.map((it) => ({
+      role: it.role as 'user' | 'assistant',
+      content: it.text
+    }))
+    if (sentImages.length > 0 && historyMessages.length > 0) {
+      // 最后一条就是刚加进去的 userItem，把它换成多模态内容块
+      historyMessages[historyMessages.length - 1] = {
+        role: 'user',
+        content: withImages(withImageNote, sentImages) as ChatContentBlock[]
+      }
+    }
     const messages: ChatMessage[] = [
       { role: 'system', content: config?.ai.systemPrompt || '' },
-      ...history.map((it) => ({ role: it.role as 'user' | 'assistant', content: it.text }))
+      ...historyMessages
     ]
 
     await window.api.aiChat(requestId, messages)
@@ -579,12 +679,39 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
       </div>
 
       <div className="composer glass">
+        {images.length > 0 && (
+          <div className="ref-row img-row">
+            {images.map((img, index) => (
+              <span key={index} className="img-chip" title={`${img.name}（${humanBytes(img.bytes)}）`}>
+                <img src={img.dataUrl} alt={img.name} />
+                <button
+                  className="ref-chip-x"
+                  aria-label={`移除图片 ${img.name}`}
+                  onClick={() => setImages((prev) => prev.filter((_, i) => i !== index))}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+            <span className="img-note muted">
+              共 {humanBytes(images.reduce((sum, img) => sum + img.bytes, 0))}
+            </span>
+            <button className="ref-clear" onClick={() => setImages([])}>
+              清空图片
+            </button>
+          </div>
+        )}
         <RefRow refs={refs} onOpen={(file) => void openFile(file)} onRemove={removeRef} onClear={clearRefs} />
         <textarea
           ref={inputRef}
           rows={1}
-          placeholder="输入消息，@ 引用文件，/ 引用 Skills，提示词可队列发送…"
+          placeholder={
+            visionOn
+              ? '输入消息，可直接粘贴截图（Ctrl+V）…'
+              : '输入消息，@ 引用文件，/ 引用 Skills，提示词可队列发送…'
+          }
           value={input}
+          onPaste={onPaste}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
@@ -600,6 +727,25 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
           但当前版本只有「引用文件」是真的通的，其余置灰并给出说明 ——
           点了没反应比明确告诉学生「还没做」更让人困惑。
         */}
+        {/*
+          隐藏的文件选择器。用 input[type=file] 而不是 Electron 的
+          系统对话框：前者在渲染层直接拿到 File 对象（能立刻 canvas 压缩），
+          后者要经主进程传路径再读回来，多一次 IPC 与一次全量读盘。
+        */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            const files = Array.from(e.target.files || [])
+            // 清空 value：不清的话连续选同一张图不会再触发 change
+            e.target.value = ''
+            void attachImages(files)
+          }}
+        />
+
         <div className="composer-bar">
           <ComposerTool
             label="引用文件"
@@ -608,7 +754,15 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
           >
             <PaperclipIcon />
           </ComposerTool>
-          <ComposerTool label="附件" hint="暂未支持，敬请期待">
+          <ComposerTool
+            label="图片"
+            hint={
+              visionOn
+                ? '选一张图片，或直接在输入框里 Ctrl+V 粘贴截图'
+                : '当前模型未开启图片支持（设置 → AI 模型里可打开）'
+            }
+            onClick={visionOn ? () => fileInputRef.current?.click() : undefined}
+          >
             <AtIcon />
           </ComposerTool>
           <ComposerTool label="截图" hint="暂未支持，敬请期待">
@@ -623,6 +777,8 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
 
           <span className="spacer" />
 
+          {imageBusy && <span className="muted img-note">正在压缩图片…</span>}
+
           {busy && (
             <button className="ghost btn-sm" onClick={() => void stop()}>
               停止
@@ -633,7 +789,12 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
             className="send-btn"
             aria-label="发送"
             title="发送（Ctrl + Enter）"
-            disabled={!configured || busy || (!input.trim() && refs.length === 0)}
+            disabled={
+              !configured ||
+              busy ||
+              imageBusy ||
+              (!input.trim() && refs.length === 0 && images.length === 0)
+            }
             onClick={() => void send()}
           >
             <SendIcon />

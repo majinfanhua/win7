@@ -448,3 +448,62 @@
 .ref-clear:hover {
   color: var(--text);
 }
+
+/* ==========================================================================
+ * 图片附件胶囊
+ *
+ * 与 .ref-chip（文件引用）并列在输入框上方，视觉上刻意区分：
+ * 引用是文字胶囊，图片是缩略图方块 —— 一眼能看出「这条消息带了图」。
+ * ========================================================================== */
+
+.img-row {
+  /* 图片比文字胶囊高，基线对齐会让文字跳起来 */
+  align-items: center;
+}
+
+.img-chip {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  width: 56px;
+  height: 56px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--surface-solid);
+}
+
+.img-chip img {
+  width: 100%;
+  height: 100%;
+  /* cover 而不是 contain：缩略图要的是「认得出是哪张」，
+     留白会让 56px 里能看清的内容更少 */
+  object-fit: cover;
+  display: block;
+}
+
+/* 移除按钮压在右上角。平时半透明，悬停才实心 ——
+   五个缩略图各挂一个实心 × 会很吵 */
+.img-chip .ref-chip-x {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 16px;
+  height: 16px;
+  line-height: 1;
+  font-size: 12px;
+  border-radius: 0 0 0 6px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.img-chip:hover .ref-chip-x {
+  opacity: 1;
+}
+
+.img-note {
+  font-size: 11px;
+  flex: none;
+}

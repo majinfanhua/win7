@@ -1,9 +1,11 @@
 import { ipcMain, net } from 'electron'
 import {
   IPC,
+  textOf,
   type AiStreamChunk,
   type AiTestResult,
   type AiUsage,
+  type ChatContent,
   type ChatMessage,
   type ModelListResult
 } from '../../shared/types'
@@ -95,11 +97,18 @@ let lastPromptText = ''
  */
 interface PromptLike {
   role: string
-  content: string | null
+  content: ChatContent | null
 }
 
 function flattenPrompt(messages: PromptLike[]): string {
-  return messages.map((m) => `${m.role}\u0000${m.content}`).join('\u0001')
+  /*
+   * 只拍文本部分，图片的 base64 不参与。
+   *
+   * 两个理由：base64 每张都不同，放进去会让「与上一次请求的公共前缀」
+   * 永远算成 0（缓存命中率永远是 0%，而实际上前缀是命中的）；
+   * 而且那串东西几 MB，每次请求都拼一遍纯属浪费 CPU。
+   */
+  return messages.map((m) => `${m.role}\u0000${m.content ? textOf(m.content) : ''}`).join('\u0001')
 }
 
 function commonPrefixLength(a: string, b: string): number {
@@ -195,7 +204,7 @@ interface WireToolCall {
  */
 interface WireMessage {
   role: 'system' | 'user' | 'assistant' | 'tool'
-  content: string | null
+  content: ChatContent | null
   tool_calls?: WireToolCall[]
   tool_call_id?: string
 }
