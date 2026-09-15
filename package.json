@@ -1,6 +1,6 @@
 {
   "name": "win7-ai-editor",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "productName": "AIEditor",
   "description": "面向教学的 AI 代码编辑器（Windows 7 / 10 免安装版）",
   "main": "out/main/index.js",

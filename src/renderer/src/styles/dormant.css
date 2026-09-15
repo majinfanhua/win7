@@ -1,0 +1,169 @@
+/*
+ * 暂时不渲染的界面：输出 / 体检那一类的样式。
+ * 组件源码还在 components/ 里，恢复时这些类可以直接用，不要因为「看着没人用」就删。
+ *
+ * 注意：这一段是从 global.css 原样搬过来的，成分是混的 —— 编辑器、标签栏、
+ * 状态栏的类其实在用（.editor-host 还会被 editor.css 再改一次），
+ * 日志 / 输出 / 体检那几组才是真的没上。待重新审一遍，见 ./claude/todo.md。
+ */
+
+/* ==========================================================================
+ * 以下为暂时不渲染的界面（文件树 / 编辑器 / 输出 / 体检）的样式，
+ * 组件源码还在 components/ 里，恢复时这些类可以直接用。
+ * ========================================================================== */
+
+.body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+/* 三栏骨架：左导航固定宽，中间自适应，右文件树固定宽 */
+.shell {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.statusbar {
+  flex: none;
+  display: flex;
+  gap: 14px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--text-2);
+  background: var(--surface-solid);
+  border-top: 1px solid var(--border);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.tabs {
+  display: flex;
+  flex: none;
+  background: var(--surface-solid);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-right: 1px solid var(--border);
+  cursor: pointer;
+  white-space: nowrap;
+  color: var(--text-2);
+}
+
+.tab.active {
+  color: var(--text);
+  background: var(--bg);
+}
+
+.tab .close {
+  padding: 0 2px;
+  color: var(--text-3);
+  border: none;
+  background: none;
+}
+
+.tab .dirty {
+  color: var(--warn);
+}
+
+.editor-host {
+  flex: 1;
+  min-height: 0;
+}
+
+.empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  color: var(--text-3);
+  text-align: center;
+}
+
+.logs {
+  padding: 4px 8px;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+}
+
+.logs div {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.logs .warn {
+  color: var(--warn);
+}
+
+.logs .error {
+  color: var(--danger);
+}
+
+.logs .debug {
+  color: var(--text-3);
+}
+
+.output {
+  flex: none;
+  height: 150px;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-solid);
+  border-top: 1px solid var(--border);
+}
+
+.report {
+  font-size: 12px;
+}
+
+.report .row {
+  display: flex;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.report .tag {
+  flex: none;
+  width: 40px;
+  height: 18px;
+  line-height: 18px;
+  text-align: center;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.report .pass {
+  color: var(--ok);
+  background: rgba(78, 203, 122, 0.16);
+}
+
+.report .warn {
+  color: var(--warn);
+  background: rgba(224, 176, 85, 0.16);
+}
+
+.report .fail {
+  color: var(--danger);
+  background: rgba(240, 119, 110, 0.16);
+}
+
+.report .detail {
+  color: var(--text-2);
+  word-break: break-all;
+}

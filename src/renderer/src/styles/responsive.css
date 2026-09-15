@@ -1,0 +1,44 @@
+/*
+ * 窄屏适配。所有 @media 集中在这一份里，好处是「窄屏下变了什么」一眼看完。
+ *
+ * **必须最后加载**：这些规则要覆盖前面按组件写死的宽度
+ * （.filetree / .sidenav / .crumb 在 sidebar.css、topbar.css 里定过，
+ * .stage 在 base.css、.msg-col 在 chat.css 里定过）。
+ * 把它提到前面会静默地让窄屏适配失效 —— 不报错，只是窄屏下不变形。
+ */
+
+@media (max-width: 640px) {
+  .stage {
+    padding: 0 10px 10px;
+  }
+
+  .msg-col {
+    max-width: 92%;
+  }
+}
+
+/* ==========================================================================
+ * 窄屏
+ * ========================================================================== */
+
+@media (max-width: 1080px) {
+  .filetree {
+    width: 216px;
+  }
+}
+
+@media (max-width: 900px) {
+  .filetree {
+    display: none;
+  }
+}
+
+@media (max-width: 820px) {
+  .sidenav {
+    width: 52px;
+  }
+
+  .crumb {
+    max-width: 180px;
+  }
+}

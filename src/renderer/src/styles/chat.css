@@ -1,0 +1,450 @@
+/*
+ * 对话面板：消息气泡、空态 / 欢迎、输入区、引用胶囊。
+ *
+ * 内容区右侧那一栏的全部样式。空态与输入区都属于这一栏，
+ * 所以一起放这里，而不是按「有没有消息」拆开 —— 它们是同一块界面的两个状态。
+ */
+
+/* ==========================================================================
+ * 消息气泡
+ * ========================================================================== */
+
+.msg-row {
+  display: flex;
+}
+
+.msg-row.user {
+  justify-content: flex-end;
+}
+
+/* 气泡和它下面的用量行都放在这一层，宽度限制提到这里，两行才会对齐 */
+.msg-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  max-width: 82%;
+}
+
+.msg-row.user .msg-col {
+  align-items: flex-end;
+}
+
+.bubble {
+  max-width: 100%;
+  padding: 11px 15px;
+  border-radius: 16px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--bubble-ai);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+}
+
+.msg-row.user .bubble {
+  color: #fff;
+  background: var(--bubble-user);
+  border-color: transparent;
+  border-bottom-right-radius: 6px;
+}
+
+.msg-row.assistant .bubble {
+  border-bottom-left-radius: 6px;
+}
+
+.msg-row.system .bubble {
+  font-size: 12.5px;
+  color: var(--text-2);
+  background: var(--accent-soft);
+  border-color: transparent;
+}
+
+.msg-row.error .bubble {
+  color: var(--danger);
+  background: rgba(240, 119, 110, 0.14);
+  border-color: rgba(240, 119, 110, 0.35);
+}
+
+/* AI 对文件做过什么，排在气泡上方 */
+.tool-trace {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0 2px 6px;
+  padding-left: 2px;
+  border-left: 2px solid var(--border-strong);
+}
+
+.tool-step {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding-left: 8px;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.tool-mark {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+
+.tool-step.ok .tool-mark {
+  background: var(--ok);
+}
+
+.tool-step.failed .tool-mark {
+  background: var(--danger);
+}
+
+.tool-step.failed .tool-text {
+  color: var(--danger);
+}
+
+/* 正在跑的那一步呼吸一下，让“它还在动”看得见 */
+.tool-step.running .tool-mark {
+  background: var(--accent);
+  animation: tool-pulse 1s infinite ease-in-out;
+}
+
+@keyframes tool-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.3;
+  }
+}
+
+/* 气泡下方的用量小字：输入 / 输出 token + 缓存命中率 */
+.usage {
+  margin: 5px 2px 0;
+  font-size: 12px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 生成中的三个点 */
+.dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+}
+
+.dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-3);
+  animation: dot-bounce 1.1s infinite ease-in-out;
+}
+
+.dots i:nth-child(2) {
+  animation-delay: 0.16s;
+}
+
+.dots i:nth-child(3) {
+  animation-delay: 0.32s;
+}
+
+@keyframes dot-bounce {
+  0%,
+  80%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+/* ==========================================================================
+ * 空态 / 欢迎
+ * ========================================================================== */
+
+.welcome {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  max-width: 560px;
+  /* 空态整体略偏上。居中会让它显得浮在中间很空，
+     留一点上部空白更接近截图的观感 */
+  margin: 12vh auto 0;
+  text-align: center;
+}
+
+/* 方形深底的火箭图标，对应截图里那个 app icon */
+.welcome-badge {
+  width: 58px;
+  height: 58px;
+  border-radius: 13px;
+  display: grid;
+  place-items: center;
+  color: #e8eef7;
+  background: #161b26;
+  box-shadow: 0 10px 26px rgba(10, 14, 22, 0.28);
+}
+
+/* 深色主题下这个深底会和背景糊在一起，翻成浅底深图标 */
+:root[data-theme='dark'] .welcome-badge {
+  color: #161b26;
+  background: #e8eef7;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.45);
+}
+
+.welcome h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  line-height: 1.5;
+}
+
+.welcome-lead {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 13.5px;
+  line-height: 1.75;
+  max-width: 420px;
+}
+
+/* 三个入口横排，居中。窄屏自动换行 */
+.quick-starts {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.quick-start {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 13px 22px;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--bubble-ai);
+  border-color: transparent;
+  border-radius: 13px;
+  white-space: nowrap;
+}
+
+.quick-start:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+
+/* 图标底色：三个入口用三种色调区分，扫一眼就能分辨 */
+.quick-icon {
+  display: grid;
+  place-items: center;
+  color: var(--text-2);
+}
+
+.quick-icon.tone-blue {
+  color: #4a8fd4;
+}
+
+.quick-icon.tone-amber {
+  color: #d99b3a;
+}
+
+.quick-icon.tone-green {
+  color: #4bab72;
+}
+
+.quick-label {
+  font-weight: 500;
+}
+
+.samples {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  margin-top: 4px;
+}
+
+.sample {
+  text-align: left;
+  padding: 11px 14px;
+  color: var(--text-2);
+  background: var(--bubble-ai);
+  border-color: var(--border);
+  border-radius: 12px;
+}
+
+.sample:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+
+.welcome-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+/* ==========================================================================
+ * 输入区
+ * ========================================================================== */
+
+.composer {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 14px 16px 10px;
+  border-radius: 16px;
+  box-shadow: var(--shadow-lg);
+}
+
+.composer textarea {
+  min-height: 30px;
+  max-height: 160px;
+  padding: 2px 0;
+  overflow-y: auto;
+  font-size: 14.5px;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  resize: none;
+}
+
+.composer textarea::placeholder {
+  color: var(--text-3);
+}
+
+.composer textarea:focus {
+  border: none;
+  box-shadow: none;
+}
+
+.composer-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 输入框下方那排工具按钮 */
+.composer-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: 2px;
+}
+
+.composer-tool {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  color: var(--text-3);
+  border-radius: 9px;
+}
+
+.composer-tool:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--bubble-ai);
+  border-color: transparent;
+}
+
+/* 未实现的入口置灰。保留占位是为了让工具栏宽度稳定，
+   以后接上功能时不会因为多个按钮而把右侧的发送键挤走 */
+.composer-tool:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* 发送键：圆形强调色，比一个文字的「发送」更省地方 */
+.send-btn {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  color: var(--accent-fg);
+  background: var(--accent);
+  border-color: transparent;
+  border-radius: 10px;
+}
+
+.send-btn:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.send-btn:disabled {
+  color: var(--text-3);
+  background: var(--bubble-ai);
+}
+
+/* ==========================================================================
+ * 引用胶囊
+ * ========================================================================== */
+
+.ref-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.ref-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px 2px 8px;
+  border-radius: 8px;
+  font-size: 11.5px;
+  background: var(--accent-soft);
+  border: 1px solid var(--border);
+}
+
+.ref-chip-name {
+  padding: 0;
+  font-size: 11.5px;
+  color: var(--accent);
+  border: none;
+}
+
+.ref-chip-x {
+  padding: 0;
+  width: 16px;
+  height: 16px;
+  line-height: 1;
+  font-size: 13px;
+  color: var(--text-3);
+  border: none;
+}
+
+.ref-chip-x:hover {
+  color: var(--danger);
+}
+
+.ref-clear {
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.ref-clear:hover {
+  color: var(--text);
+}

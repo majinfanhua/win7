@@ -1,0 +1,397 @@
+/*
+ * 设置页：分栏、页头、导航、工具能力区块，以及后加的「修改历史 / 关于」两栏。
+ *
+ * 原 settings-extra.css 已并进来 —— 它当初的命名就是因为「不想继续往 global.css 里堆」，
+ * 现在设置的东西全在这一份里，别再另开文件。
+ */
+
+/* ==========================================================================
+ * 设置页
+ * ========================================================================== */
+
+/*
+ * 对话栏（内容区右侧）。
+ *
+ * 切到设置页时只是 display:none，组件不卸载，否则聊天记录会跟着一起没。
+ *
+ * 宽度 = 内容区宽度 ×(1 − --split)。用 calc 而不是 flex 比例：
+ * 拖动时 useSplitter 直接改 --split，这里立刻跟着变，React 不参与。
+ */
+.view {
+  display: none;
+  min-height: 0;
+  min-width: 0;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: var(--surface-solid);
+}
+
+.view.is-active {
+  display: flex;
+  flex: none;
+  width: calc((1 - var(--split, 0.62)) * 100%);
+  /* 对话栏本身有 padding，宽度算准了才不会因为边框多出 1px 而横向滚动 */
+  box-sizing: border-box;
+}
+
+/*
+ * 对话栏收起时，编辑器要撑满。
+ * 不用条件渲染，所以用属性标记 + display:none —— 
+ * 保留 DOM 才能留住输入草稿与滚动位置。
+ */
+.view[data-chat-closed='1'] {
+  display: none;
+}
+
+/* 对话栏收起后编辑器接管剩余全部宽度 */
+.stage:has(.view[data-chat-closed='1']) .editor-dock {
+  width: 100%;
+}
+
+/* 设置页要撑满整宽 */
+.stage-page {
+  padding: 0;
+}
+
+.settings-page {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* 分栏：左选组，右只看当前这组 */
+.settings-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.settings-nav {
+  flex: none;
+  width: 208px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 16px 10px;
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+}
+
+.nav-item {
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  text-align: left;
+  color: var(--text-2);
+  background: transparent;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.nav-item:hover {
+  color: var(--text);
+  background: var(--bubble-ai);
+}
+
+.nav-item.active {
+  color: var(--text);
+  background: var(--accent-soft);
+  border-color: var(--border-strong);
+}
+
+.nav-label {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 500;
+}
+
+.nav-hint {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-3);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+/* 页头常驻（不在滚动容器里），保存按钮随时可点 */
+.page-head {
+  flex: none;
+  padding: 11px 18px;
+  border-width: 0 0 1px;
+  border-style: solid;
+  border-color: var(--border);
+  position: relative;
+  z-index: 2;
+}
+
+.page-head-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.page-title h1 {
+  margin: 0 0 1px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.page-status {
+  margin-top: 9px;
+  padding: 7px 11px;
+  border-radius: 9px;
+  background: var(--accent-soft);
+  color: var(--text-2);
+  font-size: 12.5px;
+  word-break: break-word;
+}
+
+/* 「未保存」标记。用描边而不是实色，深浅主题都清楚 */
+.chip {
+  flex: none;
+  padding: 2px 9px;
+  border: 1px solid var(--warn);
+  border-radius: 999px;
+  color: var(--warn);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+/* 未保存就点返回时弹出来，不静默丢改动 */
+.leave-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--accent-soft);
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+.page-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.page-body {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 20px 18px 48px;
+}
+
+.card {
+  margin-bottom: 16px;
+  padding: 18px 20px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.card-title {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.card-hint {
+  margin-top: 3px;
+  margin-bottom: 16px;
+}
+
+.card-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+/* 当前所在页面的导航项 */
+.icon-btn.active {
+  color: var(--text);
+  background: var(--accent-soft);
+  border-color: var(--border-strong);
+}
+
+button.danger {
+  color: var(--danger);
+}
+
+button.danger:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+/* ==========================================================================
+ * 设置：工具能力区块
+ * ========================================================================== */
+
+/* 只读状态面板：告诉用户「这台机器 + 当前设置」最后算出来是什么 */
+.cap-status {
+  margin-bottom: 14px;
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.cap-line {
+  word-break: break-word;
+}
+
+.cap-line + .cap-line {
+  margin-top: 2px;
+}
+
+.cap-line.muted {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.cap-line .muted {
+  margin-right: 4px;
+}
+
+.advanced {
+  margin-bottom: 14px;
+  padding: 10px 13px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.advanced summary {
+  cursor: pointer;
+  color: var(--text-2);
+  font-size: 12.5px;
+  user-select: none;
+}
+
+.advanced summary:hover {
+  color: var(--text);
+}
+
+.toggles {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 10px;
+  margin: 11px 0 8px;
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: var(--text-2);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.toggle input {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.toggle span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- 以下原为 settings-extra.css：修改历史 与 关于 两栏 ---- */
+
+/* 修改历史 */
+.snap-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 10px 0;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.snap-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 9px;
+  border-radius: 8px;
+}
+
+.snap-row:hover {
+  background: var(--bubble-ai);
+}
+
+.snap-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.snap-path {
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.snap-meta {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.empty-line {
+  padding: 18px 0;
+  font-size: 12.5px;
+  color: var(--text-3);
+  text-align: center;
+}
+
+/* 关于 */
+.about-block {
+  margin-top: 16px;
+}
+
+.about-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.about-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  line-height: 1.9;
+  color: var(--text-2);
+}
+
+.about-list li {
+  margin-bottom: 2px;
+}
+
+/* 快捷键的键帽外观 */
+kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  font-family: inherit;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text);
+  background: var(--bubble-ai);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+}

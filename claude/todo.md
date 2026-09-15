@@ -20,10 +20,16 @@ updated: 2026-09-15
 开发机是 Linux，`powershellPath()` 返回 null，**PowerShell 那条真实执行路径一行都没跑过**。
 首次上 Windows 时重点看：`node -v` 能不能返回、`echo 你好` 会不会乱码、超时是不是真的杀掉了子进程。
 
-### 3. `global.css` 拆分
+### 3. ~~`global.css` 拆分~~（已完成 2026-09-15）
 
-2128 行，早就超了 800 行上限。当初只拆出 `editor.css` / `settings-extra.css`，主文件没继续拆。
-拆的时候按「侧栏 / 编辑器 / 对话面板 / 空态」分，别按“行数均匀”分。
+已拆成 `styles/` 下的十份，入口 `index.css`，最长 599 行。清单与顺序约束见 `claude.md`
+的「样式」一节。拆完用逐选择器的声明序列做过等价比对（295 个规则键全一致），
+自检三档的 `domNodes` 与拆分前一样。
+
+剩下的事：`dormant.css`（原 global.css 里「暂时不渲染的界面」那一段）成分是混的 ——
+编辑器 / 标签栏 / 状态栏的类其实在用（`.editor-host` 还会被 editor.css 再改一次），
+日志 / 输出 / 体检那几组才是真的没上。重新审一遍，把还在用的挪到对应文件，
+剩下的才配叫 dormant。
 
 ### 4. 窄屏布局回归
 
@@ -62,6 +68,10 @@ updated: 2026-09-15
 - **工具写入要标记来源**（`markToolWrite`），否则编辑器分不清「AI 改的」与「别人改的」，只能一律弹提示。
 - **文件监视不引 chokidar**。它在 Win7 上会退回轮询模式，50ms 一轮 stat 整棵树，
   机械盘上直接 100% 占用。用原生 `fs.watch`（Windows 上底层是 `ReadDirectoryChangesW`）。
+- **样式文件的层叠顺序是契约**，写在 `styles/index.css`。`responsive.css` 必须最后
+  （窄屏要覆盖各组件写死的宽度），`editor.css` 必须在所有拆分文件之后
+  （`.editor-host` / `.crumb-model` 在前面有基础定义）。`base.css` 最前。
+  调顺序不会报错，只会静默地让覆盖失效 —— 而且只在窄屏 / 空态这种边角下看得出来。
 
 ---
 
@@ -73,6 +83,8 @@ updated: 2026-09-15
 - ✅ 自检跑了三档：默认 / `--capability-profile=win7` / `--capability-profile=win10`，
   能力集与预期一致（本机无 PowerShell，三档都是 6 个，命令类 4 个报「本机不支持」）
 - ✅ 新增两条自检断言：不再有「尚未实现」的工具；命令类工具必须跟着探测结果走
+- ✅ 样式拆分（global.css 2128 行 → styles/ 十份，最长 599 行）：
+  逐选择器的声明序列等价比对 295/295 一致；三档自检 `domNodes` 与拆分前同为 228
 
 已验证（2026-09-15，Windows Server 2022，CI 的注解）：
 

@@ -7,9 +7,9 @@ import { applyTheme, readTheme } from './theme'
 // 必须在 App 渲染前执行 —— EditorPane 一挂载就会调 monaco.editor.create，
 // 那时语言与 worker 都得已经就位。
 import './monaco-setup'
-import './styles/global.css'
-import './styles/editor.css'
-import './styles/settings-extra.css'
+// 样式入口。层叠顺序写在 styles/index.css 里，别在这里逐个 import ——
+// 顺序是契约，集中在一处才看得见。
+import './styles/index.css'
 
 /**
  * 必须放在 render 之前：App 的 useEffect 一跑就会调 window.api。

@@ -1,0 +1,35 @@
+/*
+ * 样式入口。
+ *
+ * **这一份里的顺序就是层叠顺序，不要随手调整。**
+ *
+ * 拆分自原来的 global.css（2128 行）。拆的理由只有一个：两千行的文件里找
+ * 「AI 横幅长什么样」要翻很久，而样式本身没有任何复杂度。
+ *
+ * 顺序上有三处是有意为之，动之前先读一遍：
+ *
+ *   1. base 最前。
+ *      其它文件都用它定义的 CSS 变量与 .btn / input 这类原语。
+ *
+ *   2. responsive 在拆分文件里最后。
+ *      窄屏规则要覆盖各组件写死的宽度（.filetree / .sidenav / .crumb /
+ *      .stage / .msg-col）。提到前面会静默地让窄屏适配失效 ——
+ *      不报错，只是窄屏下不变形。
+ *
+ *   3. editor.css 在所有拆分文件之后。
+ *      .editor-host 与 .crumb-model 在 dormant.css / topbar.css 里各有一份
+ *      基础定义，editor.css 是覆盖的那一份，必须在后。
+ *
+ * 另外 .nav-item 在 settings.css 与 sidebar.css 里各有一份，靠顺序共存。
+ * 往中间插新文件时，确认上面这几条没被破坏。
+ */
+
+@import './base.css';
+@import './chat.css';
+@import './dialog.css';
+@import './settings.css';
+@import './dormant.css';
+@import './sidebar.css';
+@import './topbar.css';
+@import './responsive.css';
+@import './editor.css';

@@ -12,7 +12,8 @@ AI 不只是聊天：它能读写工作区里的文件，在 Win10/11 上还能�
 1. **Win7 是硬目标**：Chromium 锁 108、Node 锁 16。`npm run check:node16` 会扫源码里用到的 Node API 是否都支持。
 2. **不能上 Electron 23+**：那版起 Chromium 110，Win7 跑不起来。
 3. **单文件不超 800 行**。当前最长的 TS/TSX 是 `src/renderer/src/dev-api-stub.ts`（757 行），
-   再加东西就该拆；CSS 那边 `global.css` 已 2100+ 行，是笔待还的债，见 ./claude/todo.md。
+   再加东西就该拆。样式已按界面区块拆成 `styles/` 下的十份，最长的是 `sidebar.css`（599 行）——
+   **层叠顺序写在 `styles/index.css`，动样式前先看那份注释。**
 
 ## 常用命令
 
@@ -82,6 +83,28 @@ config.capability（人愿意放开到哪）
 
 新增一个工具要同步改五处（主进程实作 / `IMPLEMENTED_TOOLS` / `TOOL_SCHEMAS` / 实作表 / 自检），
 漏一处就静默失败。
+
+### 样式（`src/renderer/src/styles/`）
+
+按界面区块分文件，入口是 `index.css`。**只在 main.tsx 里 import 这一个入口** ——
+层叠顺序是契约，散在组件里就看不见了。
+
+| 文件 | 行数 | 管什么 |
+|---|---|---|
+| `index.css` | 35 | 入口。只放 @import 与顺序说明 |
+| `base.css` | 347 | 主题变量、基础元素、控件、布局骨架 |
+| `chat.css` | 450 | 对话面板：消息气泡、空态/欢迎、输入区、引用胶囊 |
+| `dialog.css` | 106 | 弹窗与表单原语 |
+| `settings.css` | 397 | 设置页（已并入原 settings-extra.css）|
+| `dormant.css` | 169 | 暂未渲染的界面（输出/体检）。**看着没人用也不要删** |
+| `sidebar.css` | 599 | 左侧栏：导航、文件树、右键菜单 |
+| `topbar.css` | 156 | 顶栏 |
+| `responsive.css` | 44 | 所有 `@media`。**必须最后** |
+| `editor.css` | 108 | 编辑器面板。**必须在拆分文件之后** |
+
+改样式前必读的三条顺序约束（也写在 `index.css` 里）：`base` 最前、
+`responsive` 在拆分文件里最后、`editor.css` 在所有拆分文件之后。
+另外 `.nav-item` 在 `settings.css` 与 `sidebar.css` 里各有一份，靠顺序共存。
 
 ## 详细记录
 
