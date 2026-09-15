@@ -11,9 +11,32 @@ AI 不只是聊天：它能读写工作区里的文件，在 Win10/11 上还能�
 
 1. **Win7 是硬目标**：Chromium 锁 108、Node 锁 16。`npm run check:node16` 会扫源码里用到的 Node API 是否都支持。
 2. **不能上 Electron 23+**：那版起 Chromium 110，Win7 跑不起来。
-3. **单文件不超 800 行**。当前最长的 TS/TSX 是 `src/renderer/src/dev-api-stub.ts`（757 行），
-   再加东西就该拆。样式已按界面区块拆成 `styles/` 下的十份，最长的是 `sidebar.css`（599 行）——
+3. **单文件不超 800 行**。⚠️ **当前已超标，需要拆**：
+   `src/renderer/src/store/useAppStore.ts` 现在是 1100 行（加拖拽移动、dirty 守卫、
+   目录缓存失效这三块时又长了）。它是唯一一个超标文件，**下次动它之前先拆**。
+   建议按「会话 / 文件树 / 编辑器标签」切成三个 slice，因为它们之间几乎不互相调用。
+   已经拆过、**别再合回去**的：
+   - `store/explorer-helpers.ts`：文件树/排序/标签恢复的纯函数
+   - `dev-stub-fs.ts`：浏览器预览的内存文件系统
+   - `components/file-tree/`：文件树的行为（`useFileTreeController`）与外壳分开
+   注意 `parentOf` 已经从 useAppStore 删掉、统一用 `explorer-helpers` 的
+   `parentDirOf`（import 时 as 重命名成 parentOf）—— 曾经两份实现并存过。
+   样式已按界面区块拆成 `styles/` 下的十二份，最长的是 `sidebar.css`（620 行）——
    **层叠顺序写在 `styles/index.css`，动样式前先看那份注释。**
+
+4. **Electron 里 `window.prompt` 不可用**（调用即抛错、不弹框）。
+   任何「让用户输入一个名字」的地方都必须走应用内弹层：
+   `components/InputDialog.tsx`（原语）→ `components/NewEntryDialog.tsx`（新建文件/文件夹）。
+   `alert` / `confirm` 是好的，只有 `prompt` 被移除。**这是「新建文件点了没反应」的根因。**
+
+5. **主进程的「单向推送」必须在渲染层有消费者**。踩过两次，都是同一类错误：
+   - `evtLog`（日志）：主进程 `pushLog` 一路写进 `store.logs`，但渲染层从来
+     没订阅 `onLog`，也没渲染过它 —— 于是 `handleFileChanged` 在
+     「AI 改了文件但编辑器里有未保存改动」时唯一的动作（pushLog 一条 warn）
+     学生**看不到**，界面上什么都不会发生。
+   - 菜单动作：`doctor` / `about` 早就发了，`onMenu` 不处理 = 点了没反应。
+   **新增任何 `evt*` 通道或 `sendMenu` 动作时，顺手确认对面有人接**，
+   否则它就是一个静默失效的功能，而且不会报错。
 
 ## 常用命令
 
@@ -91,20 +114,98 @@ config.capability（人愿意放开到哪）
 
 | 文件 | 行数 | 管什么 |
 |---|---|---|
-| `index.css` | 35 | 入口。只放 @import 与顺序说明 |
+| `index.css` | 46 | 入口。只放 @import 与顺序说明 |
 | `base.css` | 347 | 主题变量、基础元素、控件、布局骨架 |
 | `chat.css` | 450 | 对话面板：消息气泡、空态/欢迎、输入区、引用胶囊 |
 | `dialog.css` | 106 | 弹窗与表单原语 |
 | `settings.css` | 397 | 设置页（已并入原 settings-extra.css）|
-| `dormant.css` | 169 | 暂未渲染的界面（输出/体检）。**看着没人用也不要删** |
-| `sidebar.css` | 599 | 左侧栏：导航、文件树、右键菜单 |
+| `dormant.css` | 169 | 暂未渲染的界面（输出）。**看着没人用也不要删** —— 里面的 `.report` 系列正被 `DoctorDialog` 用着 |
+| `sidebar.css` | 618 | 左侧栏：导航、文件树、右键菜单、拖拽落点 |
+| `explorer.css` | 514 | 文件树工具栏 / 排序 / 面包屑 / 资源管理器整页视图 / 弹层补充（含 `MoveDialog`）。**必须在 sidebar.css 之后、responsive.css 之前** |
+| `logs.css` | 71 | 底部日志抽屉外壳。**必须在 dormant.css 之后**（那里面已有一份 `.logs`）|
 | `topbar.css` | 156 | 顶栏 |
-| `responsive.css` | 44 | 所有 `@media`。**必须最后** |
+| `responsive.css` | 77 | 所有 `@media`。**必须最后** |
 | `editor.css` | 108 | 编辑器面板。**必须在拆分文件之后** |
 
-改样式前必读的三条顺序约束（也写在 `index.css` 里）：`base` 最前、
-`responsive` 在拆分文件里最后、`editor.css` 在所有拆分文件之后。
+改样式前必读的四条顺序约束（也写在 `index.css` 里）：`base` 最前、
+`responsive` 在拆分文件里最后、`editor.css` 在所有拆分文件之后、
+`explorer.css` 在 `sidebar.css` 之后但在 `responsive.css` 之前。
 另外 `.nav-item` 在 `settings.css` 与 `sidebar.css` 里各有一份，靠顺序共存。
+
+### 文件树 / 资源管理器
+
+本轮的入口与落点，改之前先理清这三句话：
+
+- **行为只有一份**：全部交互（右键菜单、新建/重命名弹层、排序、落点计算、面包屑）
+  在 `components/file-tree/useFileTreeController.ts` 里；两个外壳只负责各自的头与工具栏。
+- **两种形态共用同一份状态**：侧栏嵌的那份（`FileTree embedded`，由 `Sidebar.tsx` 渲染）
+  与内容区整页视图（`components/file-tree/ExplorerPanel.tsx`，`App.tsx` 的 `View='explorer'`）
+  读写同一个 zustand store，不存在「两套树逻辑」。
+- **右键菜单的落点语义**（`resolveParentDir`）：右键文件夹 → 进它；右键文件 → 它同级；右键空白 → 项目根。
+  这是「建完文件夹接着在里面建 html」能成立的地方，改动前先看那段注释。
+
+| 文件 | 管什么 |
+|---|---|
+| `components/FileTree.tsx` | 装配容器（嵌入 / 非嵌入两种形态，快捷键只挂在嵌入态）|
+| `components/file-tree/TreeNode.tsx` | 递归节点。**保留 `data-path` / `data-kind` / `.tree-node` / `paddingLeft: 6 + depth*13`**，自检脚本依赖 |
+| `components/file-tree/TreeToolbar.tsx` | 工具栏按钮 + 排序下拉 |
+| `components/file-tree/tree-menu.ts` | 菜单项定义与「失效置灰」规则（纯函数）|
+| `components/file-tree/TreeOverlays.tsx` | 右键菜单浮层 + 新建/重命名/移动弹层 |
+| `components/file-tree/useFileTreeController.ts` | 上面这些的全部行为 |
+| `components/file-tree/MoveDialog.tsx` | 「移动到…」目录选择器（拖拽的等价备选路径）|
+| `components/file-tree/ExplorerPanel.tsx` | 内容区整页视图外壳（面包屑 + 树 + 信息栏）|
+| `components/file-tree/shared.ts` | 扩展名 / 基名 / 图标短标签 / 大小 / `isDescendantOf` |
+| `file-templates.ts` | 新建文件时的初始骨架（HTML / CSS / JS / MD / JSON / TXT）|
+| `store/explorer-helpers.ts` | `sortNodesBy` / `extOf` / `baseName` / `parentDirOf` / `tabsFromSession` 等纯函数 |
+| `dev-stub-fs.ts` | 浏览器预览的内存文件系统（`files` / `dirs` / `readDirSync` / `stubMtime`）|
+| `components/InputDialog.tsx` | 应用内输入弹层原语（**替代 `window.prompt`**）|
+| `components/NewEntryDialog.tsx` | 新建文件/文件夹弹层（类型胶囊 + 落点面包屑 + 重名校验）|
+
+排序偏好落在 `config.explorer.sortBy`（`'name' | 'type' | 'mtime'`），
+**新增枚举值要同步改 `src/main/config.ts` 的 `normalizeExplorer()` 白名单**，
+否则会被静默吞掉。`FileNode.mtime` 由主进程 `wsReadDir` 一次 `statSync` 带上（size 与 mtime 同一次 stat）。
+
+### 拖拽移动（文件树）
+
+**两条等价路径，一份行为**：树上直接拖到目标文件夹上，或右键「移动到…」弹层。
+两者最终都调 `store.moveEntry` → 主进程 `wsMove`，不存在两套移动逻辑。
+
+| 位置 | 干什么 |
+|---|---|
+| `TreeNode.tsx` | 原生 HTML5 DnD（`draggable` + dragstart/dragover/drop）。**dragover 必须 preventDefault**，漏了 drop 根本不派发 |
+| `store.dropOn` | 界面层的合法性过滤（自己、自己的目录、自己的子孙）——非法时静默 |
+| `MoveDialog.tsx` | 备选路径：目标在折叠深层目录、或鼠标拖不稳时用 |
+| `main/ipc/workspace.ts` 的 `wsMove` | **权威守卫**（渲染层路径不可信）：重名拦住、目录环拦住、跨盘回退 copy+unlink |
+
+拖拽状态（`dragPath` / `dropTarget`）放 store 而不是组件 state：
+TreeNode 是递归渲染的，拖拽起点在另一个节点里，只有公共祖先能同时看到两边。
+
+### 未保存改动（dirty）的三道守卫
+
+`EditorTab.dirty` 以前只用来在标签上画一个 `•`，**不拦任何操作** ——
+学生改了文件没存、点了标签上的 × 或换了项目，改动无声消失。
+这和 README 里「绝不覆盖学生未保存改动」是同一条原则的两个面：
+那条守的是 AI 写入路径，这三道守的是关闭路径。
+
+| 入口 | 实现 | 行为 |
+|---|---|---|
+| 关标签 × | `store.closeTabChecked` | 二次确认：「先保存」/「放弃」（再问一次）/「取消」 |
+| 换项目 | `store.confirmLeaveWorkspace` | 逐个保存，**有一个存不上就取消整个切换** |
+| 关窗口 | `App.tsx` 的 `beforeunload` | 有脏标签就 `preventDefault()`，走 Chromium 原生确认框 |
+
+`closeTab`（无守卫）与 `closeTabChecked`（有守卫）**必须分开**：
+前者还被「文件已删除」「重命名」这些非用户主动路径调用，
+在那些路径上弹「要保存吗」是纯干扰。
+
+### 目录变更后的缓存失效（`forgetSubtrees`）
+
+`childMap` 是「路径 → 该目录的子项」的缓存，`toggleDir` 靠 `if (!childMap[dir])`
+判断「加载过没有」。**删目录 / 改名目录 / 移动目录之后必须调 `forgetSubtrees`**，
+否则重名的目录重建后会被判定为「已加载」而直接显示旧内容 —— 幽灵文件。
+同一个函数也清 `expanded`，因为那些 key 同样指向已经不存在的路径。
+
+顺带：删除 / 移动目录时，**打开着的标签要按前缀一起处理**。
+只按精确路径匹配的话，那些标签会留在界面上，一点保存就把刚删掉的目录建回来。
 
 ## 详细记录
 
