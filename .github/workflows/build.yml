@@ -97,14 +97,44 @@ jobs:
 
           # 以报告内容为准，退出码作为辅助证据（两者应当一致）
           $ok = $false
+          $report = $null
           if (Test-Path selftest.json) {
             Get-Content selftest.json -Raw -Encoding UTF8
-            $ok = ((Get-Content selftest.json -Raw -Encoding UTF8 | ConvertFrom-Json).ok -eq $true)
+            $report = Get-Content selftest.json -Raw -Encoding UTF8 | ConvertFrom-Json
+            $ok = ($report.ok -eq $true)
           } else {
             Write-Warning '未生成 selftest.json，自检未走完'
           }
           Write-Host "自检退出码=$($code) 报告 ok=$ok"
-          if (-not $ok -or $code -ne 0) { throw "启动自检失败：退出码=$($code) 报告ok=$ok" }
+          if (-not $ok -or $code -ne 0) {
+            # job 日志要仓库 admin 权限才能下载，注解不用 ——
+            # 把「哪几项检查是 false」直接发成注解，否则失败后只能靠猜。
+            $lines = @()
+            if ($report) {
+              $bad = @($report.checks.PSObject.Properties | Where-Object { $_.Value -eq $false })
+              if ($bad.Count -gt 0) {
+                $lines += '失败的检查项:'
+                foreach ($b in $bad) { $lines += "  $($b.Name) = false" }
+              } else {
+                $lines += '报告里没有显式为 false 的检查项，可能卡在更早的地方'
+              }
+              $lines += '能力相关字段:'
+              $lines += "  profile=$($report.checks.capabilityProfile)"
+              $lines += "  mode=$($report.checks.capabilityMode) overridden=$($report.checks.capabilityOverridden)"
+              $lines += "  detected=$(($report.checks.capabilityDetected | ConvertTo-Json -Compress))"
+              $lines += "  effective($($report.checks.capabilityEffectiveCount))=$(($report.checks.capabilityEffective) -join ',')"
+              $lines += "  filtered=$(($report.checks.capabilityFiltered) -join ' ; ')"
+              $lines += "  osTier=$($report.checks.osTier) softwareRendering=$($report.checks.softwareRendering)"
+              $lines += "  ipc=$($report.checks.ipc) ipcError=$($report.checks.ipcError)"
+              $lines += "  domNodes=$($report.checks.domNodes) title=$($report.checks.title)"
+              $lines += "  runtime=$(($report.runtime | ConvertTo-Json -Compress -Depth 2))"
+            } else {
+              $lines += '未生成 selftest.json —— 应用可能启动就退了，看下面导出的日志'
+            }
+            $detail = ($lines -join '%0A') -replace '%', '%25' -replace "`r", ''
+            Write-Host "::error title=启动自检失败(退出码=$code)::$detail"
+            throw "启动自检失败：退出码=$($code) 报告ok=$ok"
+          }
 
       - name: 启动自检（Win7 能力档，验证降级分支）
         # CI runner 是 Server 2022，探测结果永远是 win10 ——
