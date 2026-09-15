@@ -25,6 +25,19 @@ updated: 2026-09-15
 2128 行，早就超了 800 行上限。当初只拆出 `editor.css` / `settings-extra.css`，主文件没继续拆。
 拆的时候按「侧栏 / 编辑器 / 对话面板 / 空态」分，别按“行数均匀”分。
 
+### 4. 窄屏布局回归
+
+自检里所有几何断言都是在「窗口 1440x900」下成立的。CI runner 屏幕只有 1024x768，
+系统会把窗口夹窄到 1024，对话面板跟着变窄 —— 2026-09-15 就因为断言「三个入口必须在同一行」
+而误报（`.quick-starts` 本来就写着 `flex-wrap: wrap`）。
+
+已把那条断言改成「允许换行，但第一行至少两张、行内从左往右」。
+但**其他几何断言仍然隐含「窗口足够宽」这个前提**，比如 `editorDockHasWidth`（>120px）、
+`bothFullHeight`。学生机常见分辨率是 1366x768，比 runner 宽，暂时安全。
+
+要做的事：给自检加一个可控的窗口宽度（如 `--window-size=WxH`），把关键几何断言在
+「窄屏」下再跑一遍。现在是靠 runner 的屏幕尺寸“顺便”测到的，不稳定也不自觉。
+
 ---
 
 ## 已知坑（改之前务必看一眼）
@@ -61,8 +74,14 @@ updated: 2026-09-15
   能力集与预期一致（本机无 PowerShell，三档都是 6 个，命令类 4 个报「本机不支持」）
 - ✅ 新增两条自检断言：不再有「尚未实现」的工具；命令类工具必须跟着探测结果走
 
+已验证（2026-09-15，Windows Server 2022，CI 的注解）：
+
+- ✅ **Win10 上 10 个工具全都生效**：`detected={commandExec:true,backgroundJobs:true}`，
+  `effective(10)=readFile,writeFile,editFile,multiEdit,listDir,undoSnapshot,runCommand,jobRun,jobPoll,jobKill`，
+  `filtered=` 空。门控「设置 ∩ 探测」在真实 Windows 上算得对。
+
 未验证：
 
-- ⬜ **Win10 上 10 个工具全都生效**——CI runner 有 powershell.exe，但本地模拟不了，
-  只能看 CI 的 `selftest.json` 里 `capabilityEffectiveCount` 是不是 10
+- ⬜ **PowerShell 真实执行路径**——上面「10 个工具生效」只证明工具进了工具表，不等于 `runCommand` 真能跑起来。
+  `exec.ts` 那套 `-EncodedCommand` / 编码 / 杀进程树一次都没在 Windows 上执行过，见上面第 2 条。
 - ⬜ 杀软（360 等）拦截子进程——校园机器上的典型表现是「偶发失败」，只能真机验

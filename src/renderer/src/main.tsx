@@ -315,7 +315,7 @@ window.__SELFTEST__ = async () => {
    *
    * 只查元素存在是不够的 —— 之前就因为 .stage 忘了改 flex-direction，
    * 三个子块并排挤在一起，元素全在但界面是坏的。
-   * 这里量实际布局：三个入口必须横排（y 相同、x 递增），
+   * 这里量实际布局：三个入口要横排、从左往右（允许换行），
    * 图标必须在上、标题必须在下（否则说明 flex 方向错了）。
    */
   try {
@@ -334,11 +334,38 @@ window.__SELFTEST__ = async () => {
       badge && title && badge.getBoundingClientRect().bottom <= title.getBoundingClientRect().top
     )
 
-    // 三个入口横排：第一个和最后一个的顶边几乎相同，且从左往右排列
+    /*
+     * 三个入口要横排、从左往右，但**允许换行**。
+     *
+     * 早先这里断言「三张卡必须在同一行」，在 CI runner 上误报了：
+     * 窗口按 1440x900 创建，而 runner 屏幕只有 1024x768，系统会把窗口夹窄，
+     * 对话面板跟着变窄，三张卡就换行了 —— 而 .quick-starts 本来就写着
+     * flex-wrap: wrap（注释：「窄屏自动换行」）。断言比设计更严格，是断言错了。
+     *
+     * 现在改成量「流式排布是否正常」：按 top 分行，第一行至少两张，
+     * 同一行内 left 递增，换行后新行更低。flex-direction 写错成 column 时，
+     * 第一行只会有一张，仍然会被抓到。
+     */
+    const rects = starts.map((el) => el.getBoundingClientRect())
+    const rows: Array<{ top: number; lefts: number[] }> = []
+    for (const r of rects) {
+      const row = rows.find((x) => Math.abs(x.top - r.top) < 2)
+      if (row) row.lefts.push(r.left)
+      else rows.push({ top: r.top, lefts: [r.left] })
+    }
+    checks.quickStartRows = rows.length
+    // 留一份实际几何：以后布局再出问题，报告里直接能看出窄了多少
+    checks.quickStartRects = rects.map((r) => ({
+      top: Math.round(r.top),
+      left: Math.round(r.left),
+      w: Math.round(r.width)
+    }))
     checks.quickStartsRowLayout = Boolean(
       starts.length >= 3 &&
-        Math.abs(starts[0].getBoundingClientRect().top - starts[starts.length - 1].getBoundingClientRect().top) < 2 &&
-        starts[starts.length - 1].getBoundingClientRect().left > starts[0].getBoundingClientRect().left
+        rows.length >= 1 &&
+        rows[0].lefts.length >= 2 &&
+        rows.every((row) => row.lefts.every((l, i) => i === 0 || l > row.lefts[i - 1])) &&
+        rows.every((row, i) => i === 0 || row.top > rows[i - 1].top)
     )
 
     checks.composerBarFound = Boolean(bar)
@@ -447,22 +474,34 @@ window.__SELFTEST__ = async () => {
     checks.monacoError = String(err)
   }
 
-  const ok = Boolean(
-    checks.root &&
-      checks.reactMounted &&
-      checks.topbar &&
-      checks.composer &&
-      checks.apiReady &&
-      checks.ipc &&
-      checks.capabilityOk &&
-      checks.capabilitySettingsOk &&
-      checks.settingsNavOk &&
-      checks.layoutOk &&
-      checks.welcomeOk &&
-      checks.newLayoutOk &&
-      checks.allNeededLanguagesRegistered &&
-      checks.languageCountReasonable &&
-      !checks.devApiStub
-  )
+  /*
+   * ok 依赖的检查项集中一处，并且把「哪些没过」写进报告。
+   *
+   * 为什么要多这一步：CI 里只能通过 ::error 注解看到报告（job 日志要仓库
+   * admin 权限），而注解只能把「值为 false 的项」列出来。直接列会混进一堆
+   * 噪声 —— devApiStub、capabilityOverridden 这些「false 才是正常」的项会被
+   * 误报成失败。所以让报告自己给出结论：哪些门没过。
+   */
+  const gates: Record<string, boolean> = {
+    root: Boolean(checks.root),
+    reactMounted: Boolean(checks.reactMounted),
+    topbar: Boolean(checks.topbar),
+    composer: Boolean(checks.composer),
+    apiReady: Boolean(checks.apiReady),
+    ipc: Boolean(checks.ipc),
+    capabilityOk: Boolean(checks.capabilityOk),
+    capabilitySettingsOk: Boolean(checks.capabilitySettingsOk),
+    settingsNavOk: Boolean(checks.settingsNavOk),
+    layoutOk: Boolean(checks.layoutOk),
+    welcomeOk: Boolean(checks.welcomeOk),
+    newLayoutOk: Boolean(checks.newLayoutOk),
+    allNeededLanguagesRegistered: Boolean(checks.allNeededLanguagesRegistered),
+    languageCountReasonable: Boolean(checks.languageCountReasonable),
+    noDevApiStub: !checks.devApiStub
+  }
+  checks.gates = gates
+  checks.failedGates = Object.keys(gates).filter((key) => !gates[key])
+
+  const ok = Object.values(gates).every(Boolean)
   return { ok, checks }
 }

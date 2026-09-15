@@ -111,12 +111,19 @@ jobs:
             # 把「哪几项检查是 false」直接发成注解，否则失败后只能靠猜。
             $lines = @()
             if ($report) {
-              $bad = @($report.checks.PSObject.Properties | Where-Object { $_.Value -eq $false })
-              if ($bad.Count -gt 0) {
-                $lines += '失败的检查项:'
-                foreach ($b in $bad) { $lines += "  $($b.Name) = false" }
+              # failedGates 是应用自己算出来的「哪几道门没过」，比在 PowerShell
+              # 里猜「值为 false 的项」准 —— devApiStub / capabilityOverridden
+              # 这类「false 才是正常」的项不会被误报。
+              $failed = @($report.checks.failedGates)
+              if ($failed.Count -gt 0) {
+                $lines += "失败的门($($failed.Count)): $($failed -join ', ')"
               } else {
-                $lines += '报告里没有显式为 false 的检查项，可能卡在更早的地方'
+                $lines += 'failedGates 为空 —— 可能卡在更早的地方'
+              }
+              $lines += '三个入口的实测几何:'
+              $lines += "  quickStartCount=$($report.checks.quickStartCount) rows=$($report.checks.quickStartRows)"
+              foreach ($r in @($report.checks.quickStartRects)) {
+                $lines += "  rect top=$($r.top) left=$($r.left) w=$($r.w)"
               }
               $lines += '能力相关字段:'
               $lines += "  profile=$($report.checks.capabilityProfile)"
