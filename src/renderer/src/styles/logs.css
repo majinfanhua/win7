@@ -1,0 +1,71 @@
+/*
+ * 底部日志抽屉。
+ *
+ * 层叠位置：dormant.css 之后（见 index.css 的第 5 条顺序约束）。
+ * 这里只负责「抽屉外壳 + 行的横向排布」，.logs 的字体与 warn/error 配色
+ * 仍由 dormant.css 提供 —— 那一段本来就是为这个面板写的，别再定义第二遍。
+ *
+ * 高度固定 190px 而不是可拖拽：日志是「瞥一眼」的东西，
+ * 为它再引入一套分割条逻辑不值当；需要看长内容时点「打开日志目录」。
+ */
+
+.log-drawer {
+  flex: none;
+  height: 190px;
+  display: flex;
+  flex-direction: column;
+  /* 与 .output（dormant.css）保持一致：日志带是内容区的底边，用实色不要毛玻璃 */
+  background: var(--surface-solid);
+  border-top: 1px solid var(--border);
+}
+
+.log-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.log-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.log-count {
+  font-size: 11px;
+}
+
+/* dormant.css 的 .logs 只管字体，没有滚动与尺寸 —— 那部分在这里补 */
+.log-drawer .logs {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* 每行自己排时间戳 / 范围 / 正文，所以行是 flex 而不是纯文本流 */
+}
+
+.log-drawer .logs > div {
+  display: flex;
+  gap: 6px;
+  padding: 1px 0;
+  line-height: 1.5;
+}
+
+.log-time {
+  flex: none;
+  color: var(--text-3);
+}
+
+.log-scope {
+  flex: none;
+  color: var(--text-3);
+}
+
+.log-text {
+  flex: 1;
+  min-width: 0;
+  /* 长路径 / 长命令要能折行，否则会把抽屉撑出横向滚动条 */
+  word-break: break-all;
+}

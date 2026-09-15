@@ -6,7 +6,7 @@
  * 拆分自原来的 global.css（2128 行）。拆的理由只有一个：两千行的文件里找
  * 「AI 横幅长什么样」要翻很久，而样式本身没有任何复杂度。
  *
- * 顺序上有三处是有意为之，动之前先读一遍：
+ * 顺序上有五处是有意为之，动之前先读一遍：
  *
  *   1. base 最前。
  *      其它文件都用它定义的 CSS 变量与 .btn / input 这类原语。
@@ -20,6 +20,15 @@
  *      .editor-host 与 .crumb-model 在 dormant.css / topbar.css 里各有一份
  *      基础定义，editor.css 是覆盖的那一份，必须在后。
  *
+ *   4. explorer.css 在 sidebar.css 之后、responsive.css 之前。
+ *      它补的是 sidebar.css 里 .filetree / .tree-* 的工具栏、排序、面包屑，
+ *      必须排在 sidebar.css 后面才生效；而窄屏适配要统一改宽度，
+ *      所以它又必须在 responsive.css 之前。
+ *
+ *   5. logs.css 在 dormant.css 之后。
+ *      dormant.css 里有一份 .logs（等宽字体 + warn/error 配色），
+ *      logs.css 是把它装进抽屉外壳的那一份，必须在后。
+ *
  * 另外 .nav-item 在 settings.css 与 sidebar.css 里各有一份，靠顺序共存。
  * 往中间插新文件时，确认上面这几条没被破坏。
  */
@@ -29,7 +38,9 @@
 @import './dialog.css';
 @import './settings.css';
 @import './dormant.css';
+@import './logs.css';
 @import './sidebar.css';
+@import './explorer.css';
 @import './topbar.css';
 @import './responsive.css';
 @import './editor.css';

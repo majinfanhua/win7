@@ -75,22 +75,30 @@ export function assertInsideRoot(target: string): string {
   return resolved
 }
 
-function toNode(dir: string, entry: fs.Dirent): FileNode {
-  const full = path.join(dir, entry.name)
-  return {
-    name: entry.name,
-    path: full,
-    kind: entry.isDirectory() ? 'dir' : 'file',
-    size: entry.isDirectory() ? undefined : safeSize(full)
+/**
+ * 一次 stat 同时取 size 与 mtime。
+ *
+ * 为什么合成一次：Win7 机械盘 + 校园杀软实时扫描下，每个文件 stat 一次已经够贵，
+ * 分两次拿 size 与 mtime 等于把代价翻倍，而目录里几十个文件时体感很明显。
+ * 失败（权限、文件刚被删）时两项都留空，不抛 —— 文件树不该因为一个文件读不到就整目录报错。
+ */
+function safeStat(file: string): { size?: number; mtime?: number } {
+  try {
+    const st = fs.statSync(file)
+    return { size: st.size, mtime: st.mtimeMs }
+  } catch {
+    return {}
   }
 }
 
-function safeSize(file: string): number | undefined {
-  try {
-    return fs.statSync(file).size
-  } catch {
-    return undefined
+function toNode(dir: string, entry: fs.Dirent): FileNode {
+  const full = path.join(dir, entry.name)
+  if (entry.isDirectory()) {
+    // 目录不给 size/mtime：目录的 mtime 是「目录项本身被改」的时间，
+    // 和「里面文件改了没」无关，拿它排序会误导使用者
+    return { name: entry.name, path: full, kind: 'dir' }
   }
+  return { name: entry.name, path: full, kind: 'file', ...safeStat(full) }
 }
 
 /**
@@ -117,13 +125,25 @@ function sortNodes(nodes: FileNode[]): FileNode[] {
   })
 }
 
-/** 删除策略：移到工作区内的 .trash 目录，而不是物理删除 */
+/**
+ * 删除策略：交给系统回收站，而不是物理删除。
+ *
+ * 曾经是自己往工作区里的 `.trash` 目录 rename。那个做法有三个问题，
+ * 换掉之前先看清为什么不该退回去：
+ *   1. `.trash` 被放进了 ALWAYS_IGNORED，文件树里看不见 ——
+ *      学生误删之后既看不到也拿不回来，等于物理删除但占了磁盘
+ *   2. 没有任何清理与还原入口，删得越多工作区越胖
+ *   3. 跨盘/挂载点 rename 会抛 EXDEV，而目标目录是工作区内的固定位置，
+ *      工作区本身跨盘时必然踩到
+ * `shell.trashItem` 走的是系统回收站（Windows 上是 SHFileOperation），
+ * 学生能自己右键还原，也由系统按回收站策略清理。
+ * 它在 Win7 上可用，且不依赖任何原生模块。
+ *
+ * 注意：不进回收站的情况是「文件太大超过回收站配额」——那时系统会直接删除。
+ * 这是系统行为，不在这里兜底（兜底等于又写一个自制的垃圾桶）。
+ */
 async function moveToTrash(target: string): Promise<void> {
-  const trashDir = path.join(workspaceRoot, '.trash')
-  await fsp.mkdir(trashDir, { recursive: true })
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-  const dest = path.join(trashDir, `${stamp}_${path.basename(target)}`)
-  await fsp.rename(target, dest)
+  await shell.trashItem(target)
 }
 
 export function registerWorkspaceIpc(): void {
@@ -200,6 +220,54 @@ export function registerWorkspaceIpc(): void {
     assertInsideRoot(target)
     if (fs.existsSync(target)) throw new Error(`已存在同名项: ${newName}`)
     await fsp.rename(source, target)
+    return target
+  })
+
+  ipcMain.handle(IPC.wsMove, async (_e, from: string, destDir: string): Promise<string> => {
+    const source = assertInsideRoot(from)
+    const dir = assertInsideRoot(destDir)
+
+    const stat = await fsp.stat(dir).catch(() => null)
+    if (!stat) throw new Error(`目标文件夹不存在: ${dir}`)
+    if (!stat.isDirectory()) throw new Error(`目标不是文件夹: ${dir}`)
+
+    const target = path.join(dir, path.basename(source))
+
+    // 移到自己所在的目录 = 什么都没做。当成成功返回，不报错 ——
+    // 拖拽落到原处是很自然的操作，弹一句「不能移动到自己」是纯噪音
+    if (path.resolve(target) === path.resolve(source)) return source
+
+    /*
+     * 不能把目录移进它自己的子孙目录里。
+     * 不做这个检查的话，`fs.rename` 在 Windows 上会抛 EINVAL，
+     * 但那句英文错误学生读不懂；更糟的是 copy 回退路径会递归复制到无穷。
+     */
+    const rel = path.relative(source, dir)
+    if (!rel.startsWith('..') && !path.isAbsolute(rel)) {
+      throw new Error('不能把一个文件夹移动到它自己里面')
+    }
+
+    // 目标重名必须显式拦住。Windows 上 rename 对文件是覆盖、对目录是失败，
+    // 行为不一致且都不提示，所以先探一次，并且给一句能照做的中文原因
+    if (fs.existsSync(target)) {
+      throw new Error(`目标文件夹里已经有「${path.basename(source)}」了，请先改名或删除它`)
+    }
+
+    try {
+      await fsp.rename(source, target)
+    } catch (err) {
+      /*
+       * 跨盘（Windows 上是不同盘符，Linux 上是不同挂载点）rename 会抛 EXDEV。
+       * 回退成「复制 + 删源」。只用 Node 自带的 cp（Node 16.7+ 有），
+       * 不引 fs-extra —— 这个项目零运行时依赖。
+       */
+      if ((err as NodeJS.ErrnoException).code !== 'EXDEV') throw err
+      await fsp.cp(source, target, { recursive: true, errorOnExist: true, force: false })
+      await fsp.rm(source, { recursive: true, force: true })
+      logger.info('workspace', `跨盘移动，已回退为复制 + 删除: ${source} -> ${target}`)
+    }
+
+    logger.info('workspace', `已移动: ${source} -> ${target}`)
     return target
   })
 
