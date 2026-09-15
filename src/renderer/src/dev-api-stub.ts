@@ -32,7 +32,6 @@ import {
   type DoctorReport,
   type EditorSession,
   type FileChangeEvent,
-  type FileNode,
   type LoadedFile,
   type LogLevel,
   type LogLine,
@@ -43,6 +42,17 @@ import {
   type ToolName,
   type WorkspaceEntry
 } from '@shared/types'
+import {
+  DEMO_ROOT,
+  baseNameOf,
+  dirs,
+  ensureParents,
+  files,
+  joinPath,
+  normalize,
+  parentOf,
+  readDirSync
+} from './dev-stub-fs'
 
 /** 桩里的最近工作区 / 最近会话：初始为空，用着用着就长出来 */
 let stubWorkspaces: WorkspaceEntry[] = []
@@ -82,123 +92,12 @@ function emitFileChanged(filePath: string, origin: FileChangeEvent['origin']): v
  * 内存虚拟文件系统
  * ------------------------------------------------------------------ */
 
-const DEMO_ROOT = '/demo'
-
-const DEMO_FILES: Record<string, string> = {
-  [`${DEMO_ROOT}/README.md`]: [
-    '# 演示工作区',
-    '',
-    '这是浏览器预览模式的内置示例目录，**所有改动只存在内存里**，刷新页面就回到初始状态。',
-    '',
-    '## 可以试的几件事',
-    '',
-    '1. 双击左侧文件树里的文件，中间会用 Monaco 打开',
-    '2. 改几行字，按 Ctrl+S，看底部「输出」面板有没有保存日志',
-    '3. 右侧 AI 面板先点「设置」随便填上地址 / 密钥 / 模型，就能看到模拟的流式回答',
-    '',
-    '> 想要真实能力（读写真实磁盘、真连模型），请在 Electron 里运行，不要用浏览器。'
-  ].join('\n'),
-
-  [`${DEMO_ROOT}/hello.py`]: [
-    '# 第一课：打印和循环',
-    'scores = [90, 85, 77]',
-    '',
-    '# 这里故意写错了一位，观察报错信息',
-    'for i in range(len(scores)):',
-    '    print(scores[i])',
-    '',
-    'print("平均分:", sum(scores) / len(scores))'
-  ].join('\n'),
-
-  [`${DEMO_ROOT}/index.html`]: [
-    '<!doctype html>',
-    '<html lang="zh-CN">',
-    '  <head>',
-    '    <meta charset="UTF-8" />',
-    '    <title>示例页面</title>',
-    '  </head>',
-    '  <body>',
-    '    <h1>你好，同学</h1>',
-    '    <button id="btn">点我</button>',
-    '    <script src="./src/main.js"></script>',
-    '  </body>',
-    '</html>'
-  ].join('\n'),
-
-  [`${DEMO_ROOT}/src/main.js`]: [
-    '// 一个最小的 DOM 事件示例',
-    'const btn = document.getElementById("btn")',
-    '',
-    'btn.addEventListener("click", () => {',
-    '  btn.textContent = "已经点过了"',
-    '})'
-  ].join('\n'),
-
-  [`${DEMO_ROOT}/data/scores.json`]: [
-    '{',
-    '  "class": "初一(2)班",',
-    '  "scores": [90, 85, 77, 96]',
-    '}'
-  ].join('\n')
-}
-
-const files = new Map<string, string>(Object.entries(DEMO_FILES))
-const dirs = new Set<string>()
-
-function normalize(p: string): string {
-  const s = p.replace(/\\/g, '/').replace(/\/+$/, '')
-  return s === '' ? '/' : s
-}
-
-function parentOf(p: string): string {
-  const idx = p.lastIndexOf('/')
-  return idx <= 0 ? '/' : p.slice(0, idx)
-}
-
-function joinPath(base: string, name: string): string {
-  return base === '/' ? `/${name}` : `${base}/${name}`
-}
-
-function ensureParents(p: string): void {
-  let cur = parentOf(normalize(p))
-  while (cur !== '/' && cur !== '') {
-    dirs.add(cur)
-    cur = parentOf(cur)
-  }
-}
-
-for (const key of files.keys()) ensureParents(key)
-
-function readDirSync(dir: string): FileNode[] {
-  const base = normalize(dir)
-  const prefix = base === '/' ? '/' : `${base}/`
-  const out = new Map<string, FileNode>()
-
-  for (const [p, content] of files) {
-    if (!p.startsWith(prefix)) continue
-    const rest = p.slice(prefix.length)
-    const slash = rest.indexOf('/')
-    if (slash === -1) {
-      out.set(rest, { name: rest, path: p, kind: 'file', size: content.length })
-    } else {
-      const name = rest.slice(0, slash)
-      out.set(name, { name, path: prefix + name, kind: 'dir' })
-    }
-  }
-
-  for (const d of dirs) {
-    if (!d.startsWith(prefix)) continue
-    const rest = d.slice(prefix.length)
-    if (!rest || rest.includes('/')) continue
-    out.set(rest, { name: rest, path: d, kind: 'dir' })
-  }
-
-  return [...out.values()].sort((a, b) =>
-    a.kind === b.kind ? a.name.localeCompare(b.name, 'zh') : a.kind === 'dir' ? -1 : 1
-  )
-}
-
-/* ------------------------------------------------------------------ *
+/*
+ * 实现已经搬到 dev-stub-fs.ts（本文件曾到 780 行，逼近 800 行红线）。
+ * 那边只管「路径 → 内容」这层数据；这里只做转出，
+ * 让下面所有 window.api 的实作继续用同一批名字，不用满文件改引用。
+ */
+export { DEMO_ROOT, dirs, files, joinPath, normalize, parentOf, readDirSync } from './dev-stub-fs'/* ------------------------------------------------------------------ *
  * 事件总线（替代 ipcRenderer 的 on / send）
  * ------------------------------------------------------------------ */
 
@@ -518,7 +417,16 @@ function createApi(): AppApi {
     },
 
     openWorkspace: async (preset?: string) => {
-      const input = window.prompt('浏览器预览模式：输入要打开的虚拟目录', preset || DEMO_ROOT)
+      /*
+       * 浏览器预览模式才用 prompt（在浏览器里是好的）。
+       * 但这份桩会被打进渲染层包，而 Electron 里 window.prompt 不存在 ——
+       * 所以这里必须判一下再用，不能直接调：真实运行时若误走到桩，
+       * 直接调 prompt 会抛错，而抛错信息与「新建文件没反应」完全不像，很难查。
+       */
+      const ask = typeof window.prompt === 'function' ? window.prompt : null
+      const input = ask
+        ? ask('浏览器预览模式：输入要打开的虚拟目录', preset || DEMO_ROOT)
+        : preset || DEMO_ROOT
       if (input === null) return ''
       const dir = normalize(input)
       if (!dirs.has(dir)) {
@@ -589,6 +497,40 @@ function createApi(): AppApi {
         }
       }
       emitLog('ws', `重命名：${src} → ${target}`)
+      return target
+    },
+
+    moveEntry: async (from: string, destDir: string) => {
+      const src = normalize(from)
+      const dir = normalize(destDir)
+      const target = joinPath(dir, baseNameOf(src))
+      if (target === src) return src
+      // 与主进程一致的守卫：不允许移进自己的子孙目录
+      if (dir.startsWith(`${src}/`)) throw new Error('不能把一个文件夹移动到它自己里面')
+      if (files.has(target) || dirs.has(target)) {
+        throw new Error(`目标文件夹里已经有「${baseNameOf(src)}」了`)
+      }
+      const content = files.get(src)
+      if (content !== undefined) {
+        files.set(target, content)
+        files.delete(src)
+      } else if (dirs.has(src)) {
+        dirs.delete(src)
+        dirs.add(target)
+        for (const p of [...dirs]) {
+          if (p.startsWith(`${src}/`)) {
+            dirs.delete(p)
+            dirs.add(target + p.slice(src.length))
+          }
+        }
+        for (const [p, c] of [...files]) {
+          if (p.startsWith(`${src}/`)) {
+            files.delete(p)
+            files.set(target + p.slice(src.length), c)
+          }
+        }
+      }
+      emitLog('ws', `移动：${src} → ${target}`)
       return target
     },
 

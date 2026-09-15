@@ -1,0 +1,514 @@
+/*
+ * 资源管理器与文件树本轮新增的部分。
+ *
+ * ⚠️ 层叠顺序：本文件必须插在 sidebar.css 之后、responsive.css **之前**。
+ * 理由：这里的内容大多是 sidebar.css 里 .filetree / .tree-* 的补充与覆盖
+ *      （工具栏、排序下拉、面包屑、弹层里的小原语），必须排在它后面；
+ *      而窄屏适配要在最后统一改宽度，所以又必须在 responsive.css 之前。
+ *      顺序写错了不会报错，只会在窄屏或某个边角场景里静默失效。
+ *
+ * 颜色一律消费 base.css 的变量，这里不写死任何主题色 ——
+ * 深浅两套主题才能永远保持一致。
+ */
+
+/* ==========================================================================
+ * 文件树工具栏
+ * ========================================================================== */
+
+.tree-tools {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  flex: none;
+  padding: 2px 0;
+}
+
+/* 独立面板里按钮可以松一点，也给排序下拉留出显示文字的空间 */
+.tree-tools.is-expanded {
+  gap: 3px;
+  flex-wrap: wrap;
+}
+
+.tree-tool {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  color: var(--text-3);
+  border-radius: 6px;
+  /* 只动颜色，不做位移 —— Win7 软件渲染下位移会带来一次重绘 */
+  transition: color 0.12s ease, background-color 0.12s ease;
+}
+
+.tree-tool:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--bubble-ai);
+}
+
+.tree-tool:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.tree-tool:disabled {
+  opacity: 0.34;
+  cursor: default;
+}
+
+/* 开关型按钮（显示隐藏文件）的「已开启」态 */
+.tree-tool.is-on {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.tree-tool-sep {
+  flex: none;
+  width: 1px;
+  height: 13px;
+  margin: 0 3px;
+  background: var(--border);
+}
+
+/* 排序下拉 */
+.tree-sort {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+  padding: 0 4px 0 5px;
+  height: 24px;
+  color: var(--text-3);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.tree-sort:hover {
+  color: var(--text-2);
+  background: var(--bubble-ai);
+}
+
+.tree-sort select {
+  max-width: 76px;
+  padding: 0;
+  font-size: 11.5px;
+  color: inherit;
+  background: transparent;
+  border: none;
+  outline: none;
+  cursor: pointer;
+  /* 原生下拉箭头在深色主题下几乎看不见，干脆去掉，靠左边的排序图标表意 */
+  appearance: none;
+}
+
+.tree-tools.is-expanded .tree-sort select {
+  max-width: 120px;
+}
+
+.tree-sort select option {
+  color: var(--text);
+  background: var(--surface-solid);
+}
+
+/* 节点右侧的次要信息（大小）。只在独立面板里渲染 */
+.tree-meta {
+  flex: none;
+  margin-left: auto;
+  padding-left: 10px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+/* 空态里的两个主按钮 */
+.tree-empty-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.tree-empty svg {
+  color: var(--text-3);
+  opacity: 0.6;
+}
+
+/* ==========================================================================
+ * 弹层补充：类型胶囊、落点路径、字段错误
+ * ========================================================================== */
+
+/* 类型胶囊：一排可点选项，选中态用强调色描边 + 低饱和底 */
+.type-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.type-pill {
+  padding: 4px 11px;
+  font-size: 12px;
+  color: var(--text-2);
+  background: var(--bubble-ai);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color 0.12s ease, background-color 0.12s ease, border-color 0.12s ease;
+}
+
+.type-pill:hover {
+  color: var(--text);
+}
+
+.type-pill.is-on {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+/* 落点路径：一眼可见「会建在哪里」，比一句说明有效 */
+.dialog-path {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 9px;
+  font-size: 12px;
+  color: var(--text-2);
+  background: var(--bubble-ai);
+  border-radius: 8px;
+}
+
+.dialog-path-icon {
+  flex: none;
+  font-size: 12px;
+}
+
+.dialog-path-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 校验错误：红色小字，紧贴输入框 */
+.field-error {
+  margin-top: 5px;
+  font-size: 11.5px;
+  color: var(--danger);
+}
+
+/* 出错时输入框自己也变红，不用只靠下面那行小字 */
+.field input[aria-invalid='true'] {
+  border-color: var(--danger);
+}
+
+/* ==========================================================================
+ * 资源管理器整页视图
+ * ========================================================================== */
+
+.explorer-page {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* 面板头：面包屑 + 可见项计数 */
+.explorer-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.explorer-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.explorer-crumb-wrap {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.explorer-crumb {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.explorer-crumb.is-current {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.explorer-crumb.is-dim {
+  color: var(--text-3);
+}
+
+.explorer-crumb-sep {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-3);
+  opacity: 0.7;
+}
+
+.explorer-head-count {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+/* 面板主体：左边树体 + 右边信息栏 */
+.explorer-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.explorer-tree-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+
+/* 独立形态下树体铺满整列 */
+.explorer-tree-col > .filetree {
+  flex: 1;
+  width: auto;
+  border-left: none;
+  background: transparent;
+}
+
+.explorer-side-col {
+  flex: none;
+  width: 268px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 14px;
+  overflow: auto;
+  border-left: 1px solid var(--border);
+  background: var(--surface-solid);
+}
+
+.explorer-side-block {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.explorer-side-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-3);
+  letter-spacing: 0.02em;
+}
+
+.explorer-side-hint {
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-3);
+}
+
+.explorer-openfile {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 8px;
+  font-size: 12px;
+  color: var(--text-2);
+  text-align: left;
+  border-radius: 7px;
+}
+
+.explorer-openfile:hover {
+  color: var(--text);
+  background: var(--bubble-ai);
+}
+
+.explorer-openfile-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 未保存的小圆点，比整行变色更轻 */
+.explorer-openfile-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin-left: auto;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.explorer-tips {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 11.5px;
+  line-height: 1.75;
+  color: var(--text-3);
+}
+
+.explorer-tips strong {
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.explorer-keys {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.explorer-keys > span {
+  flex: 1;
+}
+
+.explorer-keys kbd {
+  flex: none;
+  min-width: 20px;
+  padding: 1px 5px;
+  font-family: inherit;
+  font-size: 10.5px;
+  text-align: center;
+  color: var(--text-2);
+  background: var(--bubble-ai);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+
+/* 未打开项目时的居中引导。叠在树体上层，不挤占布局 */
+.explorer-blank {
+  position: absolute;
+  inset: 44px 0 0 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+.explorer-blank > button {
+  pointer-events: auto;
+}
+
+/* 侧栏「工作空间」分组的菜单分隔线 */
+.nav-menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}
+
+/* 侧栏菜单里的失效项：置灰而不是隐藏，位置稳定才好找 */
+.nav-menu-item:disabled {
+  color: var(--text-3);
+  opacity: 0.55;
+  cursor: default;
+}
+
+.nav-menu-item:disabled:hover {
+  background: transparent;
+}
+
+/* ==========================================================================
+ * Win7 软件渲染降级
+ * ========================================================================== */
+
+/* 与其它面板一致：低性能路径下不走毛玻璃，用纯色面板 */
+:root[data-perf='low'] .explorer-side-col,
+:root[data-perf='low'] .tree-sort,
+:root[data-perf='low'] .type-pill,
+:root[data-perf='low'] .dialog-path {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* ==========================================================================
+ * 「移动到…」目录选择器
+ *
+ * 与 .dialog-path 同属新建/重命名弹层那一族原语，所以放在 explorer.css
+ * （见 index.css 的顺序约束：explorer.css 在 sidebar.css 之后）。
+ * ========================================================================== */
+
+.move-tree {
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--surface-solid);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 0;
+}
+
+.move-dir {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 24px;
+}
+
+.move-dir:hover {
+  background: var(--bubble-ai);
+}
+
+/* 选中的目标：左侧色条 + 底色，与 .tree-node.is-active 同一套语言 */
+.move-dir.is-picked {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.move-dir-caret {
+  flex: none;
+  width: 18px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  color: var(--text-3);
+  font-size: 10px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.move-dir-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+  background: transparent;
+  border: 0;
+  color: var(--text-1);
+  font-size: 12px;
+  text-align: left;
+  padding: 3px 6px 3px 0;
+  cursor: pointer;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.move-dir-name:disabled {
+  color: var(--text-3);
+  cursor: default;
+  text-decoration: line-through;
+}
+
+.move-dir-name:hover:not(:disabled) {
+  color: var(--accent);
+}

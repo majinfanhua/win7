@@ -4,6 +4,7 @@ import { app } from 'electron'
 import {
   DEFAULT_CONFIG,
   EDITOR_TABS_MAX,
+  EXPLORER_SORT_BY,
   RECENT_SESSIONS_MAX,
   RECENT_WORKSPACES_MAX,
   SESSION_TITLE_MAX,
@@ -12,6 +13,7 @@ import {
   type AppConfig,
   type CapabilityMode,
   type EditorSession,
+  type ExplorerSortBy,
   type OpenTab,
   type SessionEntry,
   type WorkspaceEntry
@@ -27,6 +29,30 @@ function resolveConfigPath(): string {
 }
 
 const CAPABILITY_MODES: CapabilityMode[] = ['auto', 'conservative', 'full']
+
+/**
+ * explorer 段的白名单校验。
+ *
+ * 这一段有两个字段是「取值必须在集合里」的枚举，历史坑就在这儿：
+ * normalize 只做 `{ ...DEFAULT, ...input }` 展开的话，config.json 里塞了
+ * 一个非法值（手改过、或旧版本留下的）会被原样带进内存，
+ * 界面按它查表查不到，表现为「排序/展开状态莫名其妙不对」，还不报错。
+ * 所以这里显式收敛一次。
+ */
+function normalizeExplorer(raw: unknown): AppConfig['explorer'] {
+  const input = (raw && typeof raw === 'object' ? raw : {}) as Partial<AppConfig['explorer']>
+  const sortBy = EXPLORER_SORT_BY.includes(input.sortBy as ExplorerSortBy)
+    ? (input.sortBy as ExplorerSortBy)
+    : DEFAULT_CONFIG.explorer.sortBy
+  return {
+    ...DEFAULT_CONFIG.explorer,
+    ...input,
+    showHidden: Boolean(input.showHidden),
+    treeOpen: input.treeOpen === undefined ? DEFAULT_CONFIG.explorer.treeOpen : Boolean(input.treeOpen),
+    chatOpen: input.chatOpen === undefined ? DEFAULT_CONFIG.explorer.chatOpen : Boolean(input.chatOpen),
+    sortBy
+  }
+}
 
 /**
  * 配置标准化。
@@ -53,7 +79,7 @@ function normalize(raw: unknown): AppConfig {
     editor: { ...DEFAULT_CONFIG.editor, ...(input.editor || {}) },
     legacyGraphics: { ...DEFAULT_CONFIG.legacyGraphics, ...(input.legacyGraphics || {}) },
     capability: { mode, disabled },
-    explorer: { ...DEFAULT_CONFIG.explorer, ...(input.explorer || {}) },
+    explorer: normalizeExplorer(input.explorer),
     lastWorkspace: typeof input.lastWorkspace === 'string' ? input.lastWorkspace : '',
     recentWorkspaces: normalizeWorkspaces(input.recentWorkspaces),
     recentSessions: normalizeSessions(input.recentSessions),

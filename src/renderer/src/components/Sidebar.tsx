@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useAppStore } from '../store/useAppStore'
 import FileTree from './FileTree'
+import TreeOverlays from './file-tree/TreeOverlays'
+import { useFileTreeController } from './file-tree/useFileTreeController'
 
 /**
  * 左侧栏。
@@ -75,6 +77,15 @@ export default function Sidebar({
   const [showMcp, setShowMcp] = useState(false)
   const [wsMenu, setWsMenu] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
+
+  /*
+   * 「工作空间」分组里的「新建文件 / 新建文件夹」要用到与文件树完全同一套弹层。
+   * 这里另起一个 controller 实例而不是从 FileTree 往上提：
+   * 两者共享的是 store 状态（childMap / config），而不是组件局部状态，
+   * 所以各持一份互不干扰；反之把 controller 提到 Sidebar 再层层下传，
+   * 会让 FileTree 多出一堆与它无关的接口。
+   */
+  const tree = useFileTreeController()
 
   // 点空白处收起浮层。用 mousedown 而不是 click ——
   // click 会在浮层按钮的 onClick 之前冒泡上来，导致「刚点开就被关掉」
@@ -196,13 +207,43 @@ export default function Sidebar({
               <button className="nav-menu-item" onClick={() => { setWsMenu(false); void openWorkspace() }}>
                 打开文件夹…
               </button>
+
+              {/*
+                新建文件 / 新建文件夹。
+                这是本轮补上的断点：以前「工作空间」分组只有「打开文件夹…」，
+                建文件夹的唯一入口藏在系统对话框里，建文件则完全没有入口。
+                落点固定为当前项目根目录 —— 分组菜单里没有「当前在哪一层」的概念，
+                想落在子目录就右键那个子目录。
+                没打开项目时置灰（而不是隐藏）：项的位置稳定才好找。
+              */}
+              <div className="nav-menu-sep" />
+              <button
+                className="nav-menu-item"
+                disabled={!workspace}
+                title={workspace ? `在 ${workspace} 下新建文件` : '先打开一个文件夹'}
+                onClick={() => { setWsMenu(false); tree.requestNew('file') }}
+              >
+                新建文件
+              </button>
+              <button
+                className="nav-menu-item"
+                disabled={!workspace}
+                title={workspace ? `在 ${workspace} 下新建文件夹` : '先打开一个文件夹'}
+                onClick={() => { setWsMenu(false); tree.requestNew('dir') }}
+              >
+                新建文件夹
+              </button>
+
               {workspace && (
-                <button
-                  className="nav-menu-item"
-                  onClick={() => { setWsMenu(false); void removeWorkspace(workspace) }}
-                >
-                  从最近列表移除当前项目
-                </button>
+                <>
+                  <div className="nav-menu-sep" />
+                  <button
+                    className="nav-menu-item"
+                    onClick={() => { setWsMenu(false); void removeWorkspace(workspace) }}
+                  >
+                    从最近列表移除当前项目
+                  </button>
+                </>
               )}
             </div>
           )}
@@ -318,6 +359,9 @@ export default function Sidebar({
 
         {/* 收起态只留图标，悬停用原生 title 提示，不做浮层（老系统上浮层容易闪） */}
       </div>
+
+      {/* 「工作空间」分组里点「新建文件 / 新建文件夹」弹出的输入弹层 */}
+      <TreeOverlays tree={tree} />
     </aside>
   )
 }
