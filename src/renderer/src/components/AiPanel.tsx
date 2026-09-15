@@ -206,6 +206,32 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
   }, [sessionId])
 
   /**
+   * 切换会话时中断在飞的请求。
+   *
+   * 为什么必须中断：上面那个 effect 在有请求在飞时**故意跳过重建**，
+   * 但 sessionId 已经变了 —— 这一轮结束后 `syncStore()` 会把 items
+   * 写进 store 的 messages，而那时 messages 已经属于**新的**会话。
+   * 学生答到一半点了另一条会话，回答的尾段就落进了另一条记录里。
+   *
+   * 放一个独立 effect 而不是并进上面那条：上面那条依赖 requestRef 的非响应式
+   * 读取，把中断逻辑混进去会让「为什么这次没重建」更难读。
+   */
+  const sessionSwitchAt = useAppStore((s) => s.sessionSwitchAt)
+  useEffect(() => {
+    if (!sessionSwitchAt) return
+    const id = requestRef.current
+    if (!id) return
+    void window.api.aiAbort(id)
+    requestRef.current = ''
+    if (deltaTimerRef.current !== null) {
+      window.clearTimeout(deltaTimerRef.current)
+      deltaTimerRef.current = null
+    }
+    deltaBufRef.current = ''
+    setBusy(false)
+  }, [sessionSwitchAt])
+
+  /**
    * 「新对话」：清空消息与输入，并中断正在跑的请求。
    *
    * 必须中断 —— 否则上一轮的回答会继续往新会话里写 token，
@@ -456,6 +482,17 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
   }
 
   /**
+   * 引用胶囊的三个动作。
+   *
+   * 提出来是因为引用行要在**两个位置**渲染（输入框上方与工具条下方），
+   * 原先两处的 JSX 是逐字复制的一份 —— 改一处忘另一处，
+   * 就会出现「上面的胶囊能删、下面的删不掉」这种诡异现象。
+   * 现在两处共用同一个 <RefRow> 组件。
+   */
+  const removeRef = (file: string): void => setRefs((prev) => prev.filter((f) => f !== file))
+  const clearRefs = (): void => setRefs([])
+
+  /**
    * 从文件树挂一个引用进输入框。
    *
    * 本质上就是让 store 把路径放进 pendingRefs，剩下的由下面的 useEffect 接管 ——
@@ -542,31 +579,7 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
       </div>
 
       <div className="composer glass">
-        {refs.length > 0 && (
-          <div className="ref-row">
-            {refs.map((file) => (
-              <span key={file} className="ref-chip" title={file}>
-                <button
-                  className="ref-chip-name"
-                  title={`在编辑器里打开 ${file}`}
-                  onClick={() => void openFile(file)}
-                >
-                  {baseName(file)}
-                </button>
-                <button
-                  className="ref-chip-x"
-                  aria-label={`移除引用 ${file}`}
-                  onClick={() => setRefs((prev) => prev.filter((f) => f !== file))}
-                >
-                  ×
-                </button>
-              </span>
-            ))}
-            <button className="ref-clear" onClick={() => setRefs([])}>
-              清空引用
-            </button>
-          </div>
-        )}
+        <RefRow refs={refs} onOpen={(file) => void openFile(file)} onRemove={removeRef} onClear={clearRefs} />
         <textarea
           ref={inputRef}
           rows={1}
@@ -626,32 +639,6 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
             <SendIcon />
           </button>
         </div>
-
-        {refs.length > 0 && (
-          <div className="ref-row">
-            {refs.map((file) => (
-              <span key={file} className="ref-chip" title={file}>
-                <button
-                  className="ref-chip-name"
-                  title={`在编辑器里打开 ${file}`}
-                  onClick={() => void openFile(file)}
-                >
-                  {baseName(file)}
-                </button>
-                <button
-                  className="ref-chip-x"
-                  aria-label={`移除引用 ${file}`}
-                  onClick={() => setRefs((prev) => prev.filter((f) => f !== file))}
-                >
-                  ×
-                </button>
-              </span>
-            ))}
-            <button className="ref-clear" onClick={() => setRefs([])}>
-              清空引用
-            </button>
-          </div>
-        )}
       </div>
     </section>
   )
@@ -708,6 +695,47 @@ const MessageBubble = memo(function MessageBubble({ item }: { item: ChatItem }):
     </div>
   )
 })
+
+/**
+ * 已挂上的引用文件，横排成一行胶囊。
+ *
+ * 为什么是「输入框上方 + 工具条下方」两个位置都渲染同一个组件：
+ * 输入框上面那份在长对话里会被滚出视野，而工具条下面那份始终可见。
+ * 两边的内容与行为必须完全一致 —— 所以是同一个组件，不是两份 JSX。
+ *
+ * 点名字在编辑器里打开、点 × 移除。用 title 放完整路径：
+ * 胶囊上只显示文件名（路径太长会把整行挤爆）。
+ */
+function RefRow({
+  refs,
+  onOpen,
+  onRemove,
+  onClear
+}: {
+  refs: string[]
+  onOpen: (file: string) => void
+  onRemove: (file: string) => void
+  onClear: () => void
+}): JSX.Element | null {
+  if (refs.length === 0) return null
+  return (
+    <div className="ref-row">
+      {refs.map((file) => (
+        <span key={file} className="ref-chip" title={file}>
+          <button className="ref-chip-name" title={`在编辑器里打开 ${file}`} onClick={() => onOpen(file)}>
+            {baseName(file)}
+          </button>
+          <button className="ref-chip-x" aria-label={`移除引用 ${file}`} onClick={() => onRemove(file)}>
+            ×
+          </button>
+        </span>
+      ))}
+      <button className="ref-clear" onClick={onClear}>
+        清空引用
+      </button>
+    </div>
+  )
+}
 
 /**
  * 工具条上的一个小按钮。
