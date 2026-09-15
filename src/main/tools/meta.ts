@@ -15,6 +15,8 @@ export const CROSS_OS_TOOLS: ToolName[] = [
   'editFile',
   'multiEdit',
   'listDir',
+  'glob',
+  'grep',
   'undoSnapshot'
 ]
 
@@ -45,6 +47,8 @@ export const TOOL_REQUIREMENTS: Record<ToolName, ToolRequirement> = {
   editFile: 'none',
   multiEdit: 'none',
   listDir: 'none',
+  glob: 'none',
+  grep: 'none',
   undoSnapshot: 'none',
   runCommand: 'commandExec',
   jobRun: 'backgroundJobs',
@@ -58,6 +62,8 @@ export const TOOL_LABELS: Record<ToolName, string> = {
   editFile: '替换一处',
   multiEdit: '替换多处',
   listDir: '列出目录',
+  glob: '查找文件',
+  grep: '搜索内容',
   undoSnapshot: '撤销修改',
   runCommand: '执行命令',
   jobRun: '后台任务',
@@ -178,6 +184,50 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
           depth: { type: 'integer', description: '递归层数，默认 1，最大 3' }
         },
         required: ['path']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'glob',
+      description:
+        '按文件名模式查找工作区里的文件，返回相对路径列表。' +
+        '支持 `*`（不跨目录）、`?`（单个字符）、`**`（跨任意层级）与 `[abc]` 字符集；' +
+        '**不支持** `{a,b}` 大括号展开，需要时拆成两次调用。' +
+        '模式里不含斜杠时按文件名匹配（`*.html` 等价于 `**/*.html`）。' +
+        '想知道「项目里有哪些文件」时先用它，比 listDir 一层层翻快得多。',
+      parameters: {
+        type: 'object',
+        properties: {
+          pattern: {
+            type: 'string',
+            description: '文件名模式，例如 **/*.html 或 *.py 或 src/**/*.js'
+          },
+          path: { type: 'string', description: '搜索起点目录，默认工作区根目录' }
+        },
+        required: ['pattern']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'grep',
+      description:
+        '在工作区的文件内容里搜索正则表达式，返回「文件 + 行号 + 该行内容」。' +
+        '找「这个变量在哪定义」「哪里用到了这个函数」用它，不要用 listDir 逐个文件猜。' +
+        '能配 glob 参数限定文件类型（如 glob="*.py"）。二进制文件会自动跳过，' +
+        '结果过多时会截断并明确告知 —— 那时请缩小 path 或加 glob 过滤。',
+      parameters: {
+        type: 'object',
+        properties: {
+          pattern: { type: 'string', description: '要搜索的正则表达式' },
+          path: { type: 'string', description: '搜索起点目录，默认工作区根目录' },
+          glob: { type: 'string', description: '只在匹配这个模式的文件里搜，例如 *.js' },
+          ignoreCase: { type: 'boolean', description: 'true 时忽略大小写，默认 false' }
+        },
+        required: ['pattern']
       }
     }
   },

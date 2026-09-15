@@ -330,6 +330,8 @@ const STUB_FILE_TOOLS: ToolName[] = [
   'editFile',
   'multiEdit',
   'listDir',
+  'glob',
+  'grep',
   'undoSnapshot'
 ]
 
@@ -345,6 +347,8 @@ const STUB_TOOL_LABELS: Record<ToolName, string> = {
   editFile: '替换一处',
   multiEdit: '替换多处',
   listDir: '列出目录',
+  glob: '查找文件',
+  grep: '搜索内容',
   undoSnapshot: '撤销修改',
   runCommand: '执行命令',
   jobRun: '后台任务',

@@ -332,6 +332,8 @@ export type ToolName =
   | 'editFile'
   | 'multiEdit'
   | 'listDir'
+  | 'glob'
+  | 'grep'
   | 'undoSnapshot'
   | 'runCommand'
   | 'jobRun'

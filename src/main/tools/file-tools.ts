@@ -4,6 +4,7 @@ import path from 'node:path'
 import { assertInsideRoot } from '../ipc/workspace'
 import { logger } from '../logger'
 import { markToolWrite } from '../watcher'
+import { globTool, grepTool } from './search-tools'
 import { recordSnapshot, undoSnapshot } from './snapshot'
 
 /**
@@ -357,5 +358,8 @@ export const FILE_TOOL_HANDLERS: Record<string, (args: never) => Promise<string>
   editFile: editFileTool as (args: never) => Promise<string>,
   multiEdit: multiEditTool as (args: never) => Promise<string>,
   listDir: listDirTool as (args: never) => Promise<string>,
+  // 搜索类实作在 search-tools.ts，但要合并进这张表 —— 调度层只认这一份
+  glob: globTool as (args: never) => Promise<string>,
+  grep: grepTool as (args: never) => Promise<string>,
   undoSnapshot: undoSnapshotTool as (args: never) => Promise<string>
 }
