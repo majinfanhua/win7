@@ -1,16 +1,26 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AppConfig } from '@shared/types'
+import { SPLIT_MAX, SPLIT_MIN } from '@shared/types'
 import AiPanel, { type AiPanelHandle } from './components/AiPanel'
+import DoctorDialog from './components/DoctorDialog'
 import SettingsPage from './components/SettingsPage'
 import Sidebar from './components/Sidebar'
 import EditorPane from './components/EditorPane'
+import ExplorerPanel from './components/file-tree/ExplorerPanel'
+import LogDrawer from './components/LogDrawer'
 import { useAppStore } from './store/useAppStore'
 import { useIsMobile } from './hooks/useMedia'
 import { useSplitter } from './hooks/useSplitter'
 import { applyTheme, readTheme, type Theme } from './theme'
 
-/** 当前只有两个视图。以后加文件树 / 编辑器时，这里换成路由表即可 */
-type View = 'chat' | 'settings'
+/**
+ * 内容区的视图。
+ *
+ * `explorer` 是「资源管理器」整页视图：与设置页同级，占满内容区，
+ * 而不是在 .stage 里再加一栏 —— 那个布局用 `--split` 做宽度分割，
+ * DOM 顺序「编辑器 → 分割条 → 对话」是踩过坑的契约，加栏会连锁破坏它。
+ */
+type View = 'chat' | 'settings' | 'explorer'
 
 /**
  * 顶栏显示的模型名。
@@ -60,6 +70,17 @@ export default function App(): JSX.Element {
   const [theme, setTheme] = useState<Theme>(() => readTheme())
   const [navCollapsed, setNavCollapsed] = useState(false)
   /**
+   * 环境体检弹层。
+   *
+   * DoctorDialog 与主进程的 buildDoctorReport()（12 项检查：VC++ 运行库 /
+   * UCRT / D3D11 / 路径字符集…）早就写好了，但菜单里的「帮助 → 运行环境体检」
+   * 一直没人接 —— 点了什么都不会发生。Win7 上最常见的启动失败恰好就是
+   * 缺 VC++ 运行库，这份报告是学生唯一能自助定位的途径，所以必须接上。
+   */
+  const [doctorOpen, setDoctorOpen] = useState(false)
+  /** 日志抽屉。主进程 pushLog 的内容以前没有任何地方显示（见 LogDrawer 注释） */
+  const [logsOpen, setLogsOpen] = useState(false)
+  /**
    * 对话区占中间栏的比例（0~1）。
    *
    * 存在 store 里而不是组件 state：它要跟着配置落盘（重启恢复上次拖到的位置），
@@ -88,10 +109,17 @@ export default function App(): JSX.Element {
     containerSize: stageWidth,
     value: split,
     onChange: setSplit,
-    // 编辑器最窄 28%（再窄 Monaco 的代码就折行折得没法看），
-    // 对话最窄 22%（低于这个宽度消息气泡会挤成一条）
-    min: 0.28,
-    max: 0.78
+    /*
+     * 上下限直接取共享常量，不写字面量。
+     *
+     * 界面与「落盘时夹取」用的必须是同一组值：以前这里是 0.28/0.78，
+     * 而 shared/types 的 SPLIT_MIN/MAX 是 0.2/0.9 —— 拖到 0.25 时
+     * 当次会话按越界处理、重启后又被原样读回来，同一次拖动两种表现。
+     * 语义：编辑器最窄 28%（再窄 Monaco 折行折得没法看），
+     * 对话最窄 22%（低于这个宽度消息气泡会挤成一条）。
+     */
+    min: SPLIT_MIN,
+    max: SPLIT_MAX
   })
 
   useEffect(() => {
@@ -129,6 +157,16 @@ export default function App(): JSX.Element {
 
   const openSettings = useCallback(() => setView('settings'), [])
   const backToChat = useCallback(() => setView('chat'), [])
+  /**
+   * 顶栏「资源管理器」按钮。
+   *
+   * 再点一次回到对话（当成开关），而不是切到别的页 ——
+   * 用户点它时的意图基本都是「看一眼文件」，看完要回到代码那儿。
+   */
+  const toggleExplorer = useCallback(
+    () => setView((v) => (v === 'explorer' ? 'chat' : 'explorer')),
+    []
+  )
 
   const onNewSession = useCallback(() => {
     startNewSession()
@@ -141,6 +179,8 @@ export default function App(): JSX.Element {
    *
    * 以前整条 onMenu 都没人接 —— 菜单里的「设置…」「打开日志目录」和 Ctrl+, 都是摆设。
    * new-session 是新加的，对应左侧的「新对话」。
+   * doctor / about / show-logs 是后来补齐的：菜单里原本就有这几项，
+   * 但 onMenu 不处理就等于点了没反应（比菜单里没有还糟）。
    */
   useEffect(() => {
     return window.api.onMenu((action) => {
@@ -148,6 +188,16 @@ export default function App(): JSX.Element {
         setView('settings')
       } else if (action === 'open-logs') {
         void window.api.openLogs()
+      } else if (action === 'show-logs') {
+        // 「查看日志」是应用内的抽屉，「打开日志目录」是交系统文件管理器 ——
+        // 两个不同的意图，不能合成一个
+        setLogsOpen(true)
+      } else if (action === 'doctor') {
+        setDoctorOpen(true)
+      } else if (action === 'about') {
+        // 「关于」= 设置页的关于分栏。设置页目前固定从 ai 分栏进，
+        // 这里退而求其次打开设置页，比什么都不做要好
+        setView('settings')
       } else if (action === 'undo-ai') {
         void useAppStore.getState().undoLast()
       } else if (action === 'new-session') {
@@ -156,14 +206,25 @@ export default function App(): JSX.Element {
     })
   }, [onNewSession])
 
-  // Esc 退出设置页；对话区的输入框自己有 Esc 处理，不冲突（它 stopPropagation）
+  // Esc 退出设置页 / 资源管理器 / 弹层；对话区的输入框与弹层自己有 Esc 处理，
+  // 不冲突（它们都会 stopPropagation）
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape' && view === 'settings') setView('chat')
+      if (e.key !== 'Escape') return
+      // 弹层优先：开着体检或日志时，Esc 先关它们，不要顺手把设置页也退了
+      if (doctorOpen) {
+        setDoctorOpen(false)
+        return
+      }
+      if (logsOpen) {
+        setLogsOpen(false)
+        return
+      }
+      if (view === 'settings' || view === 'explorer') setView('chat')
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [view])
+  }, [view, doctorOpen, logsOpen])
 
   /**
    * 磁盘上的文件变了（AI 工具写的、或外部程序改的）→ 编辑器自动重载。
@@ -179,6 +240,20 @@ export default function App(): JSX.Element {
   }, [])
 
   /**
+   * 主进程的日志 → store 的 logs → 日志抽屉。
+   *
+   * 以前这条链是断的：主进程推 evtLog，但渲染层从来没订阅过。
+   * 后果不只是少了调试信息 —— `handleFileChanged` 在「AI 改了文件但编辑器里
+   * 有未保存改动」时唯一的动作就是 pushLog 一条 warn，那条 warn 没人显示，
+   * 学生看到的是「什么都没发生」。所以这个订阅是那条安全警告的通道。
+   */
+  useEffect(() => {
+    return window.api.onLog((line) => {
+      useAppStore.getState().pushLog(line)
+    })
+  }, [])
+
+  /**
    * 关窗前把编辑器状态与当前会话立刻落盘。
    *
    * 两者都有防抖，直接关窗会丢掉最后几百毫秒的操作 ——
@@ -186,17 +261,56 @@ export default function App(): JSX.Element {
    * 用 beforeunload 而不是组件卸载：卸载不保证一定会跑。
    */
   useEffect(() => {
-    const onUnload = (): void => {
+    const onUnload = (event: BeforeUnloadEvent): void => {
       const store = useAppStore.getState()
       store.persistSession()
       void store.flushEditorSession()
+
+      /*
+       * 还有未保存的改动时拦一次关窗。
+       *
+       * 这是 dirty 守卫的最后一道：前两道守的是「关标签」和「换项目」，
+       * 但学生更常见的动作是直接点右上角 ×。少了这一道，
+       * 「改了半小时没按 Ctrl+S 就关掉」等于全部白写。
+       *
+       * 用浏览器原生的 beforeunload 而不是自己弹框：Electron 里
+       * preventDefault() 会走 Chromium 自己的「离开此网站？」对话框，
+       * 它由浏览器进程弹出，不受渲染进程卡死影响 —— 而「渲染进程正忙」
+       * 恰好是最需要这道守卫的时候。
+       *
+       * 不在这里做「自动保存」：那会把学生做到一半的代码写进磁盘，
+       * 而磁盘上的版本可能是他有意保留的（比如配合 AI 撤销）。
+       */
+      if (store.tabs.some((tab) => tab.dirty)) {
+        event.preventDefault()
+        // 老 Chromium 需要 returnValue 才认；Chromium 108 已改用 preventDefault，
+        // 但两个都写上不冲突
+        event.returnValue = ''
+      }
     }
     window.addEventListener('beforeunload', onUnload)
     return () => window.removeEventListener('beforeunload', onUnload)
   }, [])
 
+  /**
+   * Ctrl+Shift+E 切换资源管理器。
+   *
+   * 与 VS Code 一致，教师从别的编辑器迁过来不用重新学。
+   * 只拦这一个组合：Ctrl+E 在 Monaco 里是「查找」，绝不能抢。
+   */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (!e.ctrlKey || !e.shiftKey || e.key.toLowerCase() !== 'e') return
+      e.preventDefault()
+      toggleExplorer()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [toggleExplorer])
+
   const nextTheme: Theme = theme === 'dark' ? 'light' : 'dark'
   const inSettings = view === 'settings'
+  const inExplorer = view === 'explorer'
 
   return (
     <div className="app" data-app-ready={ready ? '1' : '0'}>
@@ -243,12 +357,37 @@ export default function App(): JSX.Element {
 
             <span className="spacer" />
 
+            {/*
+              资源管理器（整页视图）。
+              左栏里那份文件树窄到看不全长文件名，这里给一个占满内容区的形态，
+              两边共用同一份数据与同一套菜单，不会出现「这边能建、那边不能」。
+            */}
+            <button
+              className={`bar-btn${view === 'explorer' ? ' active' : ''}`}
+              aria-label="资源管理器"
+              aria-current={view === 'explorer' ? 'page' : undefined}
+              title="资源管理器（Ctrl+Shift+E）"
+              onClick={toggleExplorer}
+            >
+              <ExplorerIcon />
+            </button>
+
             <button
               className="bar-btn"
               title={nextTheme === 'dark' ? '切换到深色' : '切换到浅色'}
               onClick={() => setTheme(nextTheme)}
             >
               {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
+            </button>
+
+            <button
+              className={`bar-btn${logsOpen ? ' active' : ''}`}
+              aria-label="查看日志"
+              aria-pressed={logsOpen}
+              title="查看日志（最近的主进程与界面消息）"
+              onClick={() => setLogsOpen((v) => !v)}
+            >
+              <ListIcon />
             </button>
 
             <button
@@ -278,7 +417,7 @@ export default function App(): JSX.Element {
 
           <main
             ref={stageRef}
-            className={`stage${inSettings ? ' stage-page' : ''}`}
+            className={`stage${inSettings || inExplorer ? ' stage-page' : ''}`}
             /*
               两侧宽度用 calc 从 --split 算出来。
               拖动时 useSplitter 直接改 documentElement 上的 --split，
@@ -286,12 +425,19 @@ export default function App(): JSX.Element {
               松手后 React 状态更新，把 --split 清掉，回落到下面这个默认值。
             */
             style={
-              inSettings
+              inSettings || inExplorer
                 ? undefined
                 : ({ '--split': String(split) } as React.CSSProperties)
             }
           >
-            {!inSettings && (
+            {/*
+              资源管理器整页视图。
+              与设置页一样走 stage-page（单栏全宽），
+              完全不参与 .stage 的 --split 宽度分割 —— 那条布局约束一行都不用碰。
+            */}
+            {inExplorer && <ExplorerPanel />}
+
+            {!inSettings && !inExplorer && (
               <div className="editor-dock">
                 <EditorPane />
               </div>
@@ -305,7 +451,7 @@ export default function App(): JSX.Element {
               因为前面两栏的宽度加起来已经占满了。
               设置页是全宽单栏，这时不要；对话栏收起时也没有可调的对象。
             */}
-            {!inSettings && chatOpen && (
+            {!inSettings && !inExplorer && chatOpen && (
               <div
                 className={`splitter is-vertical${splitter.dragging ? ' is-dragging' : ''}`}
                 role="separator"
@@ -331,7 +477,7 @@ export default function App(): JSX.Element {
               注意：即使在设置页，这个 div 也要留在 DOM 里（自检会查 .composer 是否还在）。
             */}
             <div
-              className={`view${inSettings ? '' : ' is-active'}`}
+              className={`view${inSettings || inExplorer ? '' : ' is-active'}`}
               data-chat-closed={chatOpen ? undefined : '1'}
             >
               <AiPanel ref={aiRef} onOpenSettings={openSettings} />
@@ -350,8 +496,19 @@ export default function App(): JSX.Element {
                 </div>
               ))}
           </main>
+
+          {/* 底部日志抽屉。挂在这里而不是 .stage 内部：它是一条横贯整个
+              内容区的带子，不该参与 --split 的左右分栏 */}
+          {logsOpen && <LogDrawer onClose={() => setLogsOpen(false)} />}
         </div>
       </div>
+
+      {/*
+        体检弹层与日志抽屉是「覆盖层」，放在 .shell 外面 ——
+        它们是相对视口定位的 fixed 层，嵌在布局里会被祖先的
+        overflow / transform 改变定位基准
+      */}
+      {doctorOpen && <DoctorDialog onClose={() => setDoctorOpen(false)} />}
     </div>
   )
 }
@@ -420,11 +577,34 @@ function OpenFolderIcon(): JSX.Element {
   )
 }
 
+function ExplorerIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+      <g fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round">
+        <path d="M3.5 6.5A1.5 1.5 0 0 1 5 5h4l1.6 2h8.4A1.5 1.5 0 0 1 20.5 8.5v9A1.5 1.5 0 0 1 19 19H5a1.5 1.5 0 0 1-1.5-1.5v-11Z" />
+        <path d="M3.8 11h16.4" strokeLinecap="round" opacity=".6" />
+        <path d="M8 14.5h8M8 17h5" strokeLinecap="round" opacity=".6" />
+      </g>
+    </svg>
+  )
+}
+
 function PanelIcon(): JSX.Element {
   return (
     <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
       <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
       <path d="M14.5 4.5v15" stroke="currentColor" strokeWidth="1.5" />
+    </svg>
+  )
+}
+
+/** 日志抽屉：几行左对齐的文本线 */
+function ListIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+      <g stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+        <path d="M4 7h16M4 12h16M4 17h10" />
+      </g>
     </svg>
   )
 }

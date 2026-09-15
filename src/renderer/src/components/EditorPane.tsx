@@ -20,7 +20,7 @@ export default function EditorPane(): JSX.Element {
   const tabs = useAppStore((s) => s.tabs)
   const activePath = useAppStore((s) => s.activePath)
   const setActive = useAppStore((s) => s.setActive)
-  const closeTab = useAppStore((s) => s.closeTab)
+  const closeTabChecked = useAppStore((s) => s.closeTabChecked)
   const setContent = useAppStore((s) => s.setContent)
   const setCursor = useAppStore((s) => s.setCursor)
   const saveActive = useAppStore((s) => s.saveActive)
@@ -165,7 +165,9 @@ export default function EditorPane(): JSX.Element {
               aria-label={`关闭 ${tab.name}`}
               onClick={(e) => {
                 e.stopPropagation()
-                closeTab(tab.path)
+                // 走带守卫的那个：有未保存改动时先问一句，
+                // 而不是直接把标签连同改动一起丢掉
+                void closeTabChecked(tab.path)
               }}
             >
               ×

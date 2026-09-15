@@ -233,6 +233,71 @@ window.__SELFTEST__ = async () => {
   }
 
   /*
+   * 日志抽屉与体检弹层。
+   *
+   * 这两块以前是「主进程侧写好了、渲染层完全没接」的状态：
+   *   - DoctorDialog 与 buildDoctorReport()（12 项检查）都实现了，
+   *     但菜单里的「帮助 → 运行环境体检」没人处理，点了什么都不会发生
+   *   - 主进程 pushLog 一路写进 store.logs，而渲染层从来没渲染过它 ——
+   *     于是 handleFileChanged 在「AI 改了文件但编辑器里有未保存改动」时
+   *     唯一会做的事（pushLog 一条 warn）学生根本看不到
+   *
+   * 这两条都不是「少个便利功能」，而是让一条安全机制静默失效，
+   * 所以必须有断言盯着。断言写法：点顶栏按钮 → 等元素出现 → 关掉。
+   */
+  try {
+    const logsBtn = document.querySelector('.topbar [aria-label="查看日志"]') as HTMLElement | null
+    checks.logsButtonFound = Boolean(logsBtn)
+    logsBtn?.click()
+
+    checks.logDrawerOpened = await waitFor(
+      () => Boolean(document.querySelector('.log-drawer')),
+      5_000
+    )
+    // 抽屉里必须真的有一个可滚动的日志容器，否则开了也是空白
+    checks.logListFound = Boolean(document.querySelector('.log-drawer .logs'))
+
+    const logsClose = document.querySelector(
+      '.log-drawer [aria-label="关闭日志"]'
+    ) as HTMLElement | null
+    checks.logsCloseFound = Boolean(logsClose)
+    logsClose?.click()
+    checks.logDrawerClosed = await waitFor(
+      () => !document.querySelector('.log-drawer'),
+      5_000
+    )
+
+    checks.logDrawerOk =
+      checks.logsButtonFound &&
+      checks.logDrawerOpened &&
+      checks.logListFound &&
+      checks.logsCloseFound &&
+      checks.logDrawerClosed
+  } catch (err) {
+    checks.logDrawerOk = false
+    checks.logDrawerError = String(err)
+  }
+
+  /*
+   * 分割条的上下限必须与落盘夹取用同一组常量。
+   *
+   * 这两处曾经不一致（界面 0.28~0.78、shared/types 0.2~0.9），
+   * 表现为「同一次拖动在当次会话与重启后表现不同」。现在两边都读
+   * SPLIT_MIN / SPLIT_MAX，断言 aria 上暴露的值与常量一致即可钉住它。
+   */
+  try {
+    const divider = document.querySelector('.splitter') as HTMLElement | null
+    checks.splitterAriaMin = divider?.getAttribute('aria-valuemin') || ''
+    checks.splitterAriaMax = divider?.getAttribute('aria-valuemax') || ''
+    // SPLIT_MIN / SPLIT_MAX 是 0.28 / 0.78，界面上按百分比取整显示
+    checks.splitterRangeConsistent =
+      checks.splitterAriaMin === '28' && checks.splitterAriaMax === '78'
+  } catch (err) {
+    checks.splitterRangeConsistent = false
+    checks.splitterRangeError = String(err)
+  }
+
+  /*
    * 布局骨架：左侧栏（内含文件树）+ 编辑器在左 / 对话在右 + 竖向分割条。
    *
    * 这里必须量实际几何，不能只查元素存在。
@@ -492,6 +557,8 @@ window.__SELFTEST__ = async () => {
     capabilityOk: Boolean(checks.capabilityOk),
     capabilitySettingsOk: Boolean(checks.capabilitySettingsOk),
     settingsNavOk: Boolean(checks.settingsNavOk),
+    logDrawerOk: Boolean(checks.logDrawerOk),
+    splitterRangeConsistent: Boolean(checks.splitterRangeConsistent),
     layoutOk: Boolean(checks.layoutOk),
     welcomeOk: Boolean(checks.welcomeOk),
     newLayoutOk: Boolean(checks.newLayoutOk),

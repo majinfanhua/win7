@@ -181,6 +181,10 @@ function buildMenu(): void {
       label: '帮助',
       submenu: [
         { label: '运行环境体检', click: () => sendMenu('doctor') },
+        // 「查看日志」与「打开日志目录」是两件事，不能只留一个：
+        // 前者是应用内的抽屉（能直接看到 AI 改文件的冲突警告），
+        // 后者是把系统文件管理器指到 logs 目录（要看历史日志时用）
+        { label: '查看日志', accelerator: 'CmdOrCtrl+Shift+L', click: () => sendMenu('show-logs') },
         { label: '打开日志目录', click: () => sendMenu('open-logs') },
         { type: 'separator' },
         { label: '关于', click: () => sendMenu('about') }
