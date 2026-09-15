@@ -11,14 +11,20 @@ AI 不只是聊天：它能读写工作区里的文件，在 Win10/11 上还能�
 
 1. **Win7 是硬目标**：Chromium 锁 108、Node 锁 16。`npm run check:node16` 会扫源码里用到的 Node API 是否都支持。
 2. **不能上 Electron 23+**：那版起 Chromium 110，Win7 跑不起来。
-3. **单文件不超 800 行**。⚠️ **当前已超标，需要拆**：
-   `src/renderer/src/store/useAppStore.ts` 现在是 1100 行（加拖拽移动、dirty 守卫、
-   目录缓存失效这三块时又长了）。它是唯一一个超标文件，**下次动它之前先拆**。
-   建议按「会话 / 文件树 / 编辑器标签」切成三个 slice，因为它们之间几乎不互相调用。
-   已经拆过、**别再合回去**的：
+   **打包只走 GitHub Actions**（本地 `npm run dist:win` 会被 `scripts/guard-ci.mjs` 拦住）——
+   交叉打包的产物与 CI 不一致，测了没意义。本地只做三件静态检查。
+3. **单文件不超 800 行**。当前最长的是 `store/tree-slice.ts`（407 行），已在红线内。
+   `useAppStore.ts` 曾是 1100 行，已拆成三个 slice（session / tree / editor）——
+   **别再合回去**：改文件树的移动逻辑不该碰到会话逻辑，这是拆它的全部理由。
+   依赖方向是单向的 `editor → tree → session`，反向调用会让循环 import 爆炸。
+   已经拆过、同样**别再合回去**的：
    - `store/explorer-helpers.ts`：文件树/排序/标签恢复的纯函数
+   - `store/dialogs.ts`：`askUnsaved`（tree 与 editor 都要用，避免互相 import）
    - `dev-stub-fs.ts`：浏览器预览的内存文件系统
    - `components/file-tree/`：文件树的行为（`useFileTreeController`）与外壳分开
+   - `main/shell.ts`：解释器定位与临时脚本（capabilities 与 exec 共用）
+   - `main/tools/search-tools.ts`：Glob / Grep
+   - `main/runtimes.ts`：python / node 等运行时探测
    注意 `parentOf` 已经从 useAppStore 删掉、统一用 `explorer-helpers` 的
    `parentDirOf`（import 时 as 重命名成 parentOf）—— 曾经两份实现并存过。
    样式已按界面区块拆成 `styles/` 下的十二份，最长的是 `sidebar.css`（620 行）——
@@ -75,7 +81,7 @@ curl -s https://api.github.com/repos/majinfanhua/win7/check-runs/<job_id>/annota
 
 | 层 | 位置 | 说明 |
 |---|---|---|
-| 主进程 | src/main/ | 窗口、IPC、文件监视、工具执行、快照 |
+| 主进程 | src/main/ | 窗口、IPC、文件监视、工具执行、快照、解释器/运行时探测 |
 | 预加载 | src/preload/index.ts | 唯一的渲染层 API 出口（无 nodeIntegration） |
 | 渲染层 | src/renderer/src/ | React 界面 |
 | 共享契约 | src/shared/ | 主/渲染两侧共用的类型与 IPC 通道常量 |
@@ -91,7 +97,13 @@ config.capability（人愿意放开到哪）
    =  发给模型的工具表（tools/meta.ts 的 TOOL_SCHEMAS 过滤后）
 ```
 
-结果是：**Win7 上 6 个工具，Win10/11 上 10 个**。同一份包、同一套代码，差的是探测结果。
+结果是：**Win7 与 Win10/11 现在都是 12 个工具**（文件 8 + 命令 4）。
+同一份包、同一套代码，差的是探测结果。
+
+⚠️ 这里改过一次判断：以前 Win7 分支**直接写死** `commandExec = false`，
+理由是「只有 cmd.exe，PowerShell 要装 WMF」—— 那个理由站不住，
+cmd.exe 在所有 Windows 上都有，python/node 装好会写进 PATH。
+代价是 Win7 白白少掉 4 个工具。现在统一「探测到 cmd 就启用」。
 
 | 文件 | 干什么 |
 |---|---|
@@ -106,6 +118,33 @@ config.capability（人愿意放开到哪）
 
 新增一个工具要同步改五处（主进程实作 / `IMPLEMENTED_TOOLS` / `TOOL_SCHEMAS` / 实作表 / 自检），
 漏一处就静默失败。
+
+### 其他本轮新增的模块
+
+| 文件 | 干什么 |
+|---|---|
+| `main/shell.ts` | 解释器定位（cmd/powershell）、临时 .cmd 脚本、启动清扫 |
+| `main/tools/search-tools.ts` | Glob / Grep 的实现（自写 glob 匹配，不引库）|
+| `main/runtimes.ts` | 探测 python / node / git 等，结果进 system prompt |
+| `renderer/src/image-input.ts` | 图片压缩（canvas → JPEG，长边 1568）|
+| `renderer/src/snippets.ts` | `!` / `css` / `js` 等触发词片段，与 file-templates 共用数据 |
+| `renderer/src/components/PreviewPane.tsx` | 内嵌 HTML 预览（iframe + 已有静态服务）|
+| `renderer/src/components/LogDrawer.tsx` | 底部日志抽屉 |
+
+**搜索工具的两条约束**（改之前先看 `search-tools.ts` 的头注释）：
+不引 `fast-glob` / `minimatch`（依赖链长、启动开销），
+不引 ripgrep（每平台一个 exe，Win7 杀软误报率高）。
+自己实现的 `compileGlob` 支持 `*` `?` `**` `[abc]`，
+**不支持 `{a,b}` 时明确报错而不是静默当字面量**。
+
+**预览面板的布局契约**（最容易踩的坑）：`.stage` 里编辑器是 `--split`、
+对话是 `(1 - --split)`，两者**加起来正好 100%**。预览作为第三栏
+**必须从 `--split` 里再切一刀**（`--preview-share`），否则总宽超过 100% →
+横向滚动条 + 对话栏被挤出可视区，而且不报错。share 还要夹住：
+按「对话最多让出一半」来夹，不然 split 拉到上限时对话只剩 15%。
+
+**图片输入只在最后这一轮带图**：历史消息只发文本。base64 有几 MB，
+每轮重发会让同一张图被计费十几次，部分中转站还会因请求体过大直接 413。
 
 ### 样式（`src/renderer/src/styles/`）
 
