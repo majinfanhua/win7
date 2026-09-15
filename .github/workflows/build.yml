@@ -173,26 +173,35 @@ jobs:
           if ($b.checks.capabilityOverridden -ne $true) { throw '--capability-profile=win7 未生效（overridden 应为 true）' }
           if ($b.checks.capabilityProfile -notlike '*win7*') { throw "Win7 档的 profile 字符串异常：$($b.checks.capabilityProfile)" }
 
-          # 2) Win7 不启用命令执行（这是降级分支的核心结论）
-          if ($b.checks.capabilityDetected.commandExec -ne $false) { throw 'Win7 档不应启用命令执行' }
-          if ($a.checks.capabilityDetected.commandExec -ne $true) { Write-Warning '默认档未探测到命令执行能力，runner 环境可能变了' }
+          # 2) 命令执行能力现在**只看探测结果，不按系统等级一刀切**。
+          #
+          # 这里曾经断言「Win7 档不应启用命令执行」，理由是「Win7 裸机只有 cmd.exe」——
+          # 那个理由站不住：cmd.exe 在所有 Windows 上都有，Win7 完全能跑 python / node。
+          # 旧逻辑根本没查解释器在不在，直接把 Win7 的 4 个工具砍掉了。
+          #
+          # 现在 Win7 / Win10 走同一条路径：探测到 cmd.exe 就启用。
+          # 所以断言改成「两档的能力必须一致」——如果哪天又有人给 Win7 加回
+          # 特殊分支，这条会立刻红。
+          if ($a.checks.capabilityDetected.commandExec -ne $b.checks.capabilityDetected.commandExec) {
+            throw "Win7 档与默认档的命令能力不一致：win7=$($b.checks.capabilityDetected.commandExec) default=$($a.checks.capabilityDetected.commandExec)"
+          }
+          if ($a.checks.capabilityDetected.commandExec -ne $true) {
+            throw 'runner 上未探测到命令执行能力 —— cmd.exe 应当总是存在，探测逻辑可能坏了'
+          }
 
-          # 2b) 命令类工具必须真的跟着探测走。
-          # 这四个工具已经实现了，所以“Win7 档里不该出现”不再是废话 ——
-          # 门控写反了它们会真的漏到 Win7 上，而 Win7 上没有 powershell.exe，
-          # 模型每调一次就白烧一轮 token。
+          # 2b) 两档的工具集必须完全相同（命令类工具不再按系统区分）
+          $onlyB = @($b.checks.capabilityEffective | Where-Object { $a.checks.capabilityEffective -notcontains $_ })
+          $onlyA = @($a.checks.capabilityEffective | Where-Object { $b.checks.capabilityEffective -notcontains $_ })
+          if ($onlyB.Count -gt 0) { throw "Win7 档多出了默认档没有的工具：$($onlyB -join ', ')" }
+          if ($onlyA.Count -gt 0) { throw "Win7 档缺少了默认档有的工具：$($onlyA -join ', ')" }
+
           foreach ($t in @('runCommand', 'jobRun', 'jobPoll', 'jobKill')) {
-            if ($b.checks.capabilityEffective -contains $t) { throw "Win7 档不应出现命令类工具 $t" }
-            if ($a.checks.capabilityEffective -notcontains $t) { Write-Warning "默认档未启用命令类工具 $t，与 runner 的探测结果不符" }
+            if ($b.checks.capabilityEffective -notcontains $t) {
+              throw "Win7 档应当启用命令类工具 $t（cmd.exe 存在就该启用）"
+            }
           }
 
-          # 3) 更窄的一档不能多出工具来
-          $extra = @($b.checks.capabilityEffective | Where-Object { $a.checks.capabilityEffective -notcontains $_ })
-          if ($extra.Count -gt 0) { throw "Win7 档多出了默认档没有的工具：$($extra -join ', ')" }
-          if ($b.checks.capabilityEffectiveCount -gt $a.checks.capabilityEffectiveCount) {
-            throw "Win7 档工具数 $($b.checks.capabilityEffectiveCount) 多于默认档 $($a.checks.capabilityEffectiveCount)"
-          }
-          Write-Host '✓ Win7 能力档降级分支正常'
+          Write-Host '✓ Win7 与默认档能力一致，命令类工具在 Win7 上也启用'
 
       - name: 启动自检（默认图形路径，仅记录不阻断）
         # 只用于观察默认路径在无 GPU 环境下的表现，不作为发布门禁

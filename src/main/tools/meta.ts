@@ -201,8 +201,10 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
     function: {
       name: 'runCommand',
       description:
-        '在项目目录里跑一段 PowerShell 脚本，等它结束后把输出给你。适合跑测试、构建、解释器这类几十秒内能完事的命令。' +
-        '几点必须知道：只支持 Windows 10/11（其他系统上调用会返回错误，那时请改用直接读写文件的方式）；' +
+        '在项目目录里跑一条 Windows 命令行（cmd）命令，等它结束后把输出给你。适合跑脚本、构建、解释器这类几十秒内能完事的命令。' +
+        '几点必须知道：' +
+        '**命令必须用英文写**（英文子命令、英文参数、ASCII 符号）—— 中文 Windows 的控制台对非 ASCII 字符的处理不统一，中文命令容易解析失败；' +
+        '要处理中文内容请写在脚本文件里（如 python 源码），再用英文命令跑那个文件；' +
         '命令**不能等待输入**，交互式程序会一直卡到超时，所以给 python / node 传参时要把脚本或文件路径一起给出；' +
         `预计超过 ${RUN_TIMEOUT_DEFAULT_MS / 1000} 秒的命令请改用 jobRun，不要用本工具硬等。`,
       parameters: {
@@ -210,7 +212,8 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
         properties: {
           command: {
             type: 'string',
-            description: '要执行的 PowerShell 脚本，例如 python hello.py 或 npm test'
+            description:
+              '要执行的命令，例如 python hello.py 或 npm test。必须用英文与 ASCII 符号，不要写中文'
           },
           cwd: { type: 'string', description: '工作目录，必须在项目内；默认项目根目录' },
           timeoutMs: {
@@ -229,11 +232,11 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
       description:
         '把一个耗时命令放到后台跑，立刻返回任务号。适合安装依赖、跑完整测试套、启动开发服务器这类不会马上结束的命令 —— ' +
         '用 runCommand 等它们会白白耗掉一轮对话。启动后用 jobPoll 查进度，不需要了就 jobKill。' +
-        '与 runCommand 一样，只支持 Windows 10/11，且命令不能等待输入。',
+        '与 runCommand 一样，命令必须用英文写，且不能等待输入。',
       parameters: {
         type: 'object',
         properties: {
-          command: { type: 'string', description: '要执行的 PowerShell 脚本' },
+          command: { type: 'string', description: '要执行的命令，必须用英文与 ASCII 符号' },
           cwd: { type: 'string', description: '工作目录，必须在项目内；默认项目根目录' }
         },
         required: ['command']

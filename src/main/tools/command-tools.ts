@@ -4,7 +4,7 @@ import { logger } from '../logger'
 import {
   clipForModel,
   normalizeTimeout,
-  runPowerShell,
+  runCommand,
   type ExecOutcome
 } from './exec'
 import { killJob, pollJob, startJob, type JobView } from './jobs'
@@ -87,7 +87,7 @@ async function runCommandTool(args: RunCommandArgs): Promise<string> {
   const timeoutMs = normalizeTimeout(args.timeoutMs)
   logger.info('tool', `runCommand（cwd=${cwd}，超时 ${timeoutMs}ms）: ${command.slice(0, 200)}`)
 
-  const outcome = await runPowerShell(command, { cwd, timeoutMs })
+  const outcome = await runCommand(command, { cwd, timeoutMs })
 
   return [
     `【执行命令】${command}`,

@@ -2,7 +2,7 @@ import type { CapabilityInfo, OsTier, ToolName, ToolRequirement } from '../share
 import { detectPlatform } from './platform-compat'
 import { getConfig } from './config'
 import { logger } from './logger'
-import { powershellPath } from './powershell'
+import { describeShell, shellAvailable } from './shell'
 import {
   ALL_TOOLS,
   CROSS_OS_TOOLS,
@@ -73,20 +73,24 @@ function probe(): Detection {
     ? `${label} · 已被 --capability-profile=${overrideTier} 覆盖`
     : label
 
-  if (tier === 'win10' || tier === 'win11') {
-    const ps = powershellPath()
-    if (ps) {
-      requirements.commandExec = true
-      requirements.backgroundJobs = true
-      notes.push(`可用命令解释器：${ps}`)
-    } else {
-      notes.push('未找到 powershell.exe，不启用命令执行')
-    }
-  } else if (tier === 'win7') {
-    // Win7 只有 cmd.exe；PowerShell 要装 WMF 升级才有 5.1，裸机是 2.0
-    notes.push('Windows 7 只有 cmd.exe（PowerShell 需装 WMF 升级），不启用命令执行')
-  } else if (tier === 'win8') {
-    notes.push('Windows 8/8.1 未列入测试矩阵，不启用命令执行')
+  /*
+   * 命令执行能力：**探测 cmd.exe，而不是按系统等级一刀切**。
+   *
+   * 这里曾经是 `if (tier === 'win10' || tier === 'win11')` 才去找解释器，
+   * 而 Win7 分支直接 `requirements.commandExec = false` ——
+   * **根本没查 powershell.exe 在不在**。那个判断是错的：
+   * cmd.exe 在所有 Windows 上都有，Win7 完全可以执行 python / node。
+   * 代价是 Win7 用户白白少掉 4 个工具（执行命令 + 后台任务三件套）。
+   *
+   * 现在统一走「探测到就用」，Win7 / Win10 / Win11 同一条路径。
+   * 非 Windows（开发机）仍然不可用 —— shell.ts 的 cmdPath() 会返回 null。
+   */
+  if (shellAvailable()) {
+    requirements.commandExec = true
+    requirements.backgroundJobs = true
+    notes.push(`可用命令解释器：${describeShell()}`)
+  } else if (process.platform === 'win32') {
+    notes.push('未找到 cmd.exe，不启用命令执行（环境异常）')
   } else {
     notes.push(`${platform.name} 不是 Windows，不启用命令执行`)
   }

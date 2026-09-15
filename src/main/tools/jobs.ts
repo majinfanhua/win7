@@ -1,5 +1,5 @@
 import { logger } from '../logger'
-import { startPowerShell, type ExecHandle, type ExecOutcome } from './exec'
+import { startCommand, type ExecHandle, type ExecOutcome } from './exec'
 import { JOB_MAX_MS, JOB_MAX_RUNNING } from './limits'
 
 /**
@@ -104,7 +104,7 @@ export function startJob(command: string, cwd: string): JobView {
   }
 
   const id = `job-${++seq}`
-  const handle = startPowerShell(command, { cwd, timeoutMs: JOB_MAX_MS })
+  const handle = startCommand(command, { cwd, timeoutMs: JOB_MAX_MS })
   const record: JobRecord = { id, command, cwd, startedAt: Date.now(), handle, outcome: null }
   jobs.set(id, record)
 

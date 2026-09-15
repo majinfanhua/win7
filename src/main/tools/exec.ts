@@ -1,25 +1,36 @@
 import { spawn } from 'node:child_process'
 import { StringDecoder } from 'node:string_decoder'
 import { logger } from '../logger'
-import { powershellPath } from '../powershell'
+import { cmdPath, writeScriptFile } from '../shell'
 import { RUN_TIMEOUT_DEFAULT_MS, RUN_TIMEOUT_MAX_MS } from './limits'
 
 /**
  * 命令执行的底层。
  *
- * 只干一件事：把一段 PowerShell 脚本跑起来，并把输出收干净。
+ * 只干一件事：把一段命令跑起来，并把输出收干净。
  * 工具层（command-tools.ts）与后台任务（jobs.ts）都从这里走 ——
  * 超时、进程树终止、输出编码、输出上限这四处每多写一遍就会多漏一处。
  *
- * 为什么跑的不是 bash：Win7 裸机只有 cmd.exe（PowerShell 要装 WMF 才有 5.1），
- * 真正的 bash 需要 WSL，而学生机不能假定有。所以语义就是「Windows 上的 PowerShell 脚本」，
- * 不假装它是 Bash。整组命令类工具也只在 Windows 10/11 上启用（见 src/main/capabilities.ts）。
+ * ## 跑的是什么
+ *
+ * **cmd.exe**，语义就是「Windows 命令行」，不假装它是 Bash。
+ *
+ * 为什么不是 PowerShell：cmd 在**所有** Windows 上都有，不需要任何假设。
+ * 一个学生装了 python / node，安装程序会把它们写进 PATH，
+ * `cmd` 里直接敲 `python hello.py` 就能跑 —— 不需要 PowerShell 那套
+ * `-EncodedCommand`。而 PowerShell 的版本差异（Win7 自带 2.0、
+ * 现代语法要 5.1）反而是个负担。详见 src/main/shell.ts 的注释。
+ *
+ * 因此整组命令类工具在所有 Windows 上启用（见 src/main/capabilities.ts），
+ * Win7 不再被砍掉这 4 个工具。
  */
 
 /**
  * 一条命令的长度上限。
- * CreateProcess 的命令行是 32767 字符，而 -EncodedCommand 是 base64（1.33 倍）+ 编码开销，
- * 这里留足余量；超长的脚本应该写成 .ps1 文件再执行。
+ *
+ * 命令是写进临时 .cmd 文件再执行的，所以不受 CreateProcess 的 32767 字符
+ * 限制；这里限的是「模型一次该塞多少东西进来」——超长的逻辑应该写成脚本文件，
+ * 而不是塞进一次工具调用。
  */
 const MAX_COMMAND_CHARS = 8_000
 
@@ -29,21 +40,6 @@ const MAX_OUTPUT_CHARS = 60_000
 /** 回灌给模型的文本上限：太长的输出既烧 token 也没人看 */
 const MODEL_TEXT_CHARS = 12_000
 const MODEL_HEAD_CHARS = 4_000
-
-/**
- * 每次执行前先跑的几行。
- *
- * 最关键的是 OutputEncoding：中文 Windows 的默认输出代码页是 936（GBK），
- * 而 Node 按 UTF-8 解字节，不切就会得到满屏乱码 —— 学生会以为命令跑错了。
- * 拿 try/catch 包住是因为没有真实控制台句柄时这句会抛异常，
- * 但那不影响命令本身，不能因此让整条命令失败。
- */
-const PREAMBLE = [
-  "try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }",
-  "$OutputEncoding = [System.Text.Encoding]::UTF8",
-  "$ErrorActionPreference = 'Continue'",
-  "$ProgressPreference = 'SilentlyContinue'"
-].join('\n')
 
 export interface ExecOutcome {
   /** 退出码；被超时或手动终止时为 null */
@@ -97,42 +93,38 @@ export function clipForModel(text: string): string {
  * 启动一条命令。不等待，调用方自己决定是立刻等结果（runCommand）
  * 还是先收着、后面再查（jobRun）。
  */
-export function startPowerShell(command: string, options: ExecOptions): ExecHandle {
+export function startCommand(command: string, options: ExecOptions): ExecHandle {
   const script = (command || '').trim()
   if (!script) throw new Error('command 不能为空')
   if (script.length > MAX_COMMAND_CHARS) {
     throw new Error(
-      `命令过长（${script.length} 字符，上限 ${MAX_COMMAND_CHARS}）。请把脚本先写到 .ps1 文件里，再执行那个文件。`
+      `命令过长（${script.length} 字符，上限 ${MAX_COMMAND_CHARS}）。` +
+        '请把脚本写到文件里（如 run.py / build.js），再执行那个文件。'
     )
   }
 
-  const ps = powershellPath()
-  if (!ps) {
+  const cmd = cmdPath()
+  if (!cmd) {
     throw new Error(
-      '本机没有可用的 powershell.exe，无法执行命令。' +
-        '（Windows 7 裸机只有 cmd.exe，PowerShell 需要装 WMF 升级；本项目在 Win7 上不启用命令执行。）'
+      '本机没有可用的 cmd.exe，无法执行命令。' +
+        '（命令执行只在 Windows 上启用；其他系统请改用直接读写文件的方式。）'
     )
   }
 
   /*
-   * 用 -EncodedCommand 传脚本，而不是 -Command。
+   * 命令写进临时 .cmd 文件再执行，而不是 `cmd /c "命令"`。
    *
-   * Node 对参数里引号的转义是 C 运行时那一套（\" 之类），PowerShell 有自己的一套解析规则，
-   * 引号、$、反引号混在一起时两边对不上，会出现「在终端里能跑、在这里跑不了」。
-   * base64（UTF-16LE）传参把解析层整个绕开，也不再受命令行长度与字符集影响。
+   * 三个坑一次避开：引号转义（Node 是 C 运行时那套、cmd 是另一套）、
+   * `%VAR%` 在解析阶段被提前展开、命令行 32767 字符上限。
+   * 详细理由写在 shell.ts 的 writeScriptFile 注释里。
+   *
+   * chcp 65001（UTF-8）在那个文件的第一行 —— 中文 Windows 的 cmd
+   * 默认是 936（GBK），不切的话学生 `print("你好")` 会看到满屏乱码。
    */
-  const encoded = Buffer.from(`${PREAMBLE}\n${script}`, 'utf16le').toString('base64')
-  const args = [
-    '-NoLogo',
-    '-NoProfile',
-    '-NonInteractive',
-    '-ExecutionPolicy',
-    'Bypass',
-    '-EncodedCommand',
-    encoded
-  ]
+  const scriptFile = writeScriptFile(script)
 
-  const child = spawn(ps, args, {
+  // /d 跳过 AutoRun 注册表项、/s 让 /c 后面的引号处理可预期
+  const child = spawn(cmd, ['/d', '/s', '/c', scriptFile.file], {
     cwd: options.cwd,
     // 不弹控制台窗口：教室里突然冒出一个黑框比什么都吓人
     windowsHide: true,
@@ -228,6 +220,9 @@ export function startPowerShell(command: string, options: ExecOptions): ExecHand
       closed = true
       if (timeoutTimer) clearTimeout(timeoutTimer)
       if (fallbackTimer) clearTimeout(fallbackTimer)
+      // 临时脚本用完就删。放在 settle 里而不是 close 回调里：
+      // 超时被杀、spawn 失败这些路径都要走到这里，而它们未必触发 close
+      scriptFile.cleanup()
       resolve({
         exitCode,
         output,
@@ -260,6 +255,6 @@ export function startPowerShell(command: string, options: ExecOptions): ExecHand
 }
 
 /** 启动一条命令并等它跑完。runCommand 用这个 */
-export async function runPowerShell(command: string, options: ExecOptions): Promise<ExecOutcome> {
-  return startPowerShell(command, options).wait()
+export async function runCommand(command: string, options: ExecOptions): Promise<ExecOutcome> {
+  return startCommand(command, options).wait()
 }

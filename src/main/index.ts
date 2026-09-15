@@ -6,6 +6,7 @@ import { getConfig, initConfig, setConfig } from './config'
 import { initLogger, installCrashHandlers, logger, setLogSink } from './logger'
 import { applyPlatformCompat, detectPlatform } from './platform-compat'
 import { describeCapability, getCapabilityInfo, setCapabilityProfileOverride } from './capabilities'
+import { sweepScriptDir } from './shell'
 import { getRuntimeInfo, registerDiagnosticsIpc, setCompatState } from './ipc/diagnostics'
 import { closePreviewServer, registerWorkspaceIpc, restoreLastWorkspace } from './ipc/workspace'
 import { registerSessionIpc } from './ipc/sessions'
@@ -284,6 +285,10 @@ function main(): void {
   initLogger()
   installCrashHandlers()
   initConfig()
+
+  // 上次异常退出（崩溃 / 拔电源 / 任务管理器结束进程）时，临时 .cmd 脚本
+  // 的 cleanup 跑不到，会攒在 userData/tmp-scripts 里。启动时扫一次最省事
+  sweepScriptDir()
 
   // 必须在任何能力计算之前：CI 用这个开关跑 Win7 降级分支
   setCapabilityProfileOverride(cli.capabilityProfile)
