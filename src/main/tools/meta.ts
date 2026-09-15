@@ -1,10 +1,11 @@
 import type { ToolName, ToolRequirement } from '../../shared/types'
+import { RUN_TIMEOUT_DEFAULT_MS, RUN_TIMEOUT_MAX_MS } from './limits'
 
 /**
  * 工具元数据。
  *
- * 单独一个文件、不 import 任何东西，是为了让能力探测（capabilities.ts）
- * 能拿到工具清单而不会和工具实现互相 import 成环。
+ * 除了 ./limits（它本身不 import 任何东西），这个文件不依赖其他模块，
+ * 是为了让能力探测（capabilities.ts）能拿到工具清单而不会和工具实现互相 import 成环。
  */
 
 /** 跨系统都能跑的工具：纯文件操作，不依赖任何外部程序 */
@@ -17,20 +18,26 @@ export const CROSS_OS_TOOLS: ToolName[] = [
   'undoSnapshot'
 ]
 
-/** 全部规划中的工具（含尚未实现的），用于设置界面展示与门控计算 */
-export const ALL_TOOLS: ToolName[] = [
-  ...CROSS_OS_TOOLS,
-  'runCommand',
-  'jobRun',
-  'jobPoll',
-  'jobKill'
-]
+/**
+ * 需要命令执行能力的工具。
+ *
+ * 只在 Windows 10/11（且真的找到 powershell.exe）上启用：
+ * Win7 裸机只有 cmd.exe，PowerShell 要装 WMF 升级才有 5.1，不能假定学生机有。
+ * 详见 docs/7gai工具对照与实现规划.md §2.3。
+ */
+export const COMMAND_TOOLS: ToolName[] = ['runCommand', 'jobRun', 'jobPoll', 'jobKill']
+
+/** 全部工具，用于设置界面展示与门控计算 */
+export const ALL_TOOLS: ToolName[] = [...CROSS_OS_TOOLS, ...COMMAND_TOOLS]
 
 /**
  * 已经实现、可以真正交给模型的工具。
  * 尚未实现的工具即使门控通过也不会进工具表 —— 模型看不到就不会去调。
+ *
+ * 命令类四个已经实现（command-tools.ts），但能不能进工具表还要看门控：
+ * 只有 Windows 10/11 且真的找到 powershell.exe 才会出现。
  */
-export const IMPLEMENTED_TOOLS: ToolName[] = [...CROSS_OS_TOOLS]
+export const IMPLEMENTED_TOOLS: ToolName[] = [...CROSS_OS_TOOLS, ...COMMAND_TOOLS]
 
 export const TOOL_REQUIREMENTS: Record<ToolName, ToolRequirement> = {
   readFile: 'none',
@@ -77,7 +84,7 @@ export interface ToolSchema {
 
 /**
  * 交给模型的工具定义。
- * description 写得像在教学生怎么用，而不是 API 文档 —— 模型据此决定什么时候调。
+ * description 写得像在讲「什么时候该用它」，而不是 API 文档 —— 模型据此决定什么时候调。
  */
 export const TOOL_SCHEMAS: ToolSchema[] = [
   {
@@ -179,13 +186,89 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
     function: {
       name: 'undoSnapshot',
       description:
-        '把文件回退到上一次修改之前。只有在你发现刚才改错了、或者学生说「帮我改回去」时使用；不要用它来试探。',
+        '把文件回退到上一次修改之前。只有在你发现刚才改错了、或者对方说「帮我改回去」时使用；不要用它来试探。',
       parameters: {
         type: 'object',
         properties: {
           path: { type: 'string', description: '只回退这个文件；不填则回退最近一次修改' }
         },
         required: []
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'runCommand',
+      description:
+        '在项目目录里跑一段 PowerShell 脚本，等它结束后把输出给你。适合跑测试、构建、解释器这类几十秒内能完事的命令。' +
+        '几点必须知道：只支持 Windows 10/11（其他系统上调用会返回错误，那时请改用直接读写文件的方式）；' +
+        '命令**不能等待输入**，交互式程序会一直卡到超时，所以给 python / node 传参时要把脚本或文件路径一起给出；' +
+        `预计超过 ${RUN_TIMEOUT_DEFAULT_MS / 1000} 秒的命令请改用 jobRun，不要用本工具硬等。`,
+      parameters: {
+        type: 'object',
+        properties: {
+          command: {
+            type: 'string',
+            description: '要执行的 PowerShell 脚本，例如 python hello.py 或 npm test'
+          },
+          cwd: { type: 'string', description: '工作目录，必须在项目内；默认项目根目录' },
+          timeoutMs: {
+            type: 'integer',
+            description: `超时毫秒数，默认 ${RUN_TIMEOUT_DEFAULT_MS}，上限 ${RUN_TIMEOUT_MAX_MS}`
+          }
+        },
+        required: ['command']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'jobRun',
+      description:
+        '把一个耗时命令放到后台跑，立刻返回任务号。适合安装依赖、跑完整测试套、启动开发服务器这类不会马上结束的命令 —— ' +
+        '用 runCommand 等它们会白白耗掉一轮对话。启动后用 jobPoll 查进度，不需要了就 jobKill。' +
+        '与 runCommand 一样，只支持 Windows 10/11，且命令不能等待输入。',
+      parameters: {
+        type: 'object',
+        properties: {
+          command: { type: 'string', description: '要执行的 PowerShell 脚本' },
+          cwd: { type: 'string', description: '工作目录，必须在项目内；默认项目根目录' }
+        },
+        required: ['command']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'jobPoll',
+      description:
+        '查一个后台任务跑到哪了，返回状态、已用时间和到目前为止的输出。任务结束后会给出退出码（非 0 表示报错）。' +
+        '不要反复密集地查：跑长任务时先干别的事，隔一阵再看。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'jobRun 返回的任务号，如 job-1' }
+        },
+        required: ['id']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'jobKill',
+      description:
+        '终止一个还在跑的后台任务（连同它启动的子进程）。用在服务器卡死、命令明显跑不下去的时候；' +
+        '任务已经结束了就不需要调它。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: '要终止的任务号，如 job-1' }
+        },
+        required: ['id']
       }
     }
   }

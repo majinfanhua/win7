@@ -42,7 +42,7 @@ export function languageFromPath(filePath: string): string {
   return MAP[name.slice(idx + 1).toLowerCase()] || 'plaintext'
 }
 
-/** 教学场景下可在右侧直接预览的文件 */
+/** 可在右侧直接预览的文件类型 */
 export function isPreviewable(filePath: string): boolean {
   const lang = languageFromPath(filePath)
   return lang === 'html' || lang === 'css' || lang === 'javascript' || lang === 'markdown'

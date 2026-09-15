@@ -41,7 +41,9 @@ function snapshot(config: AppConfig): string {
  */
 const SECTIONS = [
   { id: 'ai', label: 'AI 模型', hint: '中转站、密钥与模型' },
-  { id: 'capability', label: '工具能力', hint: 'AI 能对文件做什么' }
+  { id: 'capability', label: '工具能力', hint: 'AI 能对文件做什么' },
+  { id: 'history', label: '修改历史', hint: '撤销 AI 的改动' },
+  { id: 'about', label: '关于', hint: '快捷键与使用说明' }
 ] as const
 
 type SectionId = (typeof SECTIONS)[number]['id']
@@ -62,7 +64,26 @@ export default function SettingsPage({
   onBack: () => void
 }): JSX.Element {
   const applyConfig = useAppStore((s) => s.applyConfig)
+  const snapshots = useAppStore((s) => s.snapshots)
+  const refreshSnapshots = useAppStore((s) => s.refreshSnapshots)
+  const undoLast = useAppStore((s) => s.undoLast)
   const [section, setSection] = useState<SectionId>('ai')
+
+  /** 设置页打开与切到「修改历史」时都拉一次最新记录 */
+  useEffect(() => {
+    void refreshSnapshots()
+  }, [refreshSnapshots, section])
+
+  /**
+   * 退回某次修改。
+   *
+   * 撤完由 store 重新拉列表 —— 撤销会把那条记录消费掉，不刷新的话
+   * 界面上还显示着刚撤掉的那一条，学生再点一次只会得到「没有可撤销的修改」。
+   */
+  const undo = async (path: string): Promise<void> => {
+    const result = await undoLast(path)
+    setStatus(result.message)
+  }
   const [draft, setDraft] = useState<AppConfig>(initial)
   const [headerText, setHeaderText] = useState(formatHeaders(initial.ai.extraHeaders || {}))
   const [models, setModels] = useState<string[]>([])
@@ -392,7 +413,84 @@ export default function SettingsPage({
                 )}
 
                 <div className="hint card-hint">
-                  命令类工具（执行命令 / 后台任务）目前尚未实现，列在「未启用」里但不会生效。
+                  命令类工具（执行命令 / 后台任务）需要 PowerShell：Windows 10 / 11 上一般可用，
+                  Windows 7 与未探测到 powershell.exe 的机器上不会启用。
+                </div>
+              </section>
+            )}
+
+            {section === 'history' && (
+              <section className="card">
+                <div className="card-title">修改历史</div>
+                <div className="hint card-hint">
+                  AI 每改一次文件都会先存一份原文。这里可以退回任意一次 ——
+                  撤销后会删掉这条记录，所以「撤销的撤销」需要重新让 AI 改一次。
+                </div>
+
+                {snapshots.length === 0 ? (
+                  <div className="empty-line">当前项目还没有可撤销的修改</div>
+                ) : (
+                  <div className="snap-list">
+                    {snapshots.map((item) => (
+                      <div key={item.id} className="snap-row">
+                        <div className="snap-main">
+                          <div className="snap-path" title={item.path}>
+                            {item.path.split(/[\\/]/).pop()}
+                          </div>
+                          <div className="snap-meta">
+                            {formatWhen(item.time)} · {sourceLabel(item.source)} ·{' '}
+                            {item.lineDelta > 0 ? `+${item.lineDelta} 行` : `${item.lineDelta} 行`}
+                          </div>
+                        </div>
+                        <button className="ghost btn-sm" onClick={() => void undo(item.path)}>
+                          退回这次
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="hint card-hint">
+                  只列出当前项目里的修改。其他项目的记录不会动到。
+                </div>
+              </section>
+            )}
+
+            {section === 'about' && (
+              <section className="card">
+                <div className="card-title">关于</div>
+                <div className="hint card-hint">
+                  带 AI 助手的代码编辑器。支持 Windows 7 SP1 及以上系统。
+                </div>
+
+                <div className="about-block">
+                  <div className="about-title">快捷键</div>
+                  <ul className="about-list">
+                    <li><kbd>Ctrl</kbd> + <kbd>Enter</kbd>：发送提问</li>
+                    <li><kbd>Ctrl</kbd> + <kbd>S</kbd>：保存当前文件</li>
+                    <li><kbd>Ctrl</kbd> + <kbd>N</kbd>：新建对话</li>
+                    <li><kbd>Ctrl</kbd> + <kbd>O</kbd>：打开文件夹</li>
+                    <li><kbd>Ctrl</kbd> + <kbd>Z</kbd>：撤销 AI 上一次修改</li>
+                    <li><kbd>Ctrl</kbd> + <kbd>,</kbd>：打开设置</li>
+                    <li><kbd>Esc</kbd>：从设置页返回对话</li>
+                  </ul>
+                </div>
+
+                <div className="about-block">
+                  <div className="about-title">三个常用动作</div>
+                  <ul className="about-list">
+                    <li>在文件上右键能看到「预览文件」「复制路径」「插入引用」等</li>
+                    <li>「插入引用」会把文件内容随提问一起发给 AI，不用手动粘贴</li>
+                    <li>对话区与编辑器之间的横条可以拖动，双击回到默认高度</li>
+                  </ul>
+                </div>
+
+                <div className="about-block">
+                  <div className="about-title">遇到启动问题</div>
+                  <div className="hint">
+                    菜单「帮助 → 运行环境体检」会检查系统版本、运行库与渲染模式，
+                    把结果截图发给老师就可以定位问题。
+                  </div>
                 </div>
               </section>
             )}
@@ -401,6 +499,26 @@ export default function SettingsPage({
       </div>
     </section>
   )
+}
+
+/** 把 ISO 时间转成「几分钟前」式的中文短描述 */
+function formatWhen(iso: string): string {
+  const at = new Date(iso).getTime()
+  if (!Number.isFinite(at)) return ''
+  const diff = Date.now() - at
+  if (diff < 60_000) return '刚刚'
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`
+  return new Date(at).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
+}
+
+/** 快照来源的中文标签 */
+function sourceLabel(source: string): string {
+  if (source === 'manual') return '手动保存'
+  if (source === 'writeFile') return 'AI 覆写'
+  if (source === 'editFile') return 'AI 替换'
+  if (source === 'multiEdit') return 'AI 多处替换'
+  return source
 }
 
 function BackIcon(): JSX.Element {

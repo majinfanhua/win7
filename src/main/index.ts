@@ -7,8 +7,11 @@ import { initLogger, installCrashHandlers, logger, setLogSink } from './logger'
 import { applyPlatformCompat, detectPlatform } from './platform-compat'
 import { describeCapability, getCapabilityInfo, setCapabilityProfileOverride } from './capabilities'
 import { getRuntimeInfo, registerDiagnosticsIpc, setCompatState } from './ipc/diagnostics'
-import { registerWorkspaceIpc, restoreLastWorkspace } from './ipc/workspace'
+import { closePreviewServer, registerWorkspaceIpc, restoreLastWorkspace } from './ipc/workspace'
+import { registerSessionIpc } from './ipc/sessions'
 import { registerAiIpc } from './ipc/ai'
+import { killAllJobs } from './tools/jobs'
+import { setFileChangeEmitter, stopWatching, watchWorkspace } from './watcher'
 
 interface CliOptions {
   forceGpu: boolean
@@ -42,7 +45,7 @@ function createWindow(): BrowserWindow {
     show: false,
     // 和默认主题（深色）的底色一致，避免启动瞬间闪一下别的颜色
     backgroundColor: '#0e1116',
-    title: 'AI 教学编辑器',
+    title: 'HangKe',
     icon: windowIconPath(),
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
@@ -127,11 +130,20 @@ function buildMenu(): void {
       label: '文件',
       submenu: [
         { label: '打开文件夹…', accelerator: 'CmdOrCtrl+O', click: () => sendMenu('open-folder') },
-        { label: '新建文件', accelerator: 'CmdOrCtrl+N', click: () => sendMenu('new-file') },
+        { label: '新建文件', accelerator: 'CmdOrCtrl+Alt+N', click: () => sendMenu('new-file') },
         { type: 'separator' },
         { label: '保存', accelerator: 'CmdOrCtrl+S', click: () => sendMenu('save') },
         { type: 'separator' },
         { label: '退出', role: 'quit' }
+      ]
+    },
+    {
+      // 会话是 AI 编辑器里比「文件」更常用的单位，单独一个顶级菜单比塞进文件菜单好找
+      label: '会话',
+      submenu: [
+        { label: '新对话', accelerator: 'CmdOrCtrl+N', click: () => sendMenu('new-session') },
+        { type: 'separator' },
+        { label: '撤销 AI 上一次修改', accelerator: 'CmdOrCtrl+Z', click: () => sendMenu('undo-ai') }
       ]
     },
     {
@@ -337,6 +349,7 @@ function main(): void {
       registerDiagnosticsIpc()
       registerConfigIpc()
       registerWorkspaceIpc()
+      registerSessionIpc()
       registerAiIpc()
       restoreLastWorkspace()
       buildMenu()
@@ -345,6 +358,18 @@ function main(): void {
       setLogSink((line) => {
         if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC.evtLog, line)
       })
+
+      // 文件变化要推给界面。
+      // 注意 restoreLastWorkspace() 在 createWindow() 之前就调了，
+      // 那会儿 emitter 还没设上 —— 所以这里补一次 watchWorkspace()，
+      // 否则「启动就恢复上次工作区」这条路径上监视是断的。
+      setFileChangeEmitter((event) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(IPC.evtFileChanged, event)
+        }
+      })
+      const restoredWorkspace = getConfig().lastWorkspace
+      if (restoredWorkspace) watchWorkspace(restoredWorkspace)
 
       if (cli.selfTest) runSelfTest(mainWindow)
 
@@ -386,6 +411,16 @@ function main(): void {
       app.relaunch({ args: process.argv.slice(1).concat(['--software']) })
     }
     app.exit(1)
+  })
+
+  // 预览用的临时 HTTP 服务必须显式关掉：它只绑回环地址，但进程不退的话
+  // 端口会一直挂着，下次预览拿到的就是旧服务（工作区已经换过了）
+  app.on('before-quit', () => {
+    closePreviewServer()
+    stopWatching()
+    // 后台任务（npm run dev / python -m http.server 之类）不杀的话会变成孤儿进程，
+    // 继续占着端口与 CPU，下次启动就变成「端口被占用」这种查不到原因的故障
+    killAllJobs()
   })
 
   process.on('exit', () => {

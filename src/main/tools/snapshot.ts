@@ -1,16 +1,18 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { app } from 'electron'
+import type { SnapshotSummary } from '../../shared/types'
 import { logger } from '../logger'
+import { markToolWrite } from '../watcher'
 
 /**
  * 修改快照。
  *
  * 为什么自己存而不依赖 git：教室机器大多没装 git（见 docs/7gai工具对照与实现规划.md §2.1），
- * 而学生真正需要的只是「刚才那步改坏了，退回去」。
+ * 而使用者真正需要的只是「刚才那步改坏了，退回去」。
  *
  * 存在 userData/snapshots.jsonl（一行一条），跨重启仍然有效 ——
- * 学生把应用关了再打开，照样能撤销上一次 AI 的修改。
+ * 把应用关了再打开，照样能撤销上一次 AI 的修改。
  */
 
 export interface Snapshot {
@@ -120,7 +122,11 @@ export function undoSnapshot(target?: string): UndoResult {
   const item = list[index]
   try {
     fs.mkdirSync(path.dirname(item.path), { recursive: true })
+    // 标记成工具写入，让文件监视把事件标成 origin='ai'（撤销也是 AI 侧的改动），
+    // 否则编辑器会把它当成外部改动弹提示
+    markToolWrite(item.path, true)
     fs.writeFileSync(item.path, item.before, 'utf8')
+    markToolWrite(item.path, false)
   } catch (err) {
     return { ok: false, message: `回退失败: ${String(err)}` }
   }
@@ -129,6 +135,31 @@ export function undoSnapshot(target?: string): UndoResult {
   writeAll(list)
   logger.info('snapshot', `已回退: ${item.path}（来源 ${item.source}）`)
   return { ok: true, message: `已把 ${path.basename(item.path)} 恢复到修改前`, path: item.path }
+}
+
+/**
+ * 列出可回退的记录（只有摘要，不含文件正文）。
+ *
+ * 界面只用来回答「有没有东西可以撤销、撤销的是哪个文件」，
+ * 不需要也不应该把几 MB 的 before/after 送到渲染进程。
+ */
+export function listSnapshots(limit = 20): SnapshotSummary[] {
+  const list = readAll()
+  return list
+    .slice(-limit)
+    .reverse()
+    .map((item) => ({
+      id: item.id,
+      time: item.time,
+      path: item.path,
+      source: item.source,
+      // 行数差：正数表示 AI 加了行，负数表示删了行。比字符数更直观
+      lineDelta: countLines(item.after) - countLines(item.before)
+    }))
+}
+
+function countLines(text: string): number {
+  return text ? text.split('\n').length : 0
 }
 
 /** 还剩多少条可回退（自检与设置界面用） */

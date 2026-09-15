@@ -409,7 +409,7 @@ async function runStream(
     logger.info('ai', '本次对话未启用工具（当前环境/设置下无可用工具）')
   }
 
-  // 多轮之间用量累加：一次提问可能包含好几次 HTTP 往返，学生看到的应该是总数
+  // 多轮之间用量累加：一次提问可能包含好几次 HTTP 往返，看到的应该是总数
   const total = { promptTokens: 0, completionTokens: 0, cachedTokens: 0, fromApi: false }
   const addUsage = (usage: AiUsage): void => {
     total.promptTokens += usage.promptTokens

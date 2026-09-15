@@ -1,6 +1,6 @@
 {
   "name": "win7-ai-editor",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "productName": "AIEditor",
   "description": "面向教学的 AI 代码编辑器（Windows 7 / 10 免安装版）",
   "main": "out/main/index.js",
@@ -10,7 +10,8 @@
   "scripts": {
     "dev": "electron-vite dev",
     "check:node16": "node scripts/check-node16-api.mjs",
-    "build": "npm run check:node16 && electron-vite build",
+    "check:watch": "node scripts/check-watch.mjs",
+    "build": "npm run check:node16 && npm run check:watch && electron-vite build",
     "preview": "electron-vite preview",
     "typecheck:node": "tsc --noEmit -p tsconfig.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",

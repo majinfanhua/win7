@@ -1,9 +1,8 @@
-import fs from 'node:fs'
-import path from 'node:path'
 import type { CapabilityInfo, OsTier, ToolName, ToolRequirement } from '../shared/types'
 import { detectPlatform } from './platform-compat'
 import { getConfig } from './config'
 import { logger } from './logger'
+import { powershellPath } from './powershell'
 import {
   ALL_TOOLS,
   CROSS_OS_TOOLS,
@@ -42,30 +41,6 @@ export function setCapabilityProfileOverride(raw: string): void {
   overrideTier = value
   cached = null
   logger.info('capability', `能力探测已被 --capability-profile=${value} 覆盖（仅供测试）`)
-}
-
-/**
- * 找 powershell.exe。
- *
- * 不用 `where` 命令去探，直接查文件：探一次就够了，而且不依赖 PATH
- * （校园机器的 PATH 常被改得很奇怪）。
- */
-function powershellPath(): string | null {
-  if (process.platform !== 'win32') return null
-  const root = process.env['SystemRoot'] || process.env['windir'] || 'C:\\Windows'
-  const candidates = [
-    path.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
-    // 32 位进程在 64 位系统上 System32 会被重定向，这个位置兜底
-    path.join(root, 'SysWOW64', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
-  ]
-  for (const candidate of candidates) {
-    try {
-      if (fs.existsSync(candidate)) return candidate
-    } catch {
-      /* 权限等异常当不存在处理 */
-    }
-  }
-  return null
 }
 
 interface Detection {

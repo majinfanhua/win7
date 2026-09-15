@@ -1,0 +1,108 @@
+/*
+ * 编辑器面板：AI 改动横幅、标签占位、空态。
+ *
+ * 单独一个文件而不是继续往 global.css 里堆：
+ * global.css 已经很长了，编辑器这块的样式自成一类，
+ * 拆出来之后找「AI 横幅长什么样」不用在两千行里翻。
+ */
+
+.editor-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/*
+  AI 改动横幅。
+
+  这是「AI 改过这个文件」在界面上唯一的显式痕迹 —— 没有它，
+  只能靠逐行比对来确认 AI 动了哪里，那是不可接受的。
+  所以它必须在视觉上足够显眼，同时提供「撤销」与「保留」两个出口。
+ */
+.ai-banner {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-bottom: 1px solid var(--border);
+}
+
+.ai-banner-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.ai-banner-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.btn-xs {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+/* 标签栏为空时撑一条空占位，否则编辑器上方会缺一条线，看着像断了 */
+.tab-placeholder {
+  flex: 1;
+  height: 100%;
+}
+
+/* 编辑器容器。空态叠在 Monaco 上层，不卸载实例 */
+.editor-host {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+/*
+  没有文件时把 Monaco 藏起来：
+  它空着会显示一片深色底，而空态是浅色的，两层叠在一起很花。
+  用 opacity 而不是 display:none —— Monaco 在 display:none 下量不到尺寸，
+  重新显示时布局会算错。
+ */
+.editor-host.is-empty .monaco-editor {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.editor-empty {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: var(--surface-solid);
+  text-align: center;
+}
+
+.editor-empty-title {
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.editor-empty-hint {
+  font-size: 11.5px;
+  color: var(--text-3);
+  max-width: 300px;
+  line-height: 1.7;
+}
+
+/* 顶栏面包屑：模型名未配置时用警觉色，提示这里还没填 */
+.crumb-model.is-empty {
+  color: var(--danger);
+  opacity: 0.8;
+}

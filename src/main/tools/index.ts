@@ -1,6 +1,7 @@
 import type { ToolName } from '../../shared/types'
 import { getCapabilityInfo } from '../capabilities'
 import { logger } from '../logger'
+import { COMMAND_TOOL_HANDLERS } from './command-tools'
 import { FILE_TOOL_HANDLERS } from './file-tools'
 import { IMPLEMENTED_TOOLS, TOOL_LABELS, TOOL_SCHEMAS, type ToolSchema } from './meta'
 
@@ -37,13 +38,42 @@ export function toolSchemasForModel(): ToolSchema[] {
   return TOOL_SCHEMAS.filter((schema) => effective.includes(schema.function.name))
 }
 
-/** 从参数里拼一个给人看的短名，如「读取 hello.py」 */
+/**
+ * 全部已实现工具的实作表。
+ * 与 IMPLEMENTED_TOOLS 是同一份名单的两个面：前者给门控用，后者给调度用。
+ */
+const HANDLERS: Record<string, (args: never) => Promise<string>> = {
+  ...FILE_TOOL_HANDLERS,
+  ...COMMAND_TOOL_HANDLERS
+}
+
+/** 摘要里一个参数值最多显示多少字，多了会把对话面板那一行挤爆 */
+const SUMMARY_VALUE_CHARS = 48
+
+function clip(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text
+}
+
+/** 从参数里拼一个给人看的短名，如「读取 hello.py」「执行命令 npm test」 */
 function describeCall(name: string, args: Record<string, unknown>): string {
   const label = TOOL_LABELS[name as ToolName] || name
+
+  // 文件类：只显示文件名。整条路径会把侧栏那一行挤没，而文件名已经够定位了
   const raw = typeof args.path === 'string' ? args.path : ''
-  if (!raw) return label
-  const file = raw.split(/[\\/]/).filter(Boolean).pop() || raw
-  return `${label} ${file}`
+  if (raw) {
+    const file = raw.split(/[\\/]/).filter(Boolean).pop() || raw
+    return `${label} ${file}`
+  }
+
+  // 命令类：显示命令本身。学生会想看到 AI 到底在跑什么
+  const command = typeof args.command === 'string' ? args.command.trim() : ''
+  if (command) return `${label} ${clip(command.replace(/\s+/g, ' '), SUMMARY_VALUE_CHARS)}`
+
+  // 后台任务：显示任务号
+  const id = typeof args.id === 'string' ? args.id.trim() : ''
+  if (id) return `${label} ${clip(id, SUMMARY_VALUE_CHARS)}`
+
+  return label
 }
 
 function parseArgs(raw: string): { ok: true; args: Record<string, unknown> } | { ok: false; message: string } {
@@ -82,7 +112,7 @@ export async function executeTool(call: ToolCallRequest): Promise<ToolExecResult
   const name = call.name as ToolName
   const label = TOOL_LABELS[name] || call.name
 
-  const handler = FILE_TOOL_HANDLERS[name]
+  const handler = HANDLERS[name]
   if (!handler || !IMPLEMENTED_TOOLS.includes(name)) {
     logger.warn('tool', `模型调用了未实现的工具: ${name}`)
     return {

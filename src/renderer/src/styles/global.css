@@ -294,13 +294,23 @@ textarea {
   letter-spacing: 0.3px;
 }
 
-/* 对话舞台：居中限宽 */
+/*
+ * 内容区：编辑器（左）与对话（右）横向并排。
+ *
+ * 宽度分配靠 useSplitter：左侧编辑器占 --split 的比例，
+ * 对话栏占剩下的。两条宽度都在子元素上算，这里不做分配 ——
+ * 因为对话栏可以整体收起，那时编辑器要能单独撑满。
+ */
 .stage {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   display: flex;
-  justify-content: center;
-  padding: 0 16px 16px;
+  flex-direction: row;
+  align-items: stretch;
+  /* 三段：编辑器 / 分割条 / 对话。
+     不给 justify-content，让子元素的宽度自己决定 */
+  justify-content: flex-start;
   position: relative;
   z-index: 1;
 }
@@ -496,37 +506,98 @@ textarea {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 14px;
-  max-width: 520px;
-  margin: 6vh auto 0;
+  gap: 18px;
+  max-width: 560px;
+  /* 空态整体略偏上。居中会让它显得浮在中间很空，
+     留一点上部空白更接近截图的观感 */
+  margin: 12vh auto 0;
   text-align: center;
 }
 
+/* 方形深底的火箭图标，对应截图里那个 app icon */
 .welcome-badge {
-  width: 52px;
-  height: 52px;
-  border-radius: 17px;
+  width: 58px;
+  height: 58px;
+  border-radius: 13px;
   display: grid;
   place-items: center;
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: 0.5px;
-  color: #fff;
-  background: linear-gradient(135deg, var(--accent), var(--accent-2));
-  box-shadow: 0 12px 30px var(--accent-soft);
+  color: #e8eef7;
+  background: #161b26;
+  box-shadow: 0 10px 26px rgba(10, 14, 22, 0.28);
+}
+
+/* 深色主题下这个深底会和背景糊在一起，翻成浅底深图标 */
+:root[data-theme='dark'] .welcome-badge {
+  color: #161b26;
+  background: #e8eef7;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.45);
 }
 
 .welcome h1 {
   margin: 0;
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 600;
   letter-spacing: 0.2px;
+  line-height: 1.5;
 }
 
-.welcome p {
+.welcome-lead {
   margin: 0;
   color: var(--text-2);
   font-size: 13.5px;
+  line-height: 1.75;
+  max-width: 420px;
+}
+
+/* 三个入口横排，居中。窄屏自动换行 */
+.quick-starts {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.quick-start {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 13px 22px;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--bubble-ai);
+  border-color: transparent;
+  border-radius: 13px;
+  white-space: nowrap;
+}
+
+.quick-start:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+
+/* 图标底色：三个入口用三种色调区分，扫一眼就能分辨 */
+.quick-icon {
+  display: grid;
+  place-items: center;
+  color: var(--text-2);
+}
+
+.quick-icon.tone-blue {
+  color: #4a8fd4;
+}
+
+.quick-icon.tone-amber {
+  color: #d99b3a;
+}
+
+.quick-icon.tone-green {
+  color: #4bab72;
+}
+
+.quick-label {
+  font-weight: 500;
 }
 
 .samples {
@@ -557,7 +628,7 @@ textarea {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
 }
 
 /* ==========================================================================
@@ -568,24 +639,28 @@ textarea {
   flex: none;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   margin-top: 8px;
-  padding: 12px 14px 10px;
-  border-radius: var(--radius);
+  padding: 14px 16px 10px;
+  border-radius: 16px;
   box-shadow: var(--shadow-lg);
 }
 
 .composer textarea {
-  min-height: 26px;
+  min-height: 30px;
   max-height: 160px;
   padding: 2px 0;
   overflow-y: auto;
-  font-size: 14px;
+  font-size: 14.5px;
   color: var(--text);
   background: transparent;
   border: none;
   border-radius: 0;
   resize: none;
+}
+
+.composer textarea::placeholder {
+  color: var(--text-3);
 }
 
 .composer textarea:focus {
@@ -597,6 +672,59 @@ textarea {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* 输入框下方那排工具按钮 */
+.composer-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: 2px;
+}
+
+.composer-tool {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  color: var(--text-3);
+  border-radius: 9px;
+}
+
+.composer-tool:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--bubble-ai);
+  border-color: transparent;
+}
+
+/* 未实现的入口置灰。保留占位是为了让工具栏宽度稳定，
+   以后接上功能时不会因为多个按钮而把右侧的发送键挤走 */
+.composer-tool:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* 发送键：圆形强调色，比一个文字的「发送」更省地方 */
+.send-btn {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  color: var(--accent-fg);
+  background: var(--accent);
+  border-color: transparent;
+  border-radius: 10px;
+}
+
+.send-btn:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.send-btn:disabled {
+  color: var(--text-3);
+  background: var(--bubble-ai);
 }
 
 /* ==========================================================================
@@ -704,21 +832,46 @@ textarea {
  * 设置页
  * ========================================================================== */
 
-/* 对话视图容器。切到设置页时只是 display:none，组件不卸载，
-   否则聊天记录会跟着一起没 */
+/*
+ * 对话栏（内容区右侧）。
+ *
+ * 切到设置页时只是 display:none，组件不卸载，否则聊天记录会跟着一起没。
+ *
+ * 宽度 = 内容区宽度 ×(1 − --split)。用 calc 而不是 flex 比例：
+ * 拖动时 useSplitter 直接改 --split，这里立刻跟着变，React 不参与。
+ */
 .view {
   display: none;
-  width: 100%;
-  max-width: 820px;
   min-height: 0;
+  min-width: 0;
   flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: var(--surface-solid);
 }
 
 .view.is-active {
   display: flex;
+  flex: none;
+  width: calc((1 - var(--split, 0.62)) * 100%);
+  /* 对话栏本身有 padding，宽度算准了才不会因为边框多出 1px 而横向滚动 */
+  box-sizing: border-box;
 }
 
-/* 设置页要撑满整宽，所以去掉 .stage 给对话留的左右内边距 */
+/*
+ * 对话栏收起时，编辑器要撑满。
+ * 不用条件渲染，所以用属性标记 + display:none —— 
+ * 保留 DOM 才能留住输入草稿与滚动位置。
+ */
+.view[data-chat-closed='1'] {
+  display: none;
+}
+
+/* 对话栏收起后编辑器接管剩余全部宽度 */
+.stage:has(.view[data-chat-closed='1']) .editor-dock {
+  width: 100%;
+}
+
+/* 设置页要撑满整宽 */
 .stage-page {
   padding: 0;
 }
@@ -1001,23 +1154,10 @@ button.danger:hover {
   min-height: 0;
 }
 
-.sidebar {
-  width: 240px;
-  flex: none;
-  border-right: 1px solid var(--border);
-  background: var(--surface-solid);
+/* 三栏骨架：左导航固定宽，中间自适应，右文件树固定宽 */
+.shell {
   display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.right {
-  width: 380px;
-  flex: none;
-  border-left: 1px solid var(--border);
-  background: var(--surface-solid);
-  display: flex;
-  flex-direction: column;
+  flex: 1;
   min-height: 0;
 }
 
@@ -1026,23 +1166,6 @@ button.danger:hover {
   min-width: 0;
   display: flex;
   flex-direction: column;
-}
-
-.panel-title {
-  flex: none;
-  padding: 7px 10px;
-  font-size: 12px;
-  color: var(--text-2);
-  border-bottom: 1px solid var(--border);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.scroll {
-  flex: 1;
-  overflow: auto;
-  min-height: 0;
 }
 
 .statusbar {
@@ -1056,33 +1179,6 @@ button.danger:hover {
   border-top: 1px solid var(--border);
   white-space: nowrap;
   overflow: hidden;
-}
-
-.node {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  cursor: pointer;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  user-select: none;
-}
-
-.node:hover {
-  background: var(--bubble-ai);
-}
-
-.node.active {
-  background: var(--accent-soft);
-}
-
-.node .icon {
-  color: var(--text-3);
-  width: 12px;
-  flex: none;
-  text-align: center;
 }
 
 .tabs {
@@ -1206,4 +1302,827 @@ button.danger:hover {
 .report .detail {
   color: var(--text-2);
   word-break: break-all;
+}
+
+/* ==========================================================================
+ * 左侧导航
+ * ========================================================================== */
+
+.sidenav {
+  width: 232px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface-solid);
+  border-right: 1px solid var(--border);
+  transition: width 0.16s ease;
+}
+
+/* 收起态只留图标列。不做抽屉式浮层 —— 老机器上滑出动画容易掉帧 */
+.sidenav.is-collapsed {
+  width: 52px;
+}
+
+.sidenav-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 10px 12px;
+}
+
+.sidenav-logo {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+}
+
+.sidenav-title {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.sidenav-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  color: var(--text-3);
+  border-radius: 7px;
+}
+
+.sidenav-icon:hover {
+  color: var(--text);
+  background: var(--bubble-ai);
+}
+
+/*
+ * 侧栏主体：上部（动作键 + 两个列表）与下部（文件树）分开滚。
+ *
+ * 以前这里整体 overflow-y: auto，但嵌入文件树后就不能这么干了 ——
+ * 那会让文件树的滚动条和侧栏的滚在一起，文件多时整个侧栏被推长，
+ * 而文件树自己那一段反而没有滚动条。
+ * 现在：上半段自己滚（.sidenav-top），文件树在 .nav-group-tree 里自己滚。
+ */
+.sidenav-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0 8px;
+}
+
+/* 上半段：动作键与工作区/会话列表。内容长了只滚这里 */
+.sidenav-top {
+  flex: none;
+  max-height: 62%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-bottom: 4px;
+}
+
+/*
+ * 文件树那一段：吃掉剩余高度，内部自己滚。
+ * flex:1 + min-height:0 是关键 —— 少了 min-height:0，
+ * flex 子项的最小高度是内容高度，树就会被撑成无限长（经典 flex 陷阱）。
+ */
+.nav-group-tree {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.nav-group-tree.is-open {
+  min-height: 120px;
+}
+
+/* 分组头可点（文件树的折叠开关） */
+.nav-group-head.is-clickable {
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  border-radius: 7px;
+}
+
+.nav-group-head.is-clickable:hover {
+  color: var(--text-2);
+  background: var(--bubble-ai);
+}
+
+/* 顶部三个动作键（新对话 / Skills / MCP） */
+.nav-action {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  margin-bottom: 2px;
+  color: var(--text-2);
+  font-size: 13px;
+  text-align: left;
+  border-radius: 9px;
+}
+
+.nav-action:hover,
+.nav-action.active {
+  color: var(--text);
+  background: var(--bubble-ai);
+}
+
+.nav-count {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+/* Skills / MCP 点开的说明浮块 */
+.nav-pop {
+  margin: 4px 2px 8px;
+  padding: 10px;
+  border-radius: 10px;
+  background: var(--bubble-ai);
+  border: 1px solid var(--border);
+}
+
+.nav-pop-title {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.nav-pop-text {
+  font-size: 11.5px;
+  color: var(--text-2);
+  line-height: 1.7;
+}
+
+.nav-pop-link {
+  margin-top: 8px;
+  padding: 4px 8px;
+  font-size: 11.5px;
+  color: var(--accent);
+  border-color: var(--border);
+}
+
+.nav-group {
+  position: relative;
+  margin-top: 12px;
+}
+
+.nav-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: var(--text-3);
+  text-transform: uppercase;
+}
+
+/* 分组级下拉（工作空间右侧的调节按钮） */
+.nav-menu {
+  position: absolute;
+  top: 26px;
+  right: 4px;
+  z-index: 6;
+  min-width: 176px;
+  padding: 5px;
+  border-radius: 10px;
+  background: var(--surface-solid);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-lg);
+}
+
+.nav-menu-item {
+  display: block;
+  width: 100%;
+  padding: 7px 9px;
+  font-size: 12.5px;
+  text-align: left;
+  color: var(--text-2);
+  border-radius: 7px;
+}
+
+.nav-menu-item:hover {
+  color: var(--text);
+  background: var(--bubble-ai);
+}
+
+/* 一行 = 一个可点的主体 + 右侧的 × 。
+   × 不能放进按钮里（嵌套 button 不合法），所以拆成两个兄弟节点 */
+.nav-item-row {
+  display: flex;
+  align-items: center;
+}
+
+.nav-item-row .nav-item {
+  flex: 1;
+  min-width: 0;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 9px;
+  color: var(--text-2);
+  font-size: 12.5px;
+  text-align: left;
+  border-radius: 8px;
+}
+
+.nav-item:hover {
+  color: var(--text);
+  background: var(--bubble-ai);
+}
+
+.nav-item.active {
+  color: var(--text);
+  background: var(--accent-soft);
+}
+
+.nav-item-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-item-name.is-muted {
+  color: var(--text-3);
+}
+
+.nav-time {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+
+.nav-item-x {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  margin-right: 4px;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-3);
+  border-radius: 6px;
+  opacity: 0;
+}
+
+.nav-item-row:hover .nav-item-x {
+  opacity: 1;
+}
+
+.nav-item-x:hover {
+  color: var(--danger);
+  background: var(--bubble-ai);
+}
+
+.nav-empty {
+  padding: 6px 9px 8px;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--text-3);
+}
+
+.nav-path {
+  margin: 6px 9px 0;
+  font-size: 10.5px;
+  color: var(--text-3);
+  word-break: break-all;
+}
+
+/* 收起态下所有文字与次级元素隐藏，只留图标 */
+.sidenav.is-collapsed .nav-action,
+.sidenav.is-collapsed .nav-item {
+  justify-content: center;
+  padding: 8px 0;
+}
+
+/* 收起时隐藏头和列表里的文字。用 display:none 而不是 width:0 ——
+   width:0 下 svg 仍会撑出一条缝，52px 的窄栏看着会错位 */
+.sidenav.is-collapsed .sidenav-title,
+.sidenav.is-collapsed .nav-item-name,
+.sidenav.is-collapsed .nav-time,
+.sidenav.is-collapsed .nav-item-x,
+.sidenav.is-collapsed .nav-count,
+.sidenav.is-collapsed .nav-empty,
+.sidenav.is-collapsed .nav-path {
+  display: none;
+}
+
+/* 收起时「新对话」要有个明显的底座，否则和 Skills/MCP 三个图标长得一样 */
+.sidenav.is-collapsed .nav-action:first-of-type {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* ==========================================================================
+ * 文件树（嵌在左侧栏里）
+ * ========================================================================== */
+
+/*
+ * 独立成栏时的尺寸。
+ * 嵌进侧栏后由 .filetree.is-embedded 覆盖掉宽度与左边框 ——
+ * 那时它只是侧栏里的一个纵向片段，不该再画自己的分界线。
+ */
+.filetree {
+  position: relative;
+  width: 264px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface-solid);
+  border-left: 1px solid var(--border);
+}
+
+/*
+ * 嵌在侧栏里的形态。
+ * flex:1 + min-height:0 让它吃掉侧栏剩余的全部高度，
+ * 而不是按内容高度撑开 —— 否则文件多的时候会把侧栏顶出滚动条。
+ */
+.filetree.is-embedded {
+  width: auto;
+  flex: 1;
+  min-height: 0;
+  border-left: none;
+  background: transparent;
+}
+
+.tree-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tree-head-title {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.tree-head-btn {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: var(--text-3);
+  border-radius: 6px;
+}
+
+.tree-head-btn:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--bubble-ai);
+}
+
+/* 根目录行：主体按钮 + 右侧刷新按钮 */
+.tree-root-row {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* 根目录那一行。可点，点一下把树收成一行 */
+.tree-root {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-2);
+  text-align: left;
+  border-radius: 0;
+}
+
+.tree-root:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--bubble-ai);
+}
+
+.tree-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 0 10px;
+}
+
+.tree-node {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.tree-node:hover {
+  background: var(--bubble-ai);
+}
+
+/* 开着的文件用左侧色条，选中的用底色 ——
+   两者可能落在同一个文件上，颜色叠加时仍然能分辨 */
+.tree-node.is-selected {
+  background: var(--bubble-ai);
+}
+
+.tree-node.is-active {
+  box-shadow: inset 2px 0 0 var(--accent);
+  background: var(--accent-soft);
+}
+
+/* 三角展开箭头，靠 rotate 变化，不换字符 */
+.tree-caret {
+  flex: none;
+  width: 12px;
+  font-size: 10px;
+  color: var(--text-3);
+  transform: rotate(0deg);
+  transition: transform 0.14s ease;
+}
+
+.tree-caret.is-open {
+  transform: rotate(90deg);
+}
+
+.tree-badge {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  display: grid;
+  place-items: center;
+  font-size: 9px;
+  font-weight: 700;
+  border-radius: 4px;
+  color: var(--text-3);
+  background: var(--bubble-ai);
+}
+
+/* 按文件类型给一点颜色，扫一眼就能找到 HTML / JS */
+.tree-badge.tone-html { color: #e06c4f; background: rgba(224, 108, 79, 0.16); }
+.tree-badge.tone-css  { color: #4f9be0; background: rgba(79, 155, 224, 0.16); }
+.tree-badge.tone-js   { color: #e0c04f; background: rgba(224, 192, 79, 0.16); }
+.tree-badge.tone-ts   { color: #4f80e0; background: rgba(79, 128, 224, 0.16); }
+.tree-badge.tone-json { color: #a0e04f; background: rgba(160, 224, 79, 0.14); }
+.tree-badge.tone-md   { color: #8f9aa8; background: rgba(143, 154, 168, 0.16); }
+.tree-badge.tone-py   { color: #4fb8e0; background: rgba(79, 184, 224, 0.16); }
+.tree-badge.tone-vue  { color: #4fd0a0; background: rgba(79, 208, 160, 0.16); }
+
+.tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12.5px;
+}
+
+.tree-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 30px 16px;
+  text-align: center;
+}
+
+.tree-empty-title {
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.tree-empty-hint {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.btn-sm {
+  padding: 5px 11px;
+  font-size: 12px;
+}
+
+/* ==========================================================================
+ * 右键菜单
+ * ========================================================================== */
+
+/* position: fixed 而不是 absolute —— 菜单挂在 .filetree 里，
+   用 absolute 会被 .tree-body 的 overflow 裁掉 */
+.ctx-menu {
+  position: fixed;
+  z-index: 40;
+  min-width: 184px;
+  padding: 5px;
+  border-radius: 10px;
+  background: var(--surface-solid);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-lg);
+}
+
+.ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 9px;
+  font-size: 12.5px;
+  color: var(--text-2);
+  text-align: left;
+  border-radius: 7px;
+}
+
+.ctx-item:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--bubble-ai);
+}
+
+.ctx-item.is-danger {
+  color: var(--danger);
+}
+
+.ctx-item.is-danger:hover:not(:disabled) {
+  background: rgba(240, 119, 110, 0.14);
+}
+
+/* 勾选位固定宽度，有勾没勾的文字都对齐 */
+.ctx-check {
+  flex: none;
+  width: 12px;
+  font-size: 11px;
+  color: var(--accent);
+}
+
+.ctx-label {
+  flex: 1;
+}
+
+.ctx-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}
+
+/* ==========================================================================
+ * 顶栏与新控件
+ * ========================================================================== */
+
+.crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  font-size: 12.5px;
+  color: var(--text-2);
+  border-radius: 9px;
+  max-width: 340px;
+}
+
+.crumb:hover {
+  color: var(--text);
+  background: var(--bubble-ai);
+}
+
+.crumb-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crumb-sep {
+  color: var(--text-3);
+}
+
+.crumb-model {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-3);
+}
+
+.bar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  color: var(--text-2);
+  border-radius: 9px;
+}
+
+.bar-btn:hover {
+  color: var(--text);
+  background: var(--bubble-ai);
+  border-color: var(--border);
+}
+
+.bar-btn.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/*
+  编辑器栏（内容区左侧）。宽度 = 内容区宽度 × --split。
+  拖动时 useSplitter 直接改 --split（documentElement 上），这里跟着变，
+  React 不重渲染。松手后 React 把 --split 也设成同一个值，两边一致。
+*/
+.editor-dock {
+  flex: none;
+  width: calc(var(--split, 0.62) * 100%);
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/*
+  竖向分割条。
+
+  它不占布局宽度：9px 的可点区靠一正一负的 margin 抵消（+9 再 -4.5×2 等于 0），
+  所以两侧按 --split 算出的宽度加起来正好是 100%，不会把分割条挤到容器边缘。
+  视觉上它只是压在接缝上的一条 1px 竖线。
+
+  cursor 必须是 col-resize：横向拖动却用 row-resize 会让光标方向反 90°，
+  用户一眼就能看出不对。
+*/
+.splitter {
+  flex: none;
+  position: relative;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+  background: transparent;
+}
+
+.splitter.is-vertical {
+  /* 9px 命中区，但左右各 -4.5px 的负边距把它从布局宽度里抵消掉 */
+  width: 9px;
+  margin: 0 -4.5px;
+  cursor: col-resize;
+}
+
+.splitter.is-vertical::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 1px;
+  background: var(--border);
+}
+
+/* 中间的小握把，悬停/拖动时才出现。常显的话界面会显得很吵 */
+.splitter-grip {
+  position: relative;
+  border-radius: 2px;
+  background: var(--border-strong);
+  opacity: 0;
+  transition: opacity 0.14s ease;
+}
+
+.splitter.is-vertical .splitter-grip {
+  width: 3px;
+  height: 28px;
+}
+
+.splitter:hover .splitter-grip,
+.splitter:focus-visible .splitter-grip,
+.splitter.is-dragging .splitter-grip {
+  opacity: 1;
+  background: var(--accent);
+}
+
+.splitter.is-vertical:hover::before,
+.splitter.is-vertical.is-dragging::before {
+  background: var(--accent);
+}
+
+.splitter:focus-visible {
+  outline: none;
+}
+
+/*
+  拖动期间给全窗口设 col-resize 光标，
+  否则鼠标跑出条子后会变回箭头，看着像拖拽断了。
+  用 fixed 覆盖层而不是改 body 的 cursor：body 上会被子元素的 cursor 盖回去。
+*/
+.splitter.is-dragging::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  cursor: col-resize;
+}
+
+/* ==========================================================================
+ * 引用胶囊
+ * ========================================================================== */
+
+.ref-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.ref-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px 2px 8px;
+  border-radius: 8px;
+  font-size: 11.5px;
+  background: var(--accent-soft);
+  border: 1px solid var(--border);
+}
+
+.ref-chip-name {
+  padding: 0;
+  font-size: 11.5px;
+  color: var(--accent);
+  border: none;
+}
+
+.ref-chip-x {
+  padding: 0;
+  width: 16px;
+  height: 16px;
+  line-height: 1;
+  font-size: 13px;
+  color: var(--text-3);
+  border: none;
+}
+
+.ref-chip-x:hover {
+  color: var(--danger);
+}
+
+.ref-clear {
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.ref-clear:hover {
+  color: var(--text);
+}
+
+/* ==========================================================================
+ * 窄屏
+ * ========================================================================== */
+
+@media (max-width: 1080px) {
+  .filetree {
+    width: 216px;
+  }
+}
+
+@media (max-width: 900px) {
+  .filetree {
+    display: none;
+  }
+}
+
+@media (max-width: 820px) {
+  .sidenav {
+    width: 52px;
+  }
+
+  .crumb {
+    max-width: 180px;
+  }
 }

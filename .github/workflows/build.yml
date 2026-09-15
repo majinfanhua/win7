@@ -72,8 +72,7 @@ jobs:
         # CI runner 是 Server 2022，探测结果永远是 win10 ——
         # 「Win7 上少一批工具」那条分支在这里永远跑不到，坏了也不知道。
         # 用 --capability-profile=win7 强制走一遍，并与默认档对比。
-        # 断言写成「子集关系」而不是「数量不同」：现在命令类工具还没实现，
-        # 两档数量本来就一样；等它们上线后数量自然会分开，这里的断言不用改。
+        # 断言写成「子集关系」而不是「数量不同」：以后再加工具也不会让这里失效。
         shell: pwsh
         run: |
           $exe = 'release/win-unpacked/AIEditor.exe'
@@ -102,6 +101,15 @@ jobs:
           # 2) Win7 不启用命令执行（这是降级分支的核心结论）
           if ($b.checks.capabilityDetected.commandExec -ne $false) { throw 'Win7 档不应启用命令执行' }
           if ($a.checks.capabilityDetected.commandExec -ne $true) { Write-Warning '默认档未探测到命令执行能力，runner 环境可能变了' }
+
+          # 2b) 命令类工具必须真的跟着探测走。
+          # 这四个工具已经实现了，所以“Win7 档里不该出现”不再是废话 ——
+          # 门控写反了它们会真的漏到 Win7 上，而 Win7 上没有 powershell.exe，
+          # 模型每调一次就白烧一轮 token。
+          foreach ($t in @('runCommand', 'jobRun', 'jobPoll', 'jobKill')) {
+            if ($b.checks.capabilityEffective -contains $t) { throw "Win7 档不应出现命令类工具 $t" }
+            if ($a.checks.capabilityEffective -notcontains $t) { Write-Warning "默认档未启用命令类工具 $t，与 runner 的探测结果不符" }
+          }
 
           # 3) 更窄的一档不能多出工具来
           $extra = @($b.checks.capabilityEffective | Where-Object { $a.checks.capabilityEffective -notcontains $_ })

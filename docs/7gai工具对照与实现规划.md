@@ -4,6 +4,8 @@
 目的：给出「哪些能实现进去、哪些不能」，并列出清单供决定先后顺序。
 
 > 状态：**已定稿（2026-09-14）**。最终范围见第 6 节，实现进度见 §6.8。
+> 2026-09-15：计划内的 10 个工具（6 个跨系统 + 4 个仅 Win10/11）已全部落地，
+> 剩余的是「缓做」那三个（`Glob` `Grep` `apply_patch`）。
 
 ---
 
@@ -199,7 +201,7 @@ truncated: true
 | 档 | 工具 | 门控条件 | 状态 |
 |---|---|---|---|
 | 跨系统都开 | `Read` `Write` `Edit` `MultiEdit` `LS` + `撤销快照` | 无（纯文件操作） | ✅ 已实现 |
-| 仅 Win10/11 | `RunCommand` + `job.run` `job.poll` `job.kill` | 设置允许 **且** 系统探测通过 | ⬜ 待实现 |
+| 仅 Win10/11 | `RunCommand` + `job.run` `job.poll` `job.kill` | 设置允许 **且** 系统探测通过 | ✅ 已实现 |
 | 不做 | `vcs.*`×3（git）、`tasks` | — | — |
 | 缓做 | `Glob` `Grep` `apply_patch` | — | — |
 
@@ -352,9 +354,24 @@ npm run smoke -- --capability-profile=win7 --self-test-out=selftest-win7.json
 | 设置页（分栏：AI 模型 / 工具能力） | ✅ | `src/renderer/src/components/SettingsPage.tsx` |
 | 对话里的工具调用过程展示 | ✅ | `src/renderer/src/components/AiPanel.tsx` |
 | 自检断言 + CI 双跑 | ✅ | `src/renderer/src/main.tsx`、`.github/workflows/build.yml` |
-| `RunCommand` + `job.*` | ⬜ 未实现 | 规划中，`ALL_TOOLS` 里已占位，门控已就绪 |
+| `RunCommand` + `job.*` | ✅ 已实现（2026-09-15） | `src/main/tools/exec.ts`（底层）、`command-tools.ts`（四个工具）、`jobs.ts`（后台任务注册表） |
 
-> `IMPLEMENTED_TOOLS` 目前等于 `CROSS_OS_TOOLS`。
-> 未实现的工具即使门控通过也不会进工具表，模型看不到就不会去调。
-> 所以 `RunCommand` / `job.*` 的剩余工作量集中在工具实现本身，
-> 门控、设置界面、CI 对比都不用再改。
+> `IMPLEMENTED_TOOLS` 现在等于 `ALL_TOOLS`：计划里要做的都已经有实作。
+> 但「已实现」不等于「会发给模型」—— 命令类四个仍要过门控，
+> Win7 与未探到 powershell.exe 的机器上依然不会出现在工具表里。
+
+### 6.9 命令类工具的实作要点（实现时踩过/绕过的）
+
+细节写在 README 的「执行命令类工具」一节，这里只记决策，避免以后被“优化”回去：
+
+| 决策 | 理由 |
+|---|---|
+| 跑 PowerShell，不假装是 Bash | Win7 裸机只有 cmd.exe；真 bash 要 WSL，学生机不能假定有 |
+| 用 `-EncodedCommand`（UTF-16LE base64）传脚本 | Node 的引号转义是 C 运行时那套，PowerShell 是另一套，`-Command` 下两边对不上 |
+| 脚本前先 `[Console]::OutputEncoding = UTF8` | 中文 Windows 默认代码页 936，不切就是乱码 |
+| 收字节用 `StringDecoder` | 一个汉字 3 字节，可能被切在两个 chunk 之间 |
+| 超时用 `taskkill /T /F`，且**不能先** `child.kill()` | 先杀 powershell 就找不到子进程了，`/T` 遍历不到，留孤儿 |
+| 后台任务不落盘，退出时全杀 | 学生关掉编辑器后 `node.exe` 继续占端口，下次启动报「端口被占用」且查不到原因 |
+| 工作目录默认项目根目录 | 让绝大多数情况不需额外参数；当然命令本身仍可 `cd ..` |
+| 输出限 6 万字符，回灌前再裁到 1.2 万（留头尾） | 一次构建可能吐几十万行，全塞上下文既烧 token 又淹掉真报错 |
+| 数值上限集中在 `tools/limits.ts` | schema 里的「上限 5 分钟」和代码里的限必须同一个数，分两处写早晚跑偏 |

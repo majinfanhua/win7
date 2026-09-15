@@ -22,19 +22,61 @@ import type { AppApi } from '@shared/api'
 import { languageFromPath } from '@shared/language'
 import {
   DEFAULT_CONFIG,
+  RECENT_SESSIONS_MAX,
+  SESSION_TITLE_MAX,
   type AiStreamChunk,
   type AiUsage,
   type AppConfig,
   type CapabilityInfo,
   type ChatMessage,
   type DoctorReport,
+  type EditorSession,
+  type FileChangeEvent,
   type FileNode,
   type LoadedFile,
   type LogLevel,
   type LogLine,
   type RuntimeInfo,
-  type ToolName
+  type SessionEntry,
+  type SnapshotSummary,
+  type StoredSession,
+  type ToolName,
+  type WorkspaceEntry
 } from '@shared/types'
+
+/** 桩里的最近工作区 / 最近会话：初始为空，用着用着就长出来 */
+let stubWorkspaces: WorkspaceEntry[] = []
+let stubSessions: SessionEntry[] = []
+/** 会话正文（索引里没有，单独存，和真机的 sessions/*.json 对应） */
+const stubBodies = new Map<string, StoredSession>()
+/** 编辑器状态：打开过哪些文件。桩里也放内存，和真机落 config.json 对应 */
+let stubEditorSession: EditorSession = { tabs: [], activePath: '', split: 0.62 }
+/** 可撤销记录。真机由 tools/snapshot.ts 维护，这里放几条假的给界面演示 */
+let stubSnapshots: SnapshotSummary[] = []
+
+/** 文件变化事件的订阅者（桩里只有模拟的 AI 写入会触发） */
+const stubFileWatchers = new Set<(event: FileChangeEvent) => void>()
+
+/**
+ * 广播一次文件变化（桩内部用）。
+ *
+ * 同时补一条可撤销记录，这样界面上的「撤销」按钮点下去有反馈 ——
+ * 桩里没有真实快照，不补的话按钮永远是死的，看不出设计意图。
+ */
+function emitFileChanged(filePath: string, origin: FileChangeEvent['origin']): void {
+  const event: FileChangeEvent = { path: filePath, origin, at: new Date().toISOString() }
+  stubSnapshots = [
+    ...stubSnapshots,
+    {
+      id: `snap-${Date.now()}`,
+      time: event.at,
+      path: filePath,
+      source: origin === 'ai' ? 'writeFile' : 'manual',
+      lineDelta: 1
+    }
+  ].slice(-20)
+  for (const cb of stubFileWatchers) cb(event)
+}
 
 /* ------------------------------------------------------------------ *
  * 内存虚拟文件系统
@@ -392,8 +434,11 @@ const STUB_FILE_TOOLS: ToolName[] = [
   'undoSnapshot'
 ]
 
-/** 需要命令执行能力的工具，尚未实现 */
+/** 需要命令执行能力的工具。浏览器里没有系统探测，因此永远拿不到这些能力 */
 const STUB_COMMAND_TOOLS: ToolName[] = ['runCommand', 'jobRun', 'jobPoll', 'jobKill']
+
+/** 全部工具，与主进程的 ALL_TOOLS 一致 */
+const STUB_ALL_TOOLS: ToolName[] = [...STUB_FILE_TOOLS, ...STUB_COMMAND_TOOLS]
 
 const STUB_TOOL_LABELS: Record<ToolName, string> = {
   readFile: '读取文件',
@@ -419,14 +464,25 @@ function stubCapability(): CapabilityInfo {
   const effective: ToolName[] = []
   const filtered: Array<{ name: ToolName; reason: string }> = []
 
-  for (const name of [...STUB_FILE_TOOLS, ...STUB_COMMAND_TOOLS]) {
-    if (!STUB_FILE_TOOLS.includes(name)) {
-      // 命令类工具尚未实现 —— 与主进程一致，先于任何其他条件
-      filtered.push({ name, reason: '尚未实现' })
+  // 过滤顺序与主进程 getCapabilityInfo() 逐条对应：
+  // 设置上限 → 逐个关闭 → 本机能力。
+  // 浏览器里探测结果就是「没有命令执行能力」，所以命令类工具在这里的结论
+  // 与主进程在 Win7 / 非 Windows 上的结论一致。
+  const allowed = mode === 'conservative' ? new Set<ToolName>(STUB_FILE_TOOLS) : new Set<ToolName>(STUB_ALL_TOOLS)
+
+  for (const name of STUB_ALL_TOOLS) {
+    if (!allowed.has(name)) {
+      filtered.push({ name, reason: '设置未放开（保守模式）' })
       continue
     }
     if (disabled.includes(name)) {
       filtered.push({ name, reason: '已在设置中关闭' })
+      continue
+    }
+    // mode === 'full' 时故意跳过能力检查，与主进程一致：
+    // 真调用了会在工具层拿到 TOOL_UNAVAILABLE 的可读错误
+    if (STUB_COMMAND_TOOLS.includes(name) && mode !== 'full') {
+      filtered.push({ name, reason: '本机不支持（命令执行能力）' })
       continue
     }
     effective.push(name)
@@ -497,6 +553,9 @@ function createApi(): AppApi {
       ensureParents(key)
       files.set(key, content)
       emitLog('file', `已保存 ${key}（内存，${content.length} 字符）`)
+      // 真机里这个动作会被 fs.watch 捕到，桩里手动广播一次，
+      // 好让「外部改动 → 编辑器自动重载」这条链路在浏览器里也能演示
+      emitFileChanged(key, 'external')
       return true
     },
 
@@ -545,6 +604,93 @@ function createApi(): AppApi {
       return true
     },
 
+    // 以下这批只在浏览器预览里能跑，用来核对左边侧栏与右键菜单的交互
+    listWorkspaces: async () => stubWorkspaces,
+
+    removeRecentWorkspace: async (target: string) => {
+      stubWorkspaces = stubWorkspaces.filter((w) => w.path !== normalize(target))
+      emitLog('ws', `从最近列表移除：${target}`)
+      return stubWorkspaces
+    },
+
+    revealInOs: async (target: string) => {
+      emitLog('ws', `浏览器预览模式不能调系统程序：${target}`, 'warn')
+      return false
+    },
+
+    previewInBrowser: async (target: string) => {
+      // 桩里没法起临时静态服务，用一个空白页告诉学生「真机上会在这里打开」
+      const win = window.open('', '_blank')
+      if (win) {
+        win.document.title = '预览（浏览器桩）'
+        win.document.body.innerHTML = `<pre style="font:13px/1.6 monospace;padding:24px">浏览器预览模式
+
+真实应用里会用系统浏览器打开：
+${target}
+
+（桩不会起临时服务，所以这里看不到页面）</pre>`
+      }
+      emitLog('ws', `预览：${target}`)
+      return true
+    },
+
+    setShowHidden: async (showHidden: boolean) => {
+      stubConfig = { ...stubConfig, explorer: { ...stubConfig.explorer, showHidden } }
+      emitLog('tree', `显示隐藏文件：${showHidden ? '开' : '关'}`)
+      return stubConfig
+    },
+
+    listSessions: async () => stubSessions,
+
+    touchSession: async (entry: { id: string; title: string; workspace: string; messageCount: number }) => {
+      const next = {
+        id: entry.id,
+        title: entry.title.slice(0, SESSION_TITLE_MAX) || '（未命名会话）',
+        workspace: entry.workspace,
+        updatedAt: new Date().toISOString(),
+        messageCount: entry.messageCount
+      }
+      stubSessions = [next, ...stubSessions.filter((s) => s.id !== entry.id)].slice(0, RECENT_SESSIONS_MAX)
+      return stubSessions
+    },
+
+    removeSession: async (id: string) => {
+      stubSessions = stubSessions.filter((s) => s.id !== id)
+      stubBodies.delete(id)
+      emitLog('session', `删除会话记录：${id}`)
+      return stubSessions
+    },
+
+    // 浏览器桩里会话正文只存内存，刷新页面就没了 —— 真机是落 userData/sessions/*.json
+    loadSession: async (id: string) => stubBodies.get(id) ?? null,
+
+    saveSession: async (session: StoredSession) => {
+      stubBodies.set(session.id, session)
+      return true
+    },
+
+    // ---- 编辑器会话与撤销：桩里都放内存，刷新即失 ----
+    getEditorSession: async () => stubEditorSession,
+
+    setEditorSession: async (session: EditorSession) => {
+      stubEditorSession = session
+      return true
+    },
+
+    listSnapshots: async () => stubSnapshots,
+
+    undoChange: async (target?: string) => {
+      const index = target
+        ? stubSnapshots.findIndex((s) => s.path === target)
+        : stubSnapshots.length - 1
+      if (index < 0) {
+        return { ok: false, message: '没有可撤销的修改' }
+      }
+      const [item] = stubSnapshots.splice(index, 1)
+      emitLog('file', `撤销：${item.path}`)
+      return { ok: true, message: `已把 ${item.path} 恢复到修改前`, path: item.path }
+    },
+
     aiChat: async (requestId: string, messages: ChatMessage[]) => streamReply(requestId, messages),
 
     aiAbort: async (requestId: string) => {
@@ -578,7 +724,14 @@ function createApi(): AppApi {
       }
       return off
     },
-    onMenu: (cb) => subscribe(menuListeners, cb)
+    onMenu: (cb) => subscribe(menuListeners, cb),
+
+    onFileChanged: (cb) => {
+      stubFileWatchers.add(cb)
+      return () => {
+        stubFileWatchers.delete(cb)
+      }
+    }
   }
 }
 

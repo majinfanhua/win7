@@ -3,6 +3,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { assertInsideRoot } from '../ipc/workspace'
 import { logger } from '../logger'
+import { markToolWrite } from '../watcher'
 import { recordSnapshot, undoSnapshot } from './snapshot'
 
 /**
@@ -12,7 +13,7 @@ import { recordSnapshot, undoSnapshot } from './snapshot'
  *   1. readFile 不再返回「文件过大」这种占位文本 —— AI 会把它当真实内容收下。
  *      改为返回「窗口」并明确标注不是全文。
  *   2. writeFile 必须先完整读过才能写，否则拒绝 —— 否则 AI 凭记忆
- *      整篇覆盖，会把学生自己改的东西冲掉。
+ *      整篇覆盖，会把自己改的东西冲掉。
  */
 
 /** 目录列表忽略项，和界面版保持一致 */
@@ -81,7 +82,7 @@ interface LineWindow {
 /**
  * 流式按行读窗口。
  *
- * 不直接 readFile 整个文件：学生机上的日志文件可能几百 MB，
+ * 不直接 readFile 整个文件：日志文件可能几百 MB，
  * 读进内存再 split 会直接卡死主进程。这里读到够用就停。
  */
 async function readLineWindow(file: string, offset: number, limit: number): Promise<LineWindow> {
@@ -193,7 +194,11 @@ async function writeFileTool(args: WriteFileArgs): Promise<string> {
   if (before === content) return `${base(target)} 内容没变化，未写入。`
 
   recordSnapshot(target, before, content, 'writeFile')
+  // 标记成「工具在写」，让文件监视把随之而来的事件标成 origin='ai'，
+  // 编辑器据此显示「AI 改过」而不是当成外部改动弹提示
+  markToolWrite(target, true)
   await atomicWrite(target, content)
+  markToolWrite(target, false)
   readState.set(target, { whole: true })
   logger.info('tool', `writeFile: ${target}（${content.length} 字符）`)
   return `已写入 ${base(target)}（${content.length} 字符${exists ? `，原 ${before.length} 字符` : '，新建文件'}）`
@@ -231,7 +236,9 @@ async function editFileTool(args: EditFileArgs): Promise<string> {
     : before.replace(oldString, newString)
 
   recordSnapshot(target, before, after, 'editFile')
+  markToolWrite(target, true)
   await atomicWrite(target, after)
+  markToolWrite(target, false)
   readState.set(target, { whole: true })
   logger.info('tool', `editFile: ${target}（替换 ${args.replaceAll ? count : 1} 处）`)
   return `已修改 ${base(target)}：替换 ${args.replaceAll ? count : 1} 处`
@@ -271,7 +278,9 @@ async function multiEditTool(args: MultiEditArgs): Promise<string> {
   if (work === before) return `${base(target)} 内容没变化，未写入。`
 
   recordSnapshot(target, before, work, 'multiEdit')
+  markToolWrite(target, true)
   await atomicWrite(target, work)
+  markToolWrite(target, false)
   readState.set(target, { whole: true })
   logger.info('tool', `multiEdit: ${target}（${edits.length} 处）`)
   return `已修改 ${base(target)}：共 ${edits.length} 处替换全部成功`
