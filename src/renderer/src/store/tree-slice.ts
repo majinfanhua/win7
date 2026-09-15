@@ -22,6 +22,7 @@ export const createTreeSlice: StateCreator<AppState, [], [], TreeSlice> = (set, 
   dragPath: '',
   dropTarget: '',
   pendingRefs: [],
+  previewRequestAt: '',
   split: 0.62,
 
   /** 左侧栏里的文件树展开/收起。写进配置，重启后保持 */
@@ -396,6 +397,18 @@ export const createTreeSlice: StateCreator<AppState, [], [], TreeSlice> = (set, 
     const refs = get().pendingRefs
     if (refs.length) set({ pendingRefs: [] })
     return refs
+  },
+
+  /**
+   * 请求预览某个文件。
+   *
+   * 先把标签打开（openFile 内部对已打开的会直接激活），
+   * 再发通知 —— 预览面板跟着 activePath 走，所以必须先切标签。
+   * 顺序反了的话面板会先渲染旧文件，再被下一次渲染换掉，闪一下。
+   */
+  requestPreview(file) {
+    void get().openFile(file)
+    set({ previewRequestAt: String(Date.now()) })
   }
 })
 

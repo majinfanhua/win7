@@ -133,6 +133,14 @@ export interface TreeSlice {
   dropTarget: string
   /** 被「插入引用」引用进输入框的文件，AiPanel 消费后清空 */
   pendingRefs: string[]
+  /**
+   * 最近一次「在预览面板中打开」的时间戳（空串表示没有请求）。
+   *
+   * 用时间戳而不是布尔：同一个文件连续点两次也要各触发一次 effect。
+   * 右键菜单在文件树组件里，而预览面板挂在 App —— 用 store 做单向通知，
+   * 比把回调从 App 一路 prop 传到 TreeNode 干净得多。
+   */
+  previewRequestAt: string
   /** 对话区占中间栏的比例，0~1 */
   split: number
 
@@ -161,6 +169,8 @@ export interface TreeSlice {
   dropOn: (from: string, dir: string) => Promise<void>
   insertReference: (file: string) => void
   consumeRefs: () => string[]
+  /** 请求在预览面板里打开某个文件 */
+  requestPreview: (file: string) => void
 }
 
 /** 编辑器 slice：标签页、内容、光标、保存、会话恢复、文件变化响应 */

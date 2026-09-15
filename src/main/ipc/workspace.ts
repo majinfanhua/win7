@@ -326,6 +326,20 @@ export function registerWorkspaceIpc(): void {
     return true
   })
 
+  /**
+   * 只取预览 URL，**不**打开系统浏览器 —— 给内嵌预览面板用。
+   *
+   * 与 wsPreview 分开而不是加个参数：两者的副作用完全不同
+   * （一个会拉起浏览器抢焦点，一个什么也不做）。
+   * 合成一个的话，以后有人传错参数就会莫名其妙弹出浏览器。
+   */
+  ipcMain.handle(IPC.wsPreviewUrl, async (_e, target: string): Promise<string> => {
+    const file = assertInsideRoot(target)
+    if (!fs.existsSync(file)) throw new Error(`文件不存在: ${file}`)
+    const root = getWorkspaceRoot()
+    return serveOnce(root, path.relative(root, file))
+  })
+
   ipcMain.handle(IPC.wsSetHidden, (_e, showHidden: boolean): unknown => {
     logger.info('workspace', `显示隐藏文件: ${showHidden ? '开' : '关'}`)
     return setConfig({ explorer: { ...getConfig().explorer, showHidden: Boolean(showHidden) } })

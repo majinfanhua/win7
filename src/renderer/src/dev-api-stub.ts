@@ -582,6 +582,21 @@ ${target}
       return true
     },
 
+    /**
+     * 桩里的「预览 URL」。
+     *
+     * 返回一个 data: URL，把内存文件系统里这个文件的内容原样塞进去 ——
+     * 这样内嵌预览面板在浏览器预览模式下**真的能看到页面**，
+     * 而不是一个写着「真机才能用」的占位。
+     * 代价是相对路径（./style.css）在 data: URL 下没有基准，解析不了。
+     */
+    previewUrl: async (target: string) => {
+      const key = normalize(target)
+      const html = files.get(key) ?? ''
+      emitLog('ws', `取预览 URL：${target}`)
+      return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`
+    },
+
     setShowHidden: async (showHidden: boolean) => {
       stubConfig = { ...stubConfig, explorer: { ...stubConfig.explorer, showHidden } }
       emitLog('tree', `显示隐藏文件：${showHidden ? '开' : '关'}`)

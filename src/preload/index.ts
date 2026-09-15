@@ -43,6 +43,7 @@ const api: AppApi = {
   removeRecentWorkspace: (path: string) => ipcRenderer.invoke(IPC.wsRemoveRecent, path),
   revealInOs: (target: string) => ipcRenderer.invoke(IPC.wsReveal, target),
   previewInBrowser: (target: string) => ipcRenderer.invoke(IPC.wsPreview, target),
+  previewUrl: (target: string) => ipcRenderer.invoke(IPC.wsPreviewUrl, target),
   setShowHidden: (showHidden: boolean) => ipcRenderer.invoke(IPC.wsSetHidden, showHidden),
 
   listSessions: () => ipcRenderer.invoke(IPC.sessionList),

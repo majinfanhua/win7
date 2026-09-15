@@ -106,3 +106,79 @@
   color: var(--danger);
   opacity: 0.8;
 }
+
+/* ==========================================================================
+ * 内嵌预览面板
+ *
+ * ⚠️ 布局契约：`.stage` 里编辑器宽度是 `--split * 100%`、对话栏是
+ * `(1 - --split) * 100%`，两者**加起来正好 100%**。所以预览这第三栏
+ * 绝不能只写一个固定宽度 —— 那会把总宽顶到 100% 以上，
+ * 结果是横向滚动条 + 对话栏被挤出可视区（和当年「分割条错位 454px」
+ * 是同一个坑）。
+ *
+ * 解法：预览打开时，它的宽度**从 --split 里再切一刀**（见 App.tsx 里
+ * `--preview-share` 的算法），三者之和仍然是 100%。
+ * 这里只声明「我占多少」，不参与分配。
+ * ========================================================================== */
+
+.preview-pane {
+  flex: none;
+  width: calc(var(--preview-share, 0) * 100%);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-solid);
+  border-left: 1px solid var(--border);
+}
+
+.preview-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.preview-title {
+  font-size: 12px;
+  color: var(--text-2);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.preview-frame {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: 0;
+  /* 白底：学生的页面大多假定白底，用主题色会让没写 background 的页面发灰 */
+  background: #ffffff;
+}
+
+.preview-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 24px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+/*
+ * 窄屏：预览占满整宽。此时 .stage 已经放不下三栏，
+ * 与对话栏在窄屏下的处理保持同一套思路 ——
+ * 宁可让一栏临时占满，也不要三栏各留一条缝。
+ */
+@media (max-width: 900px) {
+  .preview-pane {
+    width: 100%;
+    min-width: 0;
+  }
+}

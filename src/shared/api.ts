@@ -56,6 +56,8 @@ export interface AppApi {
   revealInOs(target: string): Promise<boolean>
   /** 用系统浏览器预览 HTML（自动起一个临时本地服务，页面里的相对路径也能加载） */
   previewInBrowser(target: string): Promise<boolean>
+  /** 只取预览 URL，不打开浏览器。内嵌预览面板用这个 */
+  previewUrl(target: string): Promise<string>
   /** 切换「显示隐藏文件」，写进设置并立即生效 */
   setShowHidden(showHidden: boolean): Promise<AppConfig>
 

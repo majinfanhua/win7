@@ -298,6 +298,71 @@ window.__SELFTEST__ = async () => {
   }
 
   /*
+   * 内嵌预览面板。
+   *
+   * 它是最容易出现「元素都在但布局是坏的」的一块：预览是 .stage 里的
+   * 第三栏，而编辑器的宽度是 split、对话是 (1-split)，两者加起来已经
+   * 正好 100%。预览再另占一块就会顶到 100% 以上，表现为横向滚动条 +
+   * 对话栏被挤出可视区 —— 不会报错，只会「看着不对劲」。
+   *
+   * 所以这里量的是**三者宽度之和 ≈ 内容区宽度**，而不只是元素存在。
+   */
+  try {
+    const previewBtn = document.querySelector('.topbar [aria-label="页面预览"]') as HTMLElement | null
+    checks.previewButtonFound = Boolean(previewBtn)
+    previewBtn?.click()
+
+    checks.previewPaneOpened = await waitFor(
+      () => Boolean(document.querySelector('.preview-pane')),
+      5_000
+    )
+
+    const stage = document.querySelector('.stage') as HTMLElement | null
+    const dock = document.querySelector('.editor-dock') as HTMLElement | null
+    const view = document.querySelector('.view') as HTMLElement | null
+    const pane = document.querySelector('.preview-pane') as HTMLElement | null
+
+    const stageW = stage?.getBoundingClientRect().width || 0
+    const dockW = dock?.getBoundingClientRect().width || 0
+    const viewW = view?.getBoundingClientRect().width || 0
+    const paneW = pane?.getBoundingClientRect().width || 0
+    checks.previewWidths = {
+      stage: Math.round(stageW),
+      dock: Math.round(dockW),
+      view: Math.round(viewW),
+      pane: Math.round(paneW)
+    }
+    // 容差 4px：三处 calc 各有一次取整，加上 1px 边框
+    checks.previewNoOverflow = Boolean(
+      stageW > 0 && dockW + viewW + paneW <= stageW + 4
+    )
+    // 每一栏都要有实际宽度（盯着「某一栏被算成 0」这种塌陷）
+    checks.previewAllPanesHaveWidth = dockW > 80 && viewW > 80 && paneW > 80
+
+    const closeBtn = document.querySelector(
+      '.preview-pane [aria-label="关闭预览"]'
+    ) as HTMLElement | null
+    checks.previewCloseFound = Boolean(closeBtn)
+    closeBtn?.click()
+    checks.previewPaneClosed = await waitFor(
+      () => !document.querySelector('.preview-pane'),
+      5_000
+    )
+
+    checks.previewOk = Boolean(
+      checks.previewButtonFound &&
+        checks.previewPaneOpened &&
+        checks.previewNoOverflow &&
+        checks.previewAllPanesHaveWidth &&
+        checks.previewCloseFound &&
+        checks.previewPaneClosed
+    )
+  } catch (err) {
+    checks.previewOk = false
+    checks.previewError = String(err)
+  }
+
+  /*
    * 布局骨架：左侧栏（内含文件树）+ 编辑器在左 / 对话在右 + 竖向分割条。
    *
    * 这里必须量实际几何，不能只查元素存在。
@@ -559,6 +624,7 @@ window.__SELFTEST__ = async () => {
     settingsNavOk: Boolean(checks.settingsNavOk),
     logDrawerOk: Boolean(checks.logDrawerOk),
     splitterRangeConsistent: Boolean(checks.splitterRangeConsistent),
+    previewOk: Boolean(checks.previewOk),
     layoutOk: Boolean(checks.layoutOk),
     welcomeOk: Boolean(checks.welcomeOk),
     newLayoutOk: Boolean(checks.newLayoutOk),

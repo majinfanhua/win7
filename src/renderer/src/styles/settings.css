@@ -29,7 +29,7 @@
 .view.is-active {
   display: flex;
   flex: none;
-  width: calc((1 - var(--split, 0.62)) * 100%);
+  width: calc((1 - var(--split, 0.62)) * (1 - var(--preview-share, 0)) * 100%);
   /* 对话栏本身有 padding，宽度算准了才不会因为边框多出 1px 而横向滚动 */
   box-sizing: border-box;
 }

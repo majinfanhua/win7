@@ -68,7 +68,9 @@
 */
 .editor-dock {
   flex: none;
-  width: calc(var(--split, 0.62) * 100%);
+  /* (1 - --preview-share)：预览面板打开时，编辑器按比例让出一部分宽度。
+     契约见 editor.css 里 .preview-pane 的注释 —— 三者之和必须正好 100% */
+  width: calc(var(--split, 0.62) * (1 - var(--preview-share, 0)) * 100%);
   min-width: 0;
   min-height: 0;
   display: flex;

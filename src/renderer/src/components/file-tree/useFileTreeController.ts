@@ -312,7 +312,7 @@ export function useFileTreeController(): FileTreeController {
     return buildTreeMenu(
       { target, workspace, parentDir, showHidden, sortBy },
       {
-        onPreview: () => void window.api.previewInBrowser(target.path),
+        onPreview: () => useAppStore.getState().requestPreview(target.path),
         onNewFile: () => requestNew('file', parentDir),
         onNewDir: () => requestNew('dir', parentDir),
         onRename: () => setRename({ path: target.path }),

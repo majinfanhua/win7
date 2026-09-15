@@ -437,6 +437,8 @@ export const IPC = {
   wsRemoveRecent: 'ws:remove-recent',
   wsReveal: 'ws:reveal',
   wsPreview: 'ws:preview',
+  /** 只返回预览 URL，不打开浏览器（内嵌预览面板用） */
+  wsPreviewUrl: 'ws:preview-url',
   wsSetHidden: 'ws:set-hidden',
 
   sessionList: 'session:list',
