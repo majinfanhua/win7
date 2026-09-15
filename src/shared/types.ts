@@ -280,6 +280,25 @@ export interface DoctorReport {
   runtime: RuntimeInfo
   checks: DoctorCheck[]
   generatedAt: string
+  /**
+   * 本机装了哪些运行时（python / node / git…）。
+   *
+   * 单独一个字段而不是混进 checks：checks 是「体检项」（通过/注意/异常），
+   * 而这是**能力清单** —— 没装 python 不算体检不通过，只是用不了而已。
+   */
+  runtimes: DetectedRuntime[]
+}
+
+/** 一个被探测到的开发运行时 */
+export interface DetectedRuntime {
+  /** 程序名，如 python / node / git */
+  name: string
+  /** 版本字符串，探测失败时为空 */
+  version: string
+  /** 可执行文件的绝对路径（或命令名） */
+  path: string
+  /** 给界面用的一句话用途说明 */
+  note: string
 }
 
 export type ChatRole = 'system' | 'user' | 'assistant'

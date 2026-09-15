@@ -186,6 +186,12 @@ function buildDoctor(): DoctorReport {
       },
       { id: 'ui', label: '界面渲染', status: 'pass', detail: 'React 与 Monaco 已挂载' }
     ],
+    // 浏览器里没法探测本机装了 python / node 没有（那是主进程的活），
+    // 给几条假的让界面能演示这一块
+    runtimes: [
+      { name: 'python', version: 'Python 3.11.4', path: 'C:\\Python311\\python.exe', note: '可以跑 .py 脚本' },
+      { name: 'node', version: 'v18.17.0', path: 'C:\\Program Files\\nodejs\\node.exe', note: '可以跑 .js 脚本与 npm' }
+    ],
     generatedAt: new Date().toISOString()
   }
 }

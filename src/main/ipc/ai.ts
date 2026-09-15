@@ -12,6 +12,7 @@ import {
 import { chatEndpoint, describeHttpError, modelsEndpoint } from '../../shared/ai-endpoint'
 import { getConfig } from '../config'
 import { getCapabilityInfo } from '../capabilities'
+import { describeRuntimesForModel, detectRuntimes } from '../runtimes'
 import { executeTool, summarizeCall, toolSchemasForModel } from '../tools'
 import { logger } from '../logger'
 
@@ -405,9 +406,36 @@ async function runStream(
 
   aborted.delete(requestId)
 
-  // 先记下本次 prompt，估算缓存命中要拿它当下一轮请求的对比基准
-  const promptText = flattenPrompt(messages)
+  /*
+   * 把本机装了哪些运行时补进 system prompt。
+   *
+   * 在主进程做而不是渲染层：探测逻辑（detectRuntimes）在这里，
+   * 而且结果要跟着**请求**走 —— 学生换了机器上的 python 版本，
+   * 重开应用就生效，不需要去改设置里的 system prompt 文本。
+   *
+   * 拼接而不是替换：用户自己写的 system prompt 一个字都不动，
+   * 只在末尾补一段事实。这样「设置里能看到我写了什么」仍然成立。
+   */
   const wire: WireMessage[] = messages.map((m) => ({ role: m.role, content: m.content }))
+  const systemIndex = wire.findIndex((m) => m.role === 'system')
+  if (systemIndex >= 0) {
+    try {
+      const runtimes = await detectRuntimes()
+      const extra = describeRuntimesForModel(runtimes)
+      if (extra) {
+        const current = wire[systemIndex].content
+        const text = typeof current === 'string' ? current : textOf(current ?? '')
+        wire[systemIndex] = { role: 'system', content: `${text}\n\n${extra}` }
+      }
+    } catch (err) {
+      // 探测失败不该让对话发不出去 —— 退化成「没有这段提示」而已
+      logger.warn('ai', `运行时探测失败，本次对话不带环境提示: ${String(err)}`)
+    }
+  }
+
+  // 先记下本次 prompt，估算缓存命中要拿它当下一轮请求的对比基准。
+  // 放在补完 system 之后：否则算出来的前缀与真正发出去的不一致
+  const promptText = flattenPrompt(wire)
 
   let includeUsage = true
   let useTools = toolSchemasForModel().length > 0

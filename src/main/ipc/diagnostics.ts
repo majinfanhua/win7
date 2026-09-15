@@ -2,7 +2,14 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { app, ipcMain, shell } from 'electron'
-import { IPC, type DoctorCheck, type DoctorReport, type RuntimeInfo } from '../../shared/types'
+import {
+  IPC,
+  type DetectedRuntime,
+  type DoctorCheck,
+  type DoctorReport,
+  type RuntimeInfo
+} from '../../shared/types'
+import { detectRuntimes } from '../runtimes'
 import { getConfigPath } from '../config'
 import { getLogFilePath, logger } from '../logger'
 import { detectPlatform, type PlatformProfile } from '../platform-compat'
@@ -74,7 +81,7 @@ function dirWritable(dir: string): boolean {
  * 环境体检。
  * 目标：真机上出现启动失败 / 白屏时，用户只需把这份报告发回来就能定位问题。
  */
-export function buildDoctorReport(): DoctorReport {
+export async function buildDoctorReport(): Promise<DoctorReport> {
   const runtime = getRuntimeInfo()
   const p = compat.platform || detectPlatform()
   const checks: DoctorCheck[] = []
@@ -177,8 +184,22 @@ export function buildDoctorReport(): DoctorReport {
     detail: app.isPackaged ? '已打包（asar）' : '开发模式（未打包）'
   })
 
-  logger.info('doctor', `体检完成，共 ${checks.length} 项`)
-  return { runtime, checks, generatedAt: new Date().toISOString() }
+  /*
+   * 开发运行时探测。
+   *
+   * 放在最后且**不阻塞**上面的体检项：它要起 6 个进程，冷启动时
+   * 在机械盘上可能要一两秒；而「运行库在不在」这类检查是瞬时的、
+   * 也是更要紧的。探测失败就返回空数组，不让体检整体失败。
+   */
+  let runtimes: DetectedRuntime[] = []
+  try {
+    runtimes = await detectRuntimes()
+  } catch (err) {
+    logger.warn('doctor', `运行时探测失败: ${String(err)}`)
+  }
+
+  logger.info('doctor', `体检完成，共 ${checks.length} 项，探测到 ${runtimes.length} 个运行时`)
+  return { runtime, checks, runtimes, generatedAt: new Date().toISOString() }
 }
 
 export function registerDiagnosticsIpc(): void {

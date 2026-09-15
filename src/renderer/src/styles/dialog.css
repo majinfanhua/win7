@@ -104,3 +104,60 @@
   gap: 8px;
   margin-top: 18px;
 }
+
+/* ==========================================================================
+ * 体检弹层里的「本机开发环境」清单
+ *
+ * 与 .report 那套（正常/注意/异常标签）刻意不同：那是有结论的体检项，
+ * 这是能力清单 —— 没装 python 不算不通过，所以不给状态标签。
+ * ========================================================================== */
+
+.runtime-block {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.runtime-title {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.runtime-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.runtime-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.runtime-name {
+  flex: none;
+  width: 64px;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.runtime-version {
+  flex: none;
+  color: var(--text-2);
+}
+
+.runtime-path {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-3);
+  font-size: 11px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
