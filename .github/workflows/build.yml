@@ -34,8 +34,46 @@ jobs:
       - name: 类型检查
         run: npm run typecheck
 
-      - name: 构建（含 chrome108 / node16 目标护栏）
-        run: npm run build
+      # 护栏拆成独立步骤，不串在 npm run build 里。
+      # 原因：GitHub 的运行数据（无需 token 即可读）只暴露到「步骤」这一层，
+      # 合成一步的话失败了只能看到「构建失败」，分不清是哪个护栏。
+      # 同时把失败输出用 ::error 注解发出去 —— 注解同样是公开可读的，
+      # 这样定位原因不必去翻需要权限的日志（job logs 接口要 admin 权限）。
+      - name: 护栏 - Node 16 API 边界
+        shell: pwsh
+        run: |
+          $out = & npm run check:node16 2>&1 | Out-String
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) {
+            $tail = (($out -split "`r?`n") | Where-Object { $_ -ne '' } | Select-Object -Last 25) -join '%0A'
+            $tail = $tail -replace '%', '%25' -replace "`r", '%0D'
+            Write-Host "::error title=check:node16 失败::$tail"
+            exit 1
+          }
+
+      - name: 护栏 - 文件监视时序
+        shell: pwsh
+        run: |
+          $out = & npm run check:watch 2>&1 | Out-String
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) {
+            $tail = (($out -split "`r?`n") | Where-Object { $_ -ne '' } | Select-Object -Last 30) -join '%0A'
+            $tail = $tail -replace '%', '%25' -replace "`r", '%0D'
+            Write-Host "::error title=check:watch 失败::$tail"
+            exit 1
+          }
+
+      - name: 构建（electron-vite）
+        shell: pwsh
+        run: |
+          $out = & npx electron-vite build 2>&1 | Out-String
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) {
+            $tail = (($out -split "`r?`n") | Where-Object { $_ -ne '' } | Select-Object -Last 30) -join '%0A'
+            $tail = $tail -replace '%', '%25' -replace "`r", '%0D'
+            Write-Host "::error title=electron-vite build 失败::$tail"
+            exit 1
+          }
 
       - name: 打包 x64 + ia32
         run: npm run dist:win

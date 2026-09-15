@@ -26,6 +26,27 @@ npm run check:watch  # 纯 Node 校验文件监视时序
 npm run smoke -- --capability-profile=win7
 ```
 
+## CI 失败时怎么定位
+
+**拿不到 job 日志。** `actions/jobs/<id>/logs` 接口需要仓库 admin 权限，无 token 时返回 403。
+但下面两样是公开可读的（不用 token，直接 curl 即可）：
+
+```bash
+# 各步骤的结论与耗时 —— 耗时很能说明问题
+curl -s https://api.github.com/repos/majinfanhua/win7/actions/jobs/<job_id>
+# 失败注解（::error / ::warning 都会出现在这里）
+curl -s https://api.github.com/repos/majinfanhua/win7/check-runs/<job_id>/annotations
+```
+
+所以构建链特意做了两件事，**改动 CI 时请保持**：
+
+1. **护栏拆成独立步骤**（Node 16 检查 / 文件监视检查 / electron-vite 构建），不串在
+   `npm run build` 里。合成一步就只知道「构建失败」，分不清是哪个护栏。
+2. **失败输出用 `::error title=...::` 注解发出去**。日志要权限，注解不要。
+
+判断小技巧：看步骤耗时。比如「构建」只跑了 6 秒就挂，而 `check:node16` 只要约 0.5 秒、
+`check:watch` 固定耗时约 5.3 秒 —— 6 秒正好说明挂在 `check:watch` 的断言上。
+
 ## 架构速览
 
 | 层 | 位置 | 说明 |
