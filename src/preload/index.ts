@@ -36,6 +36,7 @@ const api: AppApi = {
   createEntry: (parent: string, name: string, kind: 'file' | 'dir') =>
     ipcRenderer.invoke(IPC.wsCreate, parent, name, kind),
   rename: (from: string, newName: string) => ipcRenderer.invoke(IPC.wsRename, from, newName),
+  moveEntry: (from: string, destDir: string) => ipcRenderer.invoke(IPC.wsMove, from, destDir),
   remove: (target: string) => ipcRenderer.invoke(IPC.wsDelete, target),
 
   listWorkspaces: () => ipcRenderer.invoke(IPC.wsList),

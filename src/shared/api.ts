@@ -39,6 +39,13 @@ export interface AppApi {
   writeFile(file: string, content: string): Promise<boolean>
   createEntry(parent: string, name: string, kind: 'file' | 'dir'): Promise<string>
   rename(from: string, newName: string): Promise<string>
+  /**
+   * 把 from 移到 destDir 下（保持原名），返回新路径。
+   *
+   * 目标已存在同名项时**抛错**，不覆盖 —— 覆盖等于无声删掉学生另一个文件，
+   * 而删除至少还走回收站。跨盘场景主进程内部会回退成 copy + unlink。
+   */
+  moveEntry(from: string, destDir: string): Promise<string>
   remove(target: string): Promise<boolean>
 
   /** 最近打开过的工作区列表（最新在前） */

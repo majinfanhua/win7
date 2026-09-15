@@ -471,6 +471,25 @@
   background: var(--accent-soft);
 }
 
+/*
+ * 拖拽移动的三个状态。
+ *
+ * 用 outline + 底色而不是只改底色：落点高亮必须和「选中」「当前打开的
+ * 文件」在同一条目上也能分辨出来 —— 那两种状态各自都用了底色，
+ * 只靠底色叠加会让四种状态糊成一片，分不清自己到底要放到哪。
+ */
+.tree-node.is-dragging {
+  opacity: 0.45;
+}
+
+.tree-node.is-drop-target {
+  background: var(--accent-soft);
+  outline: 1px dashed var(--accent);
+  /* 负偏移让虚线画在条目内侧，否则会被容器的 overflow:hidden 裁掉半边 */
+  outline-offset: -1px;
+  border-radius: 3px;
+}
+
 /* 三角展开箭头，靠 rotate 变化，不换字符 */
 .tree-caret {
   flex: none;

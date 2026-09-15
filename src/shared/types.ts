@@ -10,6 +10,8 @@ export interface FileNode {
   path: string
   kind: FileKind
   size?: number
+  /** 最后修改时间（毫秒时间戳）。用于「按修改时间」排序，老版本可能没有 */
+  mtime?: number
 }
 
 export interface LoadedFile {
@@ -107,6 +109,17 @@ export interface CapabilityConfig {
   disabled: string[]
 }
 
+/**
+ * 文件树的排序方式。
+ *
+ * 排序只在渲染层做（主进程 wsReadDir 已经保证「文件夹优先 + 中文名称序」），
+ * 这样换排序方式不用重新读盘，机械盘上不会卡。
+ */
+export type ExplorerSortBy = 'name' | 'type' | 'mtime'
+
+/** 排序方式的全部取值，用于 normalize 白名单校验与工具栏下拉 */
+export const EXPLORER_SORT_BY: ExplorerSortBy[] = ['name', 'type', 'mtime']
+
 /** 界面偏好：左侧栏与面板的展开状态 */
 export interface ExplorerConfig {
   /** 是否显示以 . 开头的隐藏文件 / 目录 */
@@ -115,6 +128,13 @@ export interface ExplorerConfig {
   treeOpen: boolean
   /** 右侧对话栏是否展开。收起后编辑器撑满内容区 */
   chatOpen: boolean
+  /**
+   * 文件树排序方式。
+   *
+   * 注意：新增这个字段必须同步改 src/main/config.ts 的 normalize()——
+   * 那一份是白名单式的，漏加会表现为「改完重启就没了，还不报错」。
+   */
+  sortBy: ExplorerSortBy
 }
 
 /**
@@ -145,9 +165,20 @@ export interface EditorSession {
 
 /** 编辑器会话的标签数量上限，超过就只留最后 N 个 */
 export const EDITOR_TABS_MAX = 12
-/** 分割比例的安全范围，和前端 useSplitter 的 min/max 保持一致 */
-export const SPLIT_MIN = 0.2
-export const SPLIT_MAX = 0.9
+
+/**
+ * 分割比例的安全范围。
+ *
+ * ⚠️ 必须与前端 useSplitter 的 min/max（App.tsx）**逐字一致**。
+ *
+ * 这两处曾经不一致：界面限 0.28~0.78，而这里写 0.2~0.9。
+ * 后果是一条很难查的路径 —— 拖到 0.25 落盘、重启读回来是 0.25
+ * （在 0.2~0.9 之内，不会被夹），但界面把它当越界值处理，
+ * 于是同一次拖动在「当次会话」与「重启后」表现不同。
+ * 界面的范围更窄，是更严的那一侧，所以以它为准。
+ */
+export const SPLIT_MIN = 0.28
+export const SPLIT_MAX = 0.78
 
 export interface AppConfig {
   ai: AIConfig
@@ -360,6 +391,8 @@ export const IPC = {
   wsWriteFile: 'ws:write-file',
   wsCreate: 'ws:create',
   wsRename: 'ws:rename',
+  /** 把文件/目录移到另一个目录下（拖拽、剪切粘贴） */
+  wsMove: 'ws:move',
   wsDelete: 'ws:delete',
   wsList: 'ws:list',
   wsRemoveRecent: 'ws:remove-recent',
@@ -421,7 +454,8 @@ export const DEFAULT_CONFIG: AppConfig = {
   legacyGraphics: { softwareRendering: true },
   // 默认按本机探测，不额外关任何工具
   capability: { mode: 'auto', disabled: [] },
-  explorer: { showHidden: false, treeOpen: true, chatOpen: true },
+  // sortBy 默认按名称：教师视角最可预期，学生也最容易找到自己刚建的文件
+  explorer: { showHidden: false, treeOpen: true, chatOpen: true, sortBy: 'name' },
   lastWorkspace: '',
   recentWorkspaces: [],
   recentSessions: [],
