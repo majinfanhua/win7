@@ -2,6 +2,22 @@ import type { ToolName, ToolRequirement } from '../../shared/types'
 import { RUN_TIMEOUT_DEFAULT_MS, RUN_TIMEOUT_MAX_MS } from './limits'
 
 /**
+ * 一次工具调用的执行上下文。
+ *
+ * `sessionId` 是给权限判定用的：计划模式下「用户是否已批准执行」按会话记，
+ * 所以工具必须知道自己在哪个会话里跑。
+ *
+ * ⚠️ 定义放在这个叶子模块里，**不能放 tools/index.ts**：
+ * 各工具实作都要 import 它，而 index.ts 又要 import 各工具，
+ * 放那里会形成 tools/index → tools/file-tools → tools/index 的循环。
+ * 这个仓库有一条护栏专门查模块环（构建时的「模块依赖没有环」），
+ * 当时就是把这条写出来的。
+ */
+export interface ToolContext {
+  sessionId?: string
+}
+
+/**
  * 工具元数据。
  *
  * 除了 ./limits（它本身不 import 任何东西），这个文件不依赖其他模块，
@@ -124,7 +140,7 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: '文件绝对路径' },
+          path: { type: 'string', description: '文件路径。相对路径按当前工作区解析（如 src/main.js 或 ./a.ts）；也可以给绝对路径' },
           offset: { type: 'integer', description: '从第几行开始读（从 1 开始），默认 1' },
           limit: { type: 'integer', description: '最多读多少行，默认 800' }
         },
@@ -141,7 +157,7 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: '文件绝对路径' },
+          path: { type: 'string', description: '文件路径。相对路径按当前工作区解析（如 src/main.js 或 ./a.ts）；也可以给绝对路径' },
           content: { type: 'string', description: '新的完整文件内容' }
         },
         required: ['path', 'content']
@@ -159,7 +175,7 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: '文件绝对路径' },
+          path: { type: 'string', description: '文件路径。相对路径按当前工作区解析（如 src/main.js 或 ./a.ts）；也可以给绝对路径' },
           oldString: {
             type: 'string',
             description: '要被替换掉的原文（需在文件中唯一）。空白可略有出入，见工具说明'
@@ -181,7 +197,7 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: '文件绝对路径' },
+          path: { type: 'string', description: '文件路径。相对路径按当前工作区解析（如 src/main.js 或 ./a.ts）；也可以给绝对路径' },
           edits: {
             type: 'array',
             description: '按顺序应用的替换列表',
@@ -208,10 +224,12 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: '目录绝对路径' },
+          path: { type: 'string', description: '目录路径。相对路径按当前工作区解析；不填表示当前工作区根' },
           depth: { type: 'integer', description: '递归层数，默认 1，最大 3' }
         },
-        required: ['path']
+        // path 可选：最常见的用法就是「看看项目根有什么」，
+        // 强制必填会把「看一眼」变成一个需要猜路径的动作
+        required: []
       }
     }
   },
@@ -232,7 +250,7 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
             type: 'string',
             description: '文件名模式，例如 **/*.html 或 *.py 或 src/**/*.js'
           },
-          path: { type: 'string', description: '搜索起点目录，默认工作区根目录' }
+          path: { type: 'string', description: '搜索起点目录（相对或绝对），默认当前工作区根' }
         },
         required: ['pattern']
       }
@@ -251,7 +269,7 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
         type: 'object',
         properties: {
           pattern: { type: 'string', description: '要搜索的正则表达式' },
-          path: { type: 'string', description: '搜索起点目录，默认工作区根目录' },
+          path: { type: 'string', description: '搜索起点目录（相对或绝对），默认当前工作区根' },
           glob: { type: 'string', description: '只在匹配这个模式的文件里搜，例如 *.js' },
           ignoreCase: { type: 'boolean', description: 'true 时忽略大小写，默认 false' }
         },

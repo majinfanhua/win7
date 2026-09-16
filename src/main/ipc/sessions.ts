@@ -10,6 +10,7 @@ import {
   type StoredSession
 } from '../../shared/types'
 import { getConfig, setConfig, upsertSession } from '../config'
+import { getWorkspaceRoot } from '../paths'
 import { atomicWriteFile } from '../atomic-file'
 import { logger } from '../logger'
 
@@ -76,7 +77,27 @@ async function readStored(id: string): Promise<StoredSession | null> {
 }
 
 export function registerSessionIpc(): void {
-  ipcMain.handle(IPC.sessionList, (): SessionEntry[] => getConfig().recentSessions)
+  /**
+   * 会话列表**按工作区过滤**。
+   *
+   * 语义：会话属于创建它时所在的工作区。打开 A 项目时只看到 A 的会话，
+   * 切到 B 项目就是另一批 —— 每个项目一个上下文，列表也不会越用越长。
+   *
+   * 未打开工作区时返回「临时会话」（workspace 为空串的那些）：
+   * 那时 AI 用的是临时工作区，对应的会话也该能看见。
+   *
+   * 过滤放在主进程而不是渲染层：会话正文落盘、归档、AI 检索都在这边，
+   * 只在渲染层过滤的话，那些路径仍会看到全部会话，口径就不一致了。
+   */
+  ipcMain.handle(IPC.sessionList, (): SessionEntry[] => {
+    const current = getWorkspaceRoot()
+    return getConfig().recentSessions.filter((item) => {
+      const owner = (item.workspace || '').trim()
+      // 临时会话（没有归属）只在「也没打开项目」时显示
+      if (!owner) return !current
+      return owner === current
+    })
+  })
 
   ipcMain.handle(
     IPC.sessionTouch,

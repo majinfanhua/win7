@@ -4,7 +4,14 @@ import { logger } from '../logger'
 import { COMMAND_TOOL_HANDLERS } from './command-tools'
 import { FILE_TOOL_HANDLERS } from './file-tools'
 import { SESSION_TOOL_HANDLERS } from './session-tools'
-import { IMPLEMENTED_TOOLS, TOOL_LABELS, TOOL_SCHEMAS, type ToolSchema } from './meta'
+import {
+  IMPLEMENTED_TOOLS,
+  TOOL_LABELS,
+  TOOL_SCHEMAS,
+  type ToolContext,
+  type ToolSchema
+} from './meta'
+export type { ToolContext }
 
 /**
  * 工具调度层。
@@ -43,7 +50,7 @@ export function toolSchemasForModel(): ToolSchema[] {
  * 全部已实现工具的实作表。
  * 与 IMPLEMENTED_TOOLS 是同一份名单的两个面：前者给门控用，后者给调度用。
  */
-const HANDLERS: Record<string, (args: never) => Promise<string>> = {
+const HANDLERS: Record<string, (args: never, ctx?: ToolContext) => Promise<string>> = {
   ...FILE_TOOL_HANDLERS,
   ...COMMAND_TOOL_HANDLERS,
   ...SESSION_TOOL_HANDLERS
@@ -123,8 +130,17 @@ export function summarizeCall(name: string, rawArgs: string): string {
   return describeCall(name, args)
 }
 
-/** 执行一次工具调用。永远不抛错 —— 错误以文本形式回灌给模型。 */
-export async function executeTool(call: ToolCallRequest): Promise<ToolExecResult> {
+/**
+ * 执行一次工具调用。永远不抛错 —— 错误以文本形式回灌给模型。
+ *
+ * `ctx.sessionId` 用参数传递而不是模块级变量：一次对话里模型可能并发
+ * 发起多个工具调用（见 ai.ts 的 for 循环），模块级变量会被相邻请求覆盖 ——
+ * 表现是「A 会话批准了，B 会话的工具跟着放行」，属于静默的权限泄漏。
+ */
+export async function executeTool(
+  call: ToolCallRequest,
+  ctx: ToolContext = {}
+): Promise<ToolExecResult> {
   const name = call.name as ToolName
   const label = TOOL_LABELS[name] || call.name
 
@@ -162,7 +178,7 @@ export async function executeTool(call: ToolCallRequest): Promise<ToolExecResult
 
   const summary = describeCall(name, parsed.args)
   try {
-    const text = await handler(parsed.args as never)
+    const text = await handler(parsed.args as never, ctx as never)
     return { ok: true, text, summary }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

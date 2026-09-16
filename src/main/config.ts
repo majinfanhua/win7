@@ -15,11 +15,13 @@ import {
   type EditorSession,
   type ExplorerSortBy,
   type OpenTab,
+  type PermissionMode,
   type SessionEntry,
   type WorkspaceEntry
 } from '../shared/types'
 import { AI_NAME_MAX, HABITS_MAX, USER_NAME_MAX } from '../shared/system-doc'
 import { logger } from './logger'
+import { PERMISSION_MODES, setPermissionMode } from './permissions'
 
 let cached: AppConfig | null = null
 let configPath = ''
@@ -109,11 +111,24 @@ function normalize(raw: unknown): AppConfig {
     ? rawCap.disabled.filter((x): x is string => typeof x === 'string')
     : DEFAULT_CONFIG.capability.disabled
 
+  /*
+   * 权限模式。
+   *
+   * ⚠️ 这个 section 必须出现在 normalize 的返回里 —— 它是白名单式的，
+   * 漏掉就会「设置里改完、重启就没了」，而且不报任何错。
+   * 老版本 config.json 没有这个字段，取不到时回落到默认（对话模式）。
+   */
+  const rawPerm = (input.permission || {}) as Partial<AppConfig['permission']>
+  const permMode = PERMISSION_MODES.includes(rawPerm.mode as PermissionMode)
+    ? (rawPerm.mode as PermissionMode)
+    : DEFAULT_CONFIG.permission.mode
+
   return {
     ai: normalizeAi(input.ai),
     editor: { ...DEFAULT_CONFIG.editor, ...(input.editor || {}) },
     legacyGraphics: { ...DEFAULT_CONFIG.legacyGraphics, ...(input.legacyGraphics || {}) },
     capability: { mode, disabled },
+    permission: { mode: permMode },
     explorer: normalizeExplorer(input.explorer),
     lastWorkspace: typeof input.lastWorkspace === 'string' ? input.lastWorkspace : '',
     recentWorkspaces: normalizeWorkspaces(input.recentWorkspaces),
@@ -267,6 +282,8 @@ export function initConfig(): AppConfig {
     const code = (err as NodeJS.ErrnoException)?.code
     if (code && code !== 'ENOENT') logger.warn('config', `配置解析失败，已回退默认值: ${String(err)}`)
   }
+  // 把落盘的权限模式灌进权限层 —— 那才是判定边界时真正读的地方
+  setPermissionMode(cached.permission.mode)
   return cached
 }
 
@@ -284,6 +301,13 @@ export function setConfig(patch: Partial<AppConfig>): AppConfig {
   } catch (err) {
     logger.error('config', `配置写入失败: ${String(err)}`)
   }
+  /*
+   * 设置里改了权限模式要立刻生效，不能等重启。
+   *
+   * setPermissionMode 内部会在模式真的变化时清掉越界授权与执行批准，
+   * 所以这里无条件调用是安全的（同值调用直接返回）。
+   */
+  setPermissionMode(next.permission.mode)
   return next
 }
 

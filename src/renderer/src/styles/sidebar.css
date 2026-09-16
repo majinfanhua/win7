@@ -34,6 +34,33 @@
 }
 
 /*
+ * 收起态的头部：整个头部就是「展开侧栏」按钮。
+ *
+ * 为什么用 logo 而不是再画一个箭头图标：收起后这一列只有 52px 宽，
+ * 塞一个单独的展开箭头会和其他图标长得一样，学生认不出哪个才是
+ * 「把栏拉回来」。logo 是这一列唯一的身份锚点 —— 点它必然会展开，
+ * 这个预期最自然也最好记。
+ */
+.sidenav-head.is-collapsed {
+  width: 100%;
+  justify-content: center;
+  padding: 10px 0 12px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  cursor: pointer;
+}
+
+.sidenav-head.is-collapsed:hover {
+  background: var(--bubble-ai);
+}
+
+.sidenav-head.is-collapsed .sidenav-logo {
+  width: 26px;
+  height: 26px;
+}
+
+/*
  * 左上角 logo。
  *
  * 是 <img> 而不是画出来的色块：logo 本身是白底彩色的火箭图，
@@ -339,7 +366,8 @@
   display: none;
 }
 
-/* 收起时「新对话」要有个明显的底座，否则和 Skills/MCP 三个图标长得一样 */
+/* 收起时「新对话」要有个明显的底座 —— 否则它和下面的工作区/文件树图标
+   长得一样，而它是最常用的那个动作 */
 .sidenav.is-collapsed .nav-action:first-of-type {
   color: var(--accent);
   background: var(--accent-soft);

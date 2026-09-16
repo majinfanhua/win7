@@ -7,36 +7,22 @@ import { useFileTreeController } from './file-tree/useFileTreeController'
 /**
  * 左侧栏。
  *
- * 四块内容自上而下：
- *   1. 产品标识 + 侧栏收起按钮
- *   2. 「新对话 / Skills / MCP」三个动作
- *   3. 工作空间与最近会话两个分组列表（工作空间可切换，会话可点击/删除）
- *   4. 当前项目的文件树（可折叠）
+ * 三块内容自上而下：
+ *   1. 产品标识 + 侧栏收起按钮（收起态下 logo 本身就是「展开」入口）
+ *   2. 「新对话」动作 + 工作空间分组
+ *   3. 当前项目的文件树（展开态可折叠；收起态留一个图标入口）
+ *
+ * Skills 与 MCP 已移到设置页；「最近会话」已移到 AI 聊天面板顶部。
+ * 侧栏因此只负责「项目」这一个维度 —— 动作、工作空间、文件。
  *
  * 文件树从右侧挪进来，是因为内容区改成了「编辑器在左、对话在右」：
- * 对话必须紧贴编辑器才好边看边问，而文件树本来就和「项目 / 会话」是一类东西，
- * 跟它们放同一栏更符合直觉（VS Code 就是这么分的）。
- *
- * 所有列表都从 store 读，而 store 的数据来自 config.json ——
- * 关掉应用再打开还在，这是「最近会话」能用的前提。
+ * 对话必须紧贴编辑器才好边看边问，而文件树和「项目」是一类东西，
+ * 放同一栏更符合直觉（VS Code 就是这么分的）。
  */
 
 type Props = {
   collapsed: boolean
-  onOpenSettings: () => void
-  onNewSession: () => void
-}
-
-function relTime(iso: string): string {
-  if (!iso) return ''
-  const at = new Date(iso).getTime()
-  if (!Number.isFinite(at)) return ''
-  const diff = Date.now() - at
-  if (diff < 60_000) return '刚刚'
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`
-  if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)} 天前`
-  return new Date(at).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
+  onToggleCollapse: () => void
 }
 
 /** 路径太长时只留末尾两段，列表里不会撑破 */
@@ -45,58 +31,19 @@ function shortPath(target: string): string {
   return parts.length <= 2 ? target : `…/${parts.slice(-2).join('/')}`
 }
 
-/** 工具能力模式的中文短标签 */
-function modeLabel(mode?: string): string {
-  if (mode === 'full') return '全开'
-  if (mode === 'safe') return '保守'
-  return '自动'
-}
-
 export default function Sidebar({
   collapsed,
-  onOpenSettings,
-  onNewSession
+  onToggleCollapse
 }: Props): JSX.Element {
   const workspace = useAppStore((s) => s.workspace)
   const workspaces = useAppStore((s) => s.workspaces)
-  const sessions = useAppStore((s) => s.sessions)
-  const sessionId = useAppStore((s) => s.sessionId)
-  const config = useAppStore((s) => s.config)
   const openWorkspace = useAppStore((s) => s.openWorkspace)
   const openWorkspaceAt = useAppStore((s) => s.openWorkspaceAt)
   const removeWorkspace = useAppStore((s) => s.removeWorkspace)
-  const removeSession = useAppStore((s) => s.removeSession)
-  const archiveSession = useAppStore((s) => s.archiveSession)
-  const unarchiveSession = useAppStore((s) => s.unarchiveSession)
-  const openSession = useAppStore((s) => s.openSession)
-  const sessionLoading = useAppStore((s) => s.sessionLoading)
   const treeOpen = useAppStore((s) => s.treeOpen)
   const setTreeOpen = useAppStore((s) => s.setTreeOpen)
 
-  const [showSkills, setShowSkills] = useState(false)
-  const [showMcp, setShowMcp] = useState(false)
   const [wsMenu, setWsMenu] = useState(false)
-  /**
-   * 一行反馈文字。
-   *
-   * 侧栏没有状态栏，但不给反馈用户就不知道「归档」到底成没成
-   * （它不像删除那样列表项立刻消失）。所以在这条列表下面显一行，
-   * 3 秒后自己消失。
-   */
-  const [status, setStatus] = useState('')
-
-  /**
-   * 状态文字 4 秒后自动消失。
-   *
-   * 不消失的话它会一直挂在那里，用户过一会儿再看到会以为
-   * 「刚才那次操作还没结束」。依赖 status，所以连续两次归档
-   * 会重新计时（前一个定时器被清掉）。
-   */
-  useEffect(() => {
-    if (!status) return
-    const timer = setTimeout(() => setStatus(''), 4_000)
-    return () => clearTimeout(timer)
-  }, [status])
   const rootRef = useRef<HTMLDivElement | null>(null)
 
   /*
@@ -121,16 +68,37 @@ export default function Sidebar({
   return (
     <aside className={`sidenav${collapsed ? ' is-collapsed' : ''}`} ref={rootRef}>
       {/*
-        收起态**不渲染头部**。
-        以前这里放着一个「展开」按钮，但它自己在 52px 的窄栏里，
-        和其他图标挤在一起，学生根本认不出哪个是「把栏拉回来」的 ——
-        点了没反应就成了死路。现在展开按钮在顶栏最左侧（见 App.tsx），
-        位置固定、任何状态下都在同一个地方。
+        头部：产品标识 + 收起/展开按钮。
+        收起态**也保留头部**，但改成「只显示 logo，点一下就展开」——
+        收起后侧栏只剩 52px 的图标列，如果连 logo 都没有，整列就是一排
+        认不出功能的图标；而 logo 是唯一的身份锚点，一眼就知道这是哪一栏。
+        原来的问题是「收起后展开入口藏在图标堆里认不出来」，
+        现在那个入口是明确的（logo 自身），并且下方还有工作区/文件树图标。
       */}
-      {!collapsed && (
+      {collapsed ? (
+        <button
+          className="sidenav-head is-collapsed"
+          aria-label="展开侧栏"
+          aria-expanded={false}
+          title="展开侧栏"
+          onClick={onToggleCollapse}
+        >
+          <img className="sidenav-logo" src="./logo.png" alt="" />
+        </button>
+      ) : (
         <div className="sidenav-head">
           <img className="sidenav-logo" src="./logo.png" alt="" />
           <span className="sidenav-title">航科教育</span>
+          <span className="spacer" />
+          <button
+            className="sidenav-icon"
+            aria-label="收起侧栏"
+            aria-expanded
+            title="收起侧栏"
+            onClick={onToggleCollapse}
+          >
+            <CollapseIcon />
+          </button>
         </div>
       )}
 
@@ -141,70 +109,12 @@ export default function Sidebar({
           而不是把整个侧栏（含文件树）一起推长。
         */}
         <div className="sidenav-top">
-        <button className="nav-action" onClick={onNewSession} title="新建会话（Ctrl+N）">
-          <PlusIcon />
-          {!collapsed && <span>新对话</span>}
-        </button>
-
-        <button
-          className={`nav-action${showSkills ? ' active' : ''}`}
-          onClick={() => {
-            setShowSkills((v) => !v)
-            setShowMcp(false)
-          }}
-          title="查看当前可用的工具能力"
-        >
-          <SparkIcon />
-          {!collapsed && (
-            <>
-              <span>Skills</span>
-              <span className="spacer" />
-              <span className="nav-count">{modeLabel(config?.capability.mode)}</span>
-            </>
-          )}
-        </button>
-
-        <button
-          className={`nav-action${showMcp ? ' active' : ''}`}
-          onClick={() => {
-            setShowMcp((v) => !v)
-            setShowSkills(false)
-          }}
-          title="接入外部工具服务"
-        >
-          <PlugIcon />
-          {!collapsed && (
-            <>
-              <span>MCP</span>
-              <span className="spacer" />
-              <span className="nav-count">{config?.ai.baseUrl ? '已配' : '未配'}</span>
-            </>
-          )}
-        </button>
-
-        {!collapsed && showSkills && (
-          <div className="nav-pop">
-            <div className="nav-pop-title">本机生效的工具能力</div>
-            <div className="nav-pop-text">
-              共 {config ? '—' : '—'} 项。完整清单与逐个开关在「设置 → 工具能力」里。
-            </div>
-            <button className="nav-pop-link" onClick={onOpenSettings}>
-              去设置里看
-            </button>
-          </div>
-        )}
-
-        {!collapsed && showMcp && (
-          <div className="nav-pop">
-            <div className="nav-pop-title">MCP 服务器</div>
-            <div className="nav-pop-text">
-              当前版本用中转站直连模型，MCP 外部工具服务尚未接入。
-            </div>
-            <button className="nav-pop-link" onClick={onOpenSettings}>
-              配置 AI 模型
-            </button>
-          </div>
-        )}
+        {/*
+          「新对话」已从这里去掉。
+          它现在只在 AI 面板顶部（历史按钮旁）与菜单 Ctrl+N 里 ——
+          「开一段新对话」是对话区的事，放在侧栏会让「侧栏 = 项目导航」
+          这个定位变得含糊。侧栏只留工作空间与文件树。
+        */}
 
         {/* ---------------- 工作空间 ---------------- */}
         <div className="nav-group">
@@ -302,83 +212,44 @@ export default function Sidebar({
             ))}
         </div>
 
-        {/* ---------------- 最近会话 ---------------- */}
-        {!collapsed && (
-          <div className="nav-group">
-            <div className="nav-group-head">
-              <span>最近会话</span>
-              <span className="spacer" />
-              <span className="nav-count">{sessions.length}</span>
-            </div>
-            {sessions.length === 0 && (
-              <div className="nav-empty">还没有会话记录，发一条消息就会出现在这里</div>
-            )}
-            {sessions.map((item) => (
-              <div key={item.id} className="nav-item-row">
-                <button
-                  className={`nav-item${sessionId === item.id ? ' active' : ''}`}
-                  title={`${item.title}\n${relTime(item.updatedAt)} · ${item.messageCount} 条消息`}
-                  disabled={sessionLoading}
-                  onClick={() => void openSession(item.id)}
-                >
-                  <ChatIcon />
-                  <span className="nav-item-name">{item.title}</span>
-                  <span className="nav-time">{relTime(item.updatedAt)}</span>
-                </button>
-                {/*
-                  归档按钮。
-                  归档（而不只是删除）的意义是让 AI 以后还能查到这段讨论，
-                  所以它和「删除」是两个不同的动作，不能合并成一个。
-                  平时只是一个淡淡的图标，鼠标移到这一行才明显 —— 列表窄，
-                  两个按钮常驻会把标题挤没。
-                */}
-                <button
-                  className={`nav-item-x nav-item-archive${item.archived ? ' is-archived' : ''}`}
-                  aria-label={item.archived ? `取消归档 ${item.title}` : `归档 ${item.title}`}
-                  title={
-                    item.archived
-                      ? '已归档（AI 可以检索到它）。点一下取消归档'
-                      : '归档：宣布这段对话结束，让 AI 总结并存档，以后可以检索'
-                  }
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    void (item.archived ? unarchiveSession(item.id) : archiveSession(item.id)).then(
-                      setStatus
-                    )
-                  }}
-                >
-                  {item.archived ? '↺' : '⌸'}
-                </button>
-                <button
-                  className="nav-item-x"
-                  aria-label={`删除会话 ${item.title}`}
-                  title="删除这条记录"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    void removeSession(item.id)
-                  }}
-                >
-                  ×
-                </button>
-              </div>
-            ))}
-            {workspace && (
-              <div className="nav-path" title={workspace}>
-                {shortPath(workspace)}
-              </div>
-            )}
-            {status && <div className="nav-note">{status}</div>}
-          </div>
-        )}
+        {/*
+          「最近会话」已移到 AI 聊天面板顶部（点「历史」展开浮层）。
+          理由：会话列表天然属于「对话」这件事，放在聊天栏抬头比放在
+          左侧导航里更贴近使用场景 —— 聊到一半想换一段讨论，眼睛不用来回跑。
+          侧栏这里只保留工作空间与文件树（那是「项目」维度的东西）。
+        */}
         </div>
         {/* 上半段结束 */}
 
         {/* ---------------- 文件树 ---------------- */}
         {/*
-          只在展开态渲染。收起态（只剩 52px 的图标列）里塞不下文件树，
-          而把它也压成图标列没任何意义 —— 树本来就要看名字。
+          展开态：完整文件树（要看名字，压成图标没意义）。
+          收起态：只留一个「文件树」图标按钮，点它把侧栏展开并打开文件树 ——
+          否则 52px 的窄栏里这一栏等于凭空消失，学生以为功能没了。
         */}
-        {!collapsed && (
+        {collapsed ? (
+          <div className="nav-group">
+            <button
+              className={`nav-item${workspace ? '' : ' is-muted'}`}
+              aria-label="文件树"
+              title={workspace ? '打开文件树（同时展开侧栏）' : '先打开一个文件夹'}
+              onClick={() => {
+                onToggleCollapse()
+                if (workspace) void setTreeOpen(true)
+              }}
+            >
+              <TreeIcon />
+            </button>
+            <button
+              className="nav-item"
+              aria-label="工作空间"
+              title={workspace ? `当前项目：${workspace}` : '打开文件夹'}
+              onClick={() => void openWorkspace()}
+            >
+              <FolderIcon />
+            </button>
+          </div>
+        ) : (
           <div className={`nav-group nav-group-tree${treeOpen ? ' is-open' : ''}`}>
             <button
               className="nav-group-head is-clickable"
@@ -417,39 +288,30 @@ export default function Sidebar({
  * ------------------------------------------------------------------ */
 
 
-function PlusIcon(): JSX.Element {
+/** 收起侧栏：两条竖线夹一个向左的箭头（面板往左收） */
+function CollapseIcon(): JSX.Element {
   return (
     <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">
-      <path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <g fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M4.5 5v14" />
+        <path d="M19.5 5v14" opacity=".5" />
+        <path d="M14.5 12H8.5M11 9l-3 3 3 3" />
+      </g>
     </svg>
   )
 }
 
-function SparkIcon(): JSX.Element {
+/** 文件树：一个分叉的目录结构 */
+function TreeIcon(): JSX.Element {
   return (
     <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">
-      <path
-        d="M12 3.5 13.7 9l5.5 1.7-5.5 1.7L12 18l-1.7-5.6L4.8 10.7 10.3 9 12 3.5Z"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinejoin="round"
-      />
-    </svg>
-  )
-}
-
-function PlugIcon(): JSX.Element {
-  return (
-    <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">
-      <path
-        d="M9 3.5v5M15 3.5v5M6.5 8.5h11v3a5.5 5.5 0 0 1-11 0v-3ZM12 17v3.5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
+      <g fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M6 4.5v13a2 2 0 0 0 2 2h3" />
+        <path d="M6 10.5h3a2 2 0 0 0 2-2v-1" />
+        <rect x="3.5" y="2.5" width="5" height="4" rx="1" />
+        <rect x="15.5" y="10.5" width="5" height="4" rx="1" />
+        <rect x="11.5" y="17.5" width="5" height="4" rx="1" />
+      </g>
     </svg>
   )
 }
@@ -459,20 +321,6 @@ function FolderIcon(): JSX.Element {
     <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">
       <path
         d="M3.5 6.5A1.5 1.5 0 0 1 5 5h4l1.6 2h8.4A1.5 1.5 0 0 1 20.5 8.5v9A1.5 1.5 0 0 1 19 19H5a1.5 1.5 0 0 1-1.5-1.5v-11Z"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinejoin="round"
-      />
-    </svg>
-  )
-}
-
-function ChatIcon(): JSX.Element {
-  return (
-    <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">
-      <path
-        d="M20 12.5c0 3.6-3.6 6.5-8 6.5-.9 0-1.8-.1-2.6-.3L4 20.5l1.5-3.6A6.3 6.3 0 0 1 4 12.5C4 8.9 7.6 6 12 6s8 2.9 8 6.5Z"
         fill="none"
         stroke="currentColor"
         strokeWidth="1.5"

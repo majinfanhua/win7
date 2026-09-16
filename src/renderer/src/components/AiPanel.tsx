@@ -1,5 +1,5 @@
 import { forwardRef, memo, useEffect, useImperativeHandle, useRef, useState } from 'react'
-import type { AiUsage, ChatContentBlock, ChatMessage } from '@shared/types'
+import type { AiUsage, ApprovalRequest, ChatContentBlock, ChatMessage } from '@shared/types'
 import { compressImage, humanBytes, withImages } from '../image-input'
 import { useAppStore } from '../store/useAppStore'
 import {
@@ -149,6 +149,19 @@ function greeting(): string {
   return '晚上好'
 }
 
+/** 会话列表里的相对时间。放在这里而不是复用侧栏那份 —— 侧栏已经不显示会话了 */
+function relTime(iso: string): string {
+  if (!iso) return ''
+  const at = new Date(iso).getTime()
+  if (!Number.isFinite(at)) return ''
+  const diff = Date.now() - at
+  if (diff < 60_000) return '刚刚'
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`
+  if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)} 天前`
+  return new Date(at).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
+}
+
 const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(function AiPanel(
   { onOpenSettings },
   ref
@@ -159,6 +172,97 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
   const sessionLoading = useAppStore((s) => s.sessionLoading)
   const workspace = useAppStore((s) => s.workspace)
   const openWorkspace = useAppStore((s) => s.openWorkspace)
+  /**
+   * 「最近会话」浮层。
+   *
+   * 会话列表原先在左侧栏。移到聊天面板顶部的原因：换一段讨论是「对话」这件事
+   * 的一部分 —— 聊到一半想切，眼睛不必从右栏跑到左栏。
+   * 做成按钮 + 浮层而不是常驻列表：常驻会把消息区挤矮，而切会话是间歇动作。
+   */
+  const sessions = useAppStore((s) => s.sessions)
+  const openSession = useAppStore((s) => s.openSession)
+  const removeSession = useAppStore((s) => s.removeSession)
+  const archiveSession = useAppStore((s) => s.archiveSession)
+  const unarchiveSession = useAppStore((s) => s.unarchiveSession)
+  const [histOpen, setHistOpen] = useState(false)
+  const [histStatus, setHistStatus] = useState('')
+  const histRef = useRef<HTMLDivElement | null>(null)
+
+  /**
+   * 越界访问的授权请求。
+   *
+   * 由主进程发起（它才是要动文件的那一方），这里只负责显示与回话。
+   * 用数组而不是单个：模型一轮可能并发发几个工具调用，每个越界路径
+   * 都会来问一次 —— 只留最后一个会把前面的请求永远挂在那儿
+   * （主进程侧要等 60 秒才超时拒绝，期间那一轮工具全卡住）。
+   */
+  const [approvals, setApprovals] = useState<ApprovalRequest[]>([])
+  useEffect(() => {
+    return window.api.onApprovalRequest((req) => {
+      setApprovals((prev) => [...prev, req])
+    })
+  }, [])
+
+  const answerApproval = async (req: ApprovalRequest, choice: 'once' | 'dir' | 'deny'): Promise<void> => {
+    setApprovals((prev) => prev.filter((item) => item.id !== req.id))
+    await window.api.resolveApproval(req.id, choice)
+  }
+
+  /** 权限模式。计划模式下要额外显示「开始执行」 */
+  const permissionMode = config?.permission.mode || 'chat'
+  const [executing, setExecuting] = useState(false)
+  /** 切会话/切模式后要重置「已批准执行」的显示状态 */
+  useEffect(() => {
+    setExecuting(false)
+  }, [sessionId, permissionMode])
+
+  /**
+   * `@` 引用文件的候选列表。
+   *
+   * 文件清单在**第一次敲 @ 时**才拉（不是挂载时就拉）：没打开项目时
+   * 这个列表是空的，而挂载时就发一次 IPC 等于每次开新会话都白跑一趟
+   * 递归遍历。拉回来之后按当前工作区缓存，切项目时清掉重拉。
+   */
+  const [fileList, setFileList] = useState<string[]>([])
+  const [atOpen, setAtOpen] = useState(false)
+  /** `@` 后面已经敲进去的过滤词 */
+  const [atQuery, setAtQuery] = useState('')
+  /** 输入框里那个 `@` 的下标，选中后要从这里把它连同过滤词一起删掉 */
+  const [atStart, setAtStart] = useState(-1)
+  /** 高亮的候选下标（↑↓ 移动，回车选中） */
+  const [atIndex, setAtIndex] = useState(0)
+
+  const loadFiles = async (): Promise<void> => {
+    try {
+      setFileList(await window.api.listFiles())
+    } catch {
+      setFileList([])
+    }
+  }
+
+  // 换工作区后候选列表必须重拉：否则会拿上个项目的文件去补全
+  useEffect(() => {
+    setFileList([])
+    setAtOpen(false)
+  }, [workspace])
+
+  // 状态文字自动消失，避免一直挂着让人以为操作还没结束
+  useEffect(() => {
+    if (!histStatus) return
+    const timer = window.setTimeout(() => setHistStatus(''), 4_000)
+    return () => window.clearTimeout(timer)
+  }, [histStatus])
+
+  // 点浮层外收起。用 mousedown 而不是 click —— click 会先于按钮 onClick 冒泡上来
+  useEffect(() => {
+    if (!histOpen) return
+    const onDown = (e: MouseEvent): void => {
+      if (!histRef.current?.contains(e.target as Node)) setHistOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [histOpen])
+
   const [items, setItems] = useState<ChatItem[]>([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
@@ -710,10 +814,227 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
     inputRef.current?.focus()
   }
 
+  /**
+   * 候选文件的过滤结果。
+   *
+   * 打分排序而不是简单 includes：输入 `app` 时，`app.tsx` 应当排在
+   * `src/components/apply-helpers.tsx` 前面 —— 否则最常见的那种
+   * 「想引用根目录同名文件」会被一长串深层路径淹掉。
+   * 规则（越靠前越优先）：文件名完全相等 > 文件名以它开头 > 文件名包含它 >
+   * 路径包含它。同档内按路径长度升序（短路径通常更可能是目标）。
+   */
+  const atMatches = (() => {
+    if (!atOpen) return []
+    const q = atQuery.trim().toLowerCase()
+    if (!q) return fileList.slice(0, 30)
+    const scored: Array<{ path: string; score: number }> = []
+    for (const path of fileList) {
+      const lower = path.toLowerCase()
+      const name = (lower.split('/').pop() || lower).replace(/\.[^.]+$/, '')
+      let score = -1
+      if (name === q) score = 0
+      else if (name.startsWith(q)) score = 1
+      else if (name.includes(q)) score = 2
+      else if (lower.includes(q)) score = 3
+      if (score >= 0) scored.push({ path, score })
+    }
+    scored.sort((a, b) => a.score - b.score || a.path.length - b.path.length)
+    return scored.slice(0, 30).map((s) => s.path)
+  })()
+
+  /**
+   * 输入框内容变化时维护 `@` 的状态。
+   *
+   * 判定「光标前最近一个 @」而不是「整段里有没有 @」：一句话里可能先写
+   * 邮箱地址再引用文件，用后者会把邮箱里的 @ 也当成触发点。
+   * 触发条件还要求 @ 前面是行首或空白 —— `foo@bar` 这种不该弹列表。
+   */
+  const onInputChange = (value: string, caret: number): void => {
+    setInput(value)
+    const before = value.slice(0, caret)
+    const at = before.lastIndexOf('@')
+    if (at < 0 || (at > 0 && !/\s/.test(before[at - 1]))) {
+      setAtOpen(false)
+      setAtStart(-1)
+      return
+    }
+    const query = before.slice(at + 1)
+    // 过滤词里不该有空白或换行：出现就说明这个 @ 已经写完了（比如「@a.txt 帮我看看」）
+    if (/[\s\n]/.test(query)) {
+      setAtOpen(false)
+      setAtStart(-1)
+      return
+    }
+    setAtStart(at)
+    setAtQuery(query)
+    setAtIndex(0)
+    setAtOpen(true)
+    // 第一次触发时才拉清单，见 fileList 的注释
+    if (fileList.length === 0) void loadFiles()
+  }
+
+  /**
+   * 选中一个候选：把输入框里的 `@过滤词` 换成 `@相对路径` 并挂成引用胶囊。
+   *
+   * 挂胶囊而不是把路径留在文本里：路径留在正文里学生想删掉得手动选中
+   * 一大段，而胶囊点一下 × 就没了 —— 与文件树右键「插入引用」是同一套体验。
+   * 文本里补一个 `@路径` 只是让输入框读起来完整（也是学生自己敲的东西）。
+   */
+  const chooseAtFile = (relPath: string): void => {
+    const absolute = workspace ? `${workspace}/${relPath}`.replace(/\\/g, '/') : relPath
+    if (atStart >= 0) {
+      const caret = inputRef.current?.selectionStart ?? input.length
+      const next = `${input.slice(0, atStart)}@${relPath} ${input.slice(caret)}`
+      setInput(next)
+    }
+    useAppStore.getState().insertReference(absolute)
+    setAtOpen(false)
+    setAtStart(-1)
+    setAtQuery('')
+    inputRef.current?.focus()
+  }
+
   return (
     <section className="chat">
+      {/*
+        面板抬头：左侧「历史」按钮（浮层列最近会话），右侧当前会话标题。
+        会话列表原先在左侧栏，移到这里是因为它属于「对话」这件事。
+      */}
+      <div className="chat-head" ref={histRef}>
+        <button
+          className={`chat-head-btn${histOpen ? ' active' : ''}`}
+          aria-label="历史会话"
+          aria-expanded={histOpen}
+          title="最近会话"
+          onClick={() => setHistOpen((v) => !v)}
+        >
+          <HistoryIcon />
+          <span>历史</span>
+          {sessions.length > 0 && <span className="chat-head-count">{sessions.length}</span>}
+        </button>
+
+        <span className="chat-head-title" title={workspace || '未打开项目'}>
+          {sessions.find((s) => s.id === sessionId)?.title || '新对话'}
+        </span>
+
+        {histOpen && (
+          <div className="chat-pop">
+            {sessions.length === 0 ? (
+              <div className="chat-pop-empty">还没有会话记录，发一条消息就会出现在这里</div>
+            ) : (
+              <div className="chat-pop-list">
+                {sessions.map((item) => (
+                  <div key={item.id} className="chat-pop-row">
+                    <button
+                      className={`chat-pop-item${sessionId === item.id ? ' active' : ''}`}
+                      title={`${item.title}\n${relTime(item.updatedAt)} · ${item.messageCount} 条消息`}
+                      disabled={sessionLoading}
+                      onClick={() => {
+                        void openSession(item.id)
+                        setHistOpen(false)
+                      }}
+                    >
+                      <span className="chat-pop-name">{item.title}</span>
+                      <span className="chat-pop-time">{relTime(item.updatedAt)}</span>
+                    </button>
+                    <button
+                      className={`chat-pop-x${item.archived ? ' is-archived' : ''}`}
+                      aria-label={item.archived ? `取消归档 ${item.title}` : `归档 ${item.title}`}
+                      title={
+                        item.archived
+                          ? '已归档（AI 可以检索到它）。点一下取消归档'
+                          : '归档：宣布这段对话结束，让 AI 总结并存档，以后可以检索'
+                      }
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        void (item.archived
+                          ? unarchiveSession(item.id)
+                          : archiveSession(item.id)
+                        ).then(setHistStatus)
+                      }}
+                    >
+                      {item.archived ? '↺' : '⌸'}
+                    </button>
+                    <button
+                      className="chat-pop-x"
+                      aria-label={`删除会话 ${item.title}`}
+                      title="删除这条记录"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        void removeSession(item.id)
+                      }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {histStatus && <div className="chat-pop-note">{histStatus}</div>}
+          </div>
+        )}
+      </div>
+
       <div className="chat-scroll" ref={scrollRef}>
         <div className="chat-inner">
+          {/*
+            越界授权卡片。
+            放在消息流最前面（顶部）而不是底部：它要求用户做决定，
+            应该显眼；而且在底部会被输入框与工具条压住。
+          */}
+          {approvals.map((req) => (
+            <div key={req.id} className="approval-card">
+              <div className="approval-head">
+                <ShieldIcon />
+                <span>AI 想访问当前项目之外的位置</span>
+              </div>
+              <div className="approval-action">{req.action}</div>
+              <div className="approval-path" title={req.target}>
+                {req.target}
+              </div>
+              <div className="approval-actions">
+                <button className="primary" onClick={() => void answerApproval(req, 'once')}>
+                  只允许这一次
+                </button>
+                <button className="ghost" onClick={() => void answerApproval(req, 'dir')}>
+                  允许此目录
+                </button>
+                <button className="ghost danger" onClick={() => void answerApproval(req, 'deny')}>
+                  拒绝
+                </button>
+              </div>
+              <div className="hint">
+                「允许此目录」之后本次运行为止都不再问这个目录。
+                拒绝后 AI 会收到说明，它不会重试同一个路径。
+              </div>
+            </div>
+          ))}
+
+          {/*
+            计划模式的「开始执行」。
+            只在计划模式、且已有对话内容时出现 —— 空会话里没什么可执行的。
+          */}
+          {permissionMode === 'plan' && items.length > 0 && (
+            <div className={`plan-bar${executing ? ' is-executing' : ''}`}>
+              <div className="plan-bar-text">
+                {executing
+                  ? '已批准执行：AI 现在可以修改文件了'
+                  : '计划模式：AI 只能查看。看过它的方案后，点右边开始执行。'}
+              </div>
+              {!executing && (
+                <button
+                  className="primary"
+                  onClick={() => {
+                    setExecuting(true)
+                    void window.api.startExecuting(sessionId)
+                  }}
+                >
+                  开始执行
+                </button>
+              )}
+            </div>
+          )}
+
           {items.length === 0 ? (
             <div className="welcome">
               {/* 用真 logo 而不是手绘的火箭 svg —— 界面上只该有一种火箭 */}
@@ -823,14 +1144,82 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
           }
           value={input}
           onPaste={onPaste}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={(e) => onInputChange(e.target.value, e.target.selectionStart ?? e.target.value.length)}
           onKeyDown={(e) => {
+            /*
+             * @ 候选列表打开时，↑↓ / 回车 / Esc 归它用 ——
+             * 尤其是回车：平时回车是换行，这里必须是「选中这个文件」，
+             * 否则学生敲完过滤词一按回车，选中的却是换行。
+             *
+             * ⚠️ Esc 的判定**不能**和 ↑↓/回车 挤在同一个
+             * `atMatches.length > 0` 分支里：一个过滤词谁都不匹配时
+             * （比如 @zzz），列表仍开着但为空，那时恰恰最需要 Esc 关掉它。
+             * 这条是自检抓出来的 —— 原来的写法会让空列表关不掉，
+             * 浮层一直挡着输入框。
+             */
+            if (atOpen && e.key === 'Escape') {
+              e.preventDefault()
+              setAtOpen(false)
+              return
+            }
+            if (atOpen && atMatches.length > 0) {
+              if (e.key === 'ArrowDown') {
+                e.preventDefault()
+                setAtIndex((i) => (i + 1) % atMatches.length)
+                return
+              }
+              if (e.key === 'ArrowUp') {
+                e.preventDefault()
+                setAtIndex((i) => (i - 1 + atMatches.length) % atMatches.length)
+                return
+              }
+              if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) {
+                e.preventDefault()
+                chooseAtFile(atMatches[Math.min(atIndex, atMatches.length - 1)])
+                return
+              }
+            }
             if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
               e.preventDefault()
               void send()
             }
           }}
         />
+
+        {/*
+          @ 候选浮层。放在输入框**下方**：输入框贴底，上方空间要留给消息。
+          用 onMouseDown + preventDefault 而不是 onClick —— 后者会先让
+          textarea 失焦，而我们需要 caret 位置来替换掉刚敲的过滤词。
+        */}
+        {atOpen && (
+          <div className="at-pop">
+            {atMatches.length === 0 ? (
+              <div className="at-empty">
+                {fileList.length === 0
+                  ? workspace
+                    ? '正在读取文件列表…'
+                    : '还没有打开项目，先打开一个文件夹'
+                  : `没有匹配 @${atQuery} 的文件`}
+              </div>
+            ) : (
+              atMatches.map((path, i) => (
+                <button
+                  key={path}
+                  className={`at-item${i === atIndex ? ' active' : ''}`}
+                  title={path}
+                  onMouseDown={(e) => {
+                    e.preventDefault()
+                    chooseAtFile(path)
+                  }}
+                  onMouseEnter={() => setAtIndex(i)}
+                >
+                  <span className="at-name">{path.split('/').pop()}</span>
+                  <span className="at-dir">{path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : ''}</span>
+                </button>
+              ))
+            )}
+          </div>
+        )}
 
         {/*
           底部工具条。左边是几种「贴东西进来」的入口，右边是发送。
@@ -1084,6 +1473,31 @@ function RefRow({
         清空引用
       </button>
     </div>
+  )
+}
+
+/** 越界授权：一面盾牌，表示「这里需要你确认」 */
+function ShieldIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+      <g fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round">
+        <path d="M12 3.2 19.5 6v6c0 4.2-3 7.4-7.5 8.8C7.5 19.4 4.5 16.2 4.5 12V6L12 3.2Z" />
+        <path d="M12 8.5v3.2M12 14.6v.1" strokeLinecap="round" />
+      </g>
+    </svg>
+  )
+}
+
+/** 历史会话：一个带指针的钟面 */
+function HistoryIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+      <g fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3.8 12a8.2 8.2 0 1 0 2.6-6" />
+        <path d="M3.5 4.5V9H8" />
+        <path d="M12 8v4.4l3 1.8" />
+      </g>
+    </svg>
   )
 }
 

@@ -8,6 +8,7 @@ import { atomicWriteFile, withLock } from './atomic-file'
 import { getConfig } from './config'
 import { detectRuntimes } from './runtimes'
 import { detectPlatform } from './platform-compat'
+import { getScratchRoot, getWorkspaceRoot } from './paths'
 import { logger } from './logger'
 
 /**
@@ -100,23 +101,58 @@ async function render(): Promise<string> {
 /**
  * 一句给模型看的系统环境说明。
  *
- * 只写「是什么系统」这一件事，不写版本号之外的东西 ——
+ * 只写「是什么系统、在哪个目录」这两件事 ——
  * 版本号在这里是有用的（模型据此决定给 `dir` 还是 `ls`、
- * 要不要避开 Win7 没有的命令），而补丁号之类没有用，只会占 token。
+ * 要不要避开 Win7 没有的命令），**工作目录更是必须的**（见下）。
  *
- * 刻意不含**时间**与**工作区路径**：前者每轮都变（缓存必挂），
- * 后者是「这一轮在哪工作」，属于会话上下文而不是系统设定。
+ * ⚠️ 关于工作目录，这里改过一次设计，值得记下来：
+ *
+ * 原来刻意不写工作区路径，理由是「它属于会话上下文而不是系统设定，
+ * 写进来会让缓存失效」。那个理由站不住 —— 它导致模型**根本不知道
+ * 自己在哪**，而所有文件工具的 path 又都要求绝对路径，于是模型只能猜，
+ * 猜出来的相对路径被路径守卫一律拒绝，表现为「接上 AI 后工具大面积失败」。
+ *
+ * 现在的规则：相对路径按工作区解析（模型最自然的写法），
+ * 同时**明确告诉它所在目录**（这样它要写绝对路径时也写得对）。
+ * 缓存代价可以接受：路径在一次会话内是稳定的，只有切换项目时才变，
+ * 而那时缓存本来就该失效。
  */
 function describeEnvironment(): string {
+  const parts: string[] = []
   try {
     const p = detectPlatform()
     const bits = process.arch === 'x64' ? '64 位' : process.arch === 'ia32' ? '32 位' : process.arch
     const name = p.name || process.platform
     const release = p.release ? ` ${p.release}` : ''
-    return `用户的操作系统：${name}${release}，${bits}。`
+    parts.push(`用户的操作系统：${name}${release}，${bits}。`)
   } catch {
-    return ''
+    /* 探测失败就不写这一句 */
   }
+
+  /*
+   * 当前工作目录。
+   *
+   * 没有打开项目时 AI 仍然有一块可写的地方（临时工作区），
+   * 所以这里不会为空 —— 空的话说明连临时区都还没就绪，
+   * 那时明确说「没有工作目录」，让模型知道该先请用户选一个。
+   */
+  const root = getWorkspaceRoot()
+  const scratch = getScratchRoot()
+  if (root) {
+    parts.push(
+      `当前工作目录（项目根）：${root}。` +
+        '工具里的相对路径都相对它解析；也可以直接给绝对路径。'
+    )
+  } else if (scratch) {
+    parts.push(
+      `当前还没有打开项目，临时工作目录是：${scratch}。` +
+        '相对路径相对它解析。用户想在自己的项目里干活时，请提醒他先打开一个文件夹。'
+    )
+  } else {
+    parts.push('当前没有可用的工作目录，请先让用户打开一个项目文件夹。')
+  }
+
+  return parts.join('\n')
 }
 
 export interface DocState {

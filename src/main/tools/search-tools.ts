@@ -1,7 +1,8 @@
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { assertInsideRoot } from '../ipc/workspace'
+import { guardPath } from '../permissions'
+import type { ToolContext } from './meta'
 import { logger } from '../logger'
 import { MAX_ENTRIES, MAX_LINE_CHARS, MAX_MATCHES, MAX_SCAN_BYTES, SKIP_DIRS } from './limits'
 
@@ -201,7 +202,7 @@ export function matchGlob(relPath: string, pattern: string): boolean {
  * Glob 工具
  * ------------------------------------------------------------------ */
 
-export async function globTool(args: GlobArgs): Promise<string> {
+export async function globTool(args: GlobArgs, ctx: ToolContext = {}): Promise<string> {
   const pattern = typeof args.pattern === 'string' ? args.pattern.trim() : ''
   if (!pattern) throw new Error('pattern 不能为空，例如 **/*.html')
 
@@ -213,7 +214,11 @@ export async function globTool(args: GlobArgs): Promise<string> {
     )
   }
 
-  const root = args.path ? assertInsideRoot(args.path) : assertInsideRoot('.')
+  // 搜索是只读操作：写=false。搜索起点默认当前工作区根
+  const root = await guardPath(args.path || '.', {
+    sessionId: ctx.sessionId,
+    action: `搜索起点 ${args.path || '(当前工作区)'}`
+  })
   const stat = await fsp.stat(root).catch(() => null)
   if (!stat) throw new Error(`路径不存在：${root}`)
   if (!stat.isDirectory()) throw new Error(`${root} 不是目录，Glob 只能搜索目录`)
@@ -255,7 +260,7 @@ function looksBinary(buf: Buffer): boolean {
   return false
 }
 
-export async function grepTool(args: GrepArgs): Promise<string> {
+export async function grepTool(args: GrepArgs, ctx: ToolContext = {}): Promise<string> {
   const pattern = typeof args.pattern === 'string' ? args.pattern.trim() : ''
   if (!pattern) throw new Error('pattern 不能为空，要搜的正则表达式')
 
@@ -267,7 +272,10 @@ export async function grepTool(args: GrepArgs): Promise<string> {
     throw new Error(`正则表达式不合法：${String(err)}`)
   }
 
-  const root = args.path ? assertInsideRoot(args.path) : assertInsideRoot('.')
+  const root = await guardPath(args.path || '.', {
+    sessionId: ctx.sessionId,
+    action: `搜索起点 ${args.path || '(当前工作区)'}`
+  })
   const stat = await fsp.stat(root).catch(() => null)
   if (!stat) throw new Error(`路径不存在：${root}`)
 

@@ -1,5 +1,7 @@
 import fsp from 'node:fs/promises'
-import { assertInsideRoot, getWorkspaceRoot } from '../ipc/workspace'
+import { getScratchRoot, getWorkspaceRoot } from '../paths'
+import { guardPath } from '../permissions'
+import type { ToolContext } from './meta'
 import { logger } from '../logger'
 import {
   clipForModel,
@@ -23,14 +25,23 @@ import { JOB_MAX_MS } from './limits'
  * 公共部分
  * ------------------------------------------------------------------ */
 
-/** 工作目录：默认项目根目录，给了就必须在项目内 */
-async function resolveCwd(raw: unknown): Promise<string> {
-  const root = getWorkspaceRoot()
-  if (!root) throw new Error('尚未打开工作区，无法确定命令的工作目录')
+/**
+ * 工作目录：默认项目根目录（没项目时用临时工作区）。
+ *
+ * 显式给了 cwd 就走权限层 —— 与文件工具同一套边界规则，
+ * 不再另写一份「必须在项目内」的判断（两份守卫早晚跑偏）。
+ */
+async function resolveCwd(raw: unknown, ctx: ToolContext = {}): Promise<string> {
+  const root = getWorkspaceRoot() || getScratchRoot()
+  if (!root) throw new Error('尚未打开工作区，也无法创建临时工作区，无法确定命令的工作目录')
   const value = typeof raw === 'string' ? raw.trim() : ''
   if (!value) return root
 
-  const target = assertInsideRoot(value)
+  const target = await guardPath(value, {
+    sessionId: ctx.sessionId,
+    write: true,
+    action: `在目录里执行命令 ${value}`
+  })
   const stat = await fsp.stat(target).catch(() => null)
   if (!stat) throw new Error(`工作目录不存在：${target}`)
   if (!stat.isDirectory()) throw new Error(`工作目录不是文件夹：${target}`)
@@ -79,11 +90,11 @@ export interface RunCommandArgs {
   timeoutMs?: number
 }
 
-async function runCommandTool(args: RunCommandArgs): Promise<string> {
+async function runCommandTool(args: RunCommandArgs, ctx: ToolContext = {}): Promise<string> {
   const command = typeof args.command === 'string' ? args.command.trim() : ''
   if (!command) throw new Error('command 不能为空')
 
-  const cwd = await resolveCwd(args.cwd)
+  const cwd = await resolveCwd(args.cwd, ctx)
   const timeoutMs = normalizeTimeout(args.timeoutMs)
   logger.info('tool', `runCommand（cwd=${cwd}，超时 ${timeoutMs}ms）: ${command.slice(0, 200)}`)
 
@@ -107,11 +118,11 @@ export interface JobRunArgs {
   cwd?: string
 }
 
-async function jobRunTool(args: JobRunArgs): Promise<string> {
+async function jobRunTool(args: JobRunArgs, ctx: ToolContext = {}): Promise<string> {
   const command = typeof args.command === 'string' ? args.command.trim() : ''
   if (!command) throw new Error('command 不能为空')
 
-  const cwd = await resolveCwd(args.cwd)
+  const cwd = await resolveCwd(args.cwd, ctx)
   const job = startJob(command, cwd)
 
   return [
@@ -190,9 +201,12 @@ async function jobKillTool(args: JobKillArgs): Promise<string> {
 }
 
 /** 供 dispatch 使用：名字 -> 实作 */
-export const COMMAND_TOOL_HANDLERS: Record<string, (args: never) => Promise<string>> = {
-  runCommand: runCommandTool as (args: never) => Promise<string>,
-  jobRun: jobRunTool as (args: never) => Promise<string>,
-  jobPoll: jobPollTool as (args: never) => Promise<string>,
-  jobKill: jobKillTool as (args: never) => Promise<string>
+export const COMMAND_TOOL_HANDLERS: Record<
+  string,
+  (args: never, ctx?: ToolContext) => Promise<string>
+> = {
+  runCommand: runCommandTool as (args: never, ctx?: ToolContext) => Promise<string>,
+  jobRun: jobRunTool as (args: never, ctx?: ToolContext) => Promise<string>,
+  jobPoll: jobPollTool as (args: never, ctx?: ToolContext) => Promise<string>,
+  jobKill: jobKillTool as (args: never, ctx?: ToolContext) => Promise<string>
 }

@@ -2,6 +2,7 @@ import type {
   AiStreamChunk,
   AiTestResult,
   AppConfig,
+  ApprovalRequest,
   ArchivedSession,
   CapabilityInfo,
   ChatMessage,
@@ -36,6 +37,20 @@ export interface AppApi {
   getConfig(): Promise<AppConfig>
   setConfig(patch: Partial<AppConfig>): Promise<AppConfig>
 
+  /** 当前权限模式（对话 / 计划 / 完全允许） */
+  getPermissionMode(): Promise<string>
+  /** 切换权限模式。切换会清掉本会话的越界授权，避免上个模式的放行残留 */
+  setPermissionMode(mode: string): Promise<string>
+  /**
+   * 计划模式：用户点了「开始执行」，本会话放行写入。
+   * 必须带上 sessionId —— 批准是按会话记的，主进程不自己猜是哪个会话。
+   */
+  startExecuting(sessionId: string): Promise<boolean>
+  /** 回一个越界审批请求（allow-once / allow-dir / deny） */
+  resolveApproval(id: string, choice: string): Promise<boolean>
+  /** 有越界请求等用户决定 */
+  onApprovalRequest(cb: (req: ApprovalRequest) => void): () => void
+
   openWorkspace(preset?: string): Promise<string>
   readDir(dir: string): Promise<FileNode[]>
   readFile(file: string): Promise<LoadedFile>
@@ -50,6 +65,14 @@ export interface AppApi {
    */
   moveEntry(from: string, destDir: string): Promise<string>
   remove(target: string): Promise<boolean>
+  /**
+   * 列出工作区里所有文件的相对路径（已跳过 node_modules 这类重目录）。
+   *
+   * 给输入框的 `@` 引用用：一次取回全量，之后在渲染层本地过滤。
+   * 未打开工作区时返回空数组（而不是抛错）—— 输入框不该因为
+   * 没打开项目就报一堆错。
+   */
+  listFiles(): Promise<string[]>
 
   /** 最近打开过的工作区列表（最新在前） */
   listWorkspaces(): Promise<WorkspaceEntry[]>
@@ -57,10 +80,8 @@ export interface AppApi {
   removeRecentWorkspace(path: string): Promise<WorkspaceEntry[]>
   /** 打开工作区里的一个文件，交系统默认程序处理（右键「预览文件」） */
   revealInOs(target: string): Promise<boolean>
-  /** 用系统浏览器预览 HTML（自动起一个临时本地服务，页面里的相对路径也能加载） */
+  /** 用系统默认浏览器打开 HTML（自动起一个临时本地服务，页面里的相对路径也能加载） */
   previewInBrowser(target: string): Promise<boolean>
-  /** 只取预览 URL，不打开浏览器。内嵌预览面板用这个 */
-  previewUrl(target: string): Promise<string>
   /** 切换「显示隐藏文件」，写进设置并立即生效 */
   setShowHidden(showHidden: boolean): Promise<AppConfig>
 

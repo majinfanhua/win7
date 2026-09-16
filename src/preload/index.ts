@@ -4,6 +4,7 @@ import type { AppApi } from '../shared/api'
 import type {
   AiStreamChunk,
   AppConfig,
+  ApprovalRequest,
   ChatMessage,
   EditorSession,
   FileChangeEvent,
@@ -29,6 +30,15 @@ const api: AppApi = {
   getConfig: () => ipcRenderer.invoke(IPC.configGet),
   setConfig: (patch: Partial<AppConfig>) => ipcRenderer.invoke(IPC.configSet, patch),
 
+  getPermissionMode: () => ipcRenderer.invoke(IPC.permissionGetMode),
+  setPermissionMode: (mode: string) => ipcRenderer.invoke(IPC.permissionSetMode, mode),
+  startExecuting: (sessionId: string) =>
+    ipcRenderer.invoke(IPC.permissionStartExecuting, sessionId),
+  resolveApproval: (id: string, choice: string) =>
+    ipcRenderer.invoke(IPC.permissionResolve, id, choice),
+  onApprovalRequest: (cb: (req: ApprovalRequest) => void) =>
+    subscribe<ApprovalRequest>(IPC.evtApprovalRequest, cb),
+
   openWorkspace: (preset?: string) => ipcRenderer.invoke(IPC.wsOpen, preset),
   readDir: (dir: string) => ipcRenderer.invoke(IPC.wsReadDir, dir),
   readFile: (file: string) => ipcRenderer.invoke(IPC.wsReadFile, file),
@@ -38,12 +48,12 @@ const api: AppApi = {
   rename: (from: string, newName: string) => ipcRenderer.invoke(IPC.wsRename, from, newName),
   moveEntry: (from: string, destDir: string) => ipcRenderer.invoke(IPC.wsMove, from, destDir),
   remove: (target: string) => ipcRenderer.invoke(IPC.wsDelete, target),
+  listFiles: () => ipcRenderer.invoke(IPC.wsListFiles),
 
   listWorkspaces: () => ipcRenderer.invoke(IPC.wsList),
   removeRecentWorkspace: (path: string) => ipcRenderer.invoke(IPC.wsRemoveRecent, path),
   revealInOs: (target: string) => ipcRenderer.invoke(IPC.wsReveal, target),
   previewInBrowser: (target: string) => ipcRenderer.invoke(IPC.wsPreview, target),
-  previewUrl: (target: string) => ipcRenderer.invoke(IPC.wsPreviewUrl, target),
   setShowHidden: (showHidden: boolean) => ipcRenderer.invoke(IPC.wsSetHidden, showHidden),
 
   listSessions: () => ipcRenderer.invoke(IPC.sessionList),

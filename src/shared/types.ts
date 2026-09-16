@@ -211,6 +211,22 @@ export interface CapabilityConfig {
 }
 
 /**
+ * 权限模式：**模式控制工具的边界**。
+ *
+ * 与 capability 是两件事，不要合并：
+ *   - capability 决定「AI 手里有哪些工具」（能力维度）
+ *   - permission 决定「这些工具能伸到哪儿」（边界维度）
+ *
+ * 同一个 readFile，在 chat 下只能读工作区，在 full 下能读任何地方 ——
+ * 工具没变，变的是模式给它划的界。
+ */
+export type PermissionMode = 'chat' | 'plan' | 'full'
+
+export interface PermissionConfig {
+  mode: PermissionMode
+}
+
+/**
  * 文件树的排序方式。
  *
  * 排序只在渲染层做（主进程 wsReadDir 已经保证「文件夹优先 + 中文名称序」），
@@ -286,6 +302,8 @@ export interface AppConfig {
   editor: EditorConfig
   legacyGraphics: LegacyGraphicsConfig
   capability: CapabilityConfig
+  /** 权限模式：决定 AI 的工具能伸到哪儿（工作区内 / 越界要授权 / 全局放行） */
+  permission: PermissionConfig
   explorer: ExplorerConfig
   lastWorkspace: string
   /** 最近打开过的工作区，最新在前，最多 RECENT_WORKSPACES_MAX 条 */
@@ -467,6 +485,22 @@ export interface ModelListResult {
   detail: string
 }
 
+/**
+ * 一次越界访问的授权请求（主进程 → 渲染层）。
+ *
+ * 由主进程发起：它才是真正要动文件的那一方，必须自己等到用户点头。
+ * 渲染层只负责显示与回传选择，不参与判定。
+ */
+export interface ApprovalRequest {
+  id: string
+  /** 人类可读的动作描述，如「读取 D:\其他项目\a.ts」 */
+  action: string
+  /** 要访问的绝对路径 */
+  target: string
+  /** 「允许此目录」会授权的目录 */
+  scopeDir: string
+}
+
 /* ------------------------------------------------------------------ *
  * 工具调用
  * ------------------------------------------------------------------ */
@@ -606,6 +640,21 @@ export const IPC = {
   configGet: 'config:get',
   configSet: 'config:set',
 
+  /**
+   * 权限模式与越界审批。
+   *
+   * 审批是**主进程发起、渲染层回话**（不是渲染层先答应再干活）：
+   * 要动文件的是主进程，它必须自己等到用户点头。
+   */
+  permissionGetMode: 'permission:get-mode',
+  permissionSetMode: 'permission:set-mode',
+  /** 用户批准计划模式的执行（按会话记） */
+  permissionStartExecuting: 'permission:start-executing',
+  /** 主进程 → 渲染层：有一个越界请求等你决定 */
+  evtApprovalRequest: 'evt:approval-request',
+  /** 渲染层 → 主进程：我的选择 */
+  permissionResolve: 'permission:resolve',
+
   wsOpen: 'ws:open',
   wsReadDir: 'ws:read-dir',
   wsReadFile: 'ws:read-file',
@@ -619,9 +668,15 @@ export const IPC = {
   wsRemoveRecent: 'ws:remove-recent',
   wsReveal: 'ws:reveal',
   wsPreview: 'ws:preview',
-  /** 只返回预览 URL，不打开浏览器（内嵌预览面板用） */
-  wsPreviewUrl: 'ws:preview-url',
   wsSetHidden: 'ws:set-hidden',
+  /**
+   * 列出工作区里的文件（相对路径），供输入框 @ 引用做候选列表。
+   *
+   * 与 glob 工具的区别：那个是给 AI 用的、按模式匹配；
+   * 这个是给人用的，一次返回全量（有上限），由渲染层做模糊过滤 ——
+   * 每敲一个字就往返一次 IPC，在机械盘上会明显发涩。
+   */
+  wsListFiles: 'ws:list-files',
 
   sessionList: 'session:list',
   sessionTouch: 'session:touch',
@@ -704,6 +759,8 @@ export const DEFAULT_CONFIG: AppConfig = {
   legacyGraphics: { softwareRendering: true },
   // 默认按本机探测，不额外关任何工具
   capability: { mode: 'auto', disabled: [] },
+  // 默认对话模式：工作区 + 临时区内自由，越界问用户。最安全也最符合直觉的起点
+  permission: { mode: 'chat' },
   // sortBy 默认按名称：教师视角最可预期，学生也最容易找到自己刚建的文件
   explorer: { showHidden: false, treeOpen: true, chatOpen: true, sortBy: 'name' },
   lastWorkspace: '',

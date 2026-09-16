@@ -319,6 +319,8 @@
   padding: 14px 16px 10px;
   border-radius: 16px;
   box-shadow: var(--shadow-lg);
+  /* @ 候选浮层相对这里定位（见文件末尾的 .at-pop） */
+  position: relative;
 }
 
 .composer textarea {
@@ -630,4 +632,326 @@
 
 .send-btn.is-stop:hover:not(:disabled) {
   filter: brightness(1.08);
+}
+
+/* ==========================================================================
+ * 面板抬头：历史会话入口 + 当前会话标题
+ *
+ * 会话列表原先在左侧栏，现移到聊天面板顶部（点「历史」出浮层）。
+ * 常驻列表会把消息区挤矮，而切会话是间歇动作，所以做成按钮 + 浮层。
+ * ========================================================================== */
+
+.chat-head {
+  flex: none;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 4px 8px;
+}
+
+.chat-head-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 9px;
+  font-size: 12.5px;
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+
+.chat-head-btn:hover,
+.chat-head-btn.active {
+  color: var(--text);
+  background: var(--bubble-ai);
+  border-color: var(--border-strong);
+}
+
+/* 会话条数：一个小圆标，比写「N 个会话」省地方 */
+.chat-head-count {
+  min-width: 16px;
+  padding: 0 4px;
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+  color: var(--text-2);
+  background: var(--accent-soft);
+  border-radius: 8px;
+}
+
+/* 当前会话标题：占满剩余宽度，太长就省略 —— 它只是「我现在在哪」的提示 */
+.chat-head-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12.5px;
+  color: var(--text-3);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 历史浮层：从按钮下方展开，压在消息区上面 */
+.chat-pop {
+  position: absolute;
+  top: 32px;
+  left: 0;
+  z-index: 30;
+  width: min(420px, 100%);
+  max-height: 340px;
+  overflow-y: auto;
+  padding: 6px;
+  background: var(--surface-solid);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+}
+
+.chat-pop-empty {
+  padding: 14px 10px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-3);
+}
+
+.chat-pop-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chat-pop-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.chat-pop-item {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  text-align: left;
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+}
+
+.chat-pop-item:hover {
+  color: var(--text);
+  background: var(--bubble-ai);
+}
+
+.chat-pop-item.active {
+  color: var(--text);
+  background: var(--accent-soft);
+  border-color: var(--border-strong);
+}
+
+.chat-pop-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-pop-time {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+/* 归档 / 删除：平时淡，悬停整行才明显 —— 两个按钮常驻会把标题挤没 */
+.chat-pop-x {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-3);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  opacity: 0.5;
+}
+
+.chat-pop-row:hover .chat-pop-x {
+  opacity: 1;
+}
+
+.chat-pop-x:hover {
+  color: var(--text);
+  background: var(--bubble-ai);
+}
+
+/* 已归档的会话：图标换成 ↺，用强调色提示「点一下取消」 */
+.chat-pop-x.is-archived {
+  color: var(--accent);
+}
+
+.chat-pop-note {
+  padding: 6px 9px 2px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+/* ==========================================================================
+ * @ 引用候选浮层
+ *
+ * 挂在输入框下方。必须能盖住工具条 —— 否则候选被工具条压住一半，
+ * 学生看不到最后几个。
+ * ========================================================================== */
+
+.at-pop {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  /* 贴输入框底边往上一点。用 bottom 而不是 top：输入框高度会随 rows 变，
+     从底下定位不受展开/收起影响 */
+  bottom: calc(100% - 6px);
+  z-index: 40;
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 5px;
+  background: var(--surface-solid);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+}
+
+.at-empty {
+  padding: 10px;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+.at-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 9px;
+  text-align: left;
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+}
+
+/* 高亮项要够明显：键盘上下键移动时，眼睛得能立刻跟上 */
+.at-item.active {
+  color: var(--text);
+  background: var(--accent-soft);
+  border-color: var(--border-strong);
+}
+
+.at-name {
+  flex: none;
+  font-size: 13px;
+}
+
+.at-dir {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11.5px;
+  color: var(--text-3);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ==========================================================================
+ * 越界授权卡片
+ *
+ * 主进程要访问当前项目之外的位置时弹出来问用户。刻意**做得显眼**：
+ * 它是唯一一个「用户必须做决定，否则 AI 卡住」的元素，
+ * 藏得太浅会被当成普通提示划过去，那次工具调用就一直等到 60 秒超时。
+ * ========================================================================== */
+
+.approval-card {
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  background: var(--surface-solid);
+  /* 用警示色描边：它和普通消息气泡的区别必须一眼可辨 */
+  border: 1px solid var(--warn);
+  border-radius: 12px;
+  box-shadow: var(--shadow-sm);
+}
+
+.approval-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--warn);
+}
+
+.approval-action {
+  margin-top: 8px;
+  font-size: 13.5px;
+  color: var(--text);
+}
+
+/* 完整路径：允许换行显示，不能省略 —— 用户要看清是哪个目录才能决定 */
+.approval-path {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-3);
+  word-break: break-all;
+}
+
+.approval-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.approval-card .hint {
+  margin-top: 8px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-3);
+}
+
+/* ==========================================================================
+ * 计划模式的「开始执行」横条
+ * ========================================================================== */
+
+.plan-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  background: var(--accent-soft);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+}
+
+.plan-bar-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+
+/* 已批准：换成成功色，并去掉按钮，让人一眼看出「现在它真的能动手了」 */
+.plan-bar.is-executing {
+  background: transparent;
+  border-color: var(--ok);
+}
+
+.plan-bar.is-executing .plan-bar-text {
+  color: var(--ok);
 }

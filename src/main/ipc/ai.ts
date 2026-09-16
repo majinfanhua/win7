@@ -559,7 +559,17 @@ async function runStream(
         continue
       }
 
-      const outcome = await executeTool({ id: call.id, name, arguments: rawArgs })
+      /*
+       * 把 sessionId 传进工具层。
+       *
+       * 权限层要靠它判断「这个会话是否已批准执行计划」（计划模式的硬门禁），
+       * 以及越界授权该记在哪个会话名下。传错会话的后果是把批准放行到了
+       * 另一段对话上，所以这里必须用当前这次请求的真实 sessionId。
+       */
+      const outcome = await executeTool(
+        { id: call.id, name, arguments: rawArgs },
+        { sessionId }
+      )
 
       emit({
         requestId,

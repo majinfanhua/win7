@@ -2,7 +2,6 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
-import { assertInsideRoot } from '../ipc/workspace'
 import { logger } from '../logger'
 import { markToolWrite } from '../watcher'
 import {
@@ -11,6 +10,8 @@ import {
   findEditMatches,
   type EditMatchStrategy
 } from './edit-match'
+import { guardPath } from '../permissions'
+import type { ToolContext } from './meta'
 import { globTool, grepTool } from './search-tools'
 import { recordSnapshot, undoSnapshot } from './snapshot'
 
@@ -248,8 +249,11 @@ export interface ReadFileArgs {
   limit?: number
 }
 
-async function readFileTool(args: ReadFileArgs): Promise<string> {
-  const target = assertInsideRoot(args.path)
+async function readFileTool(args: ReadFileArgs, ctx: ToolContext = {}): Promise<string> {
+  const target = await guardPath(args.path, {
+    sessionId: ctx.sessionId,
+    action: `读取 ${args.path}`
+  })
   const stat = await fsp.stat(target)
   if (stat.isDirectory()) throw new Error(`${target} 是目录，请用 listDir`)
 
@@ -287,8 +291,12 @@ export interface WriteFileArgs {
   content: string
 }
 
-async function writeFileTool(args: WriteFileArgs): Promise<string> {
-  const target = assertInsideRoot(args.path)
+async function writeFileTool(args: WriteFileArgs, ctx: ToolContext = {}): Promise<string> {
+  const target = await guardPath(args.path, {
+    sessionId: ctx.sessionId,
+    write: true,
+    action: `写入 ${args.path}`
+  })
   const content = typeof args.content === 'string' ? args.content : ''
   const exists = fs.existsSync(target)
 
@@ -397,8 +405,12 @@ function applyEdits(
   return { after: work, count: applied, strategy: weakest }
 }
 
-async function editFileTool(args: EditFileArgs): Promise<string> {
-  const target = assertInsideRoot(args.path)
+async function editFileTool(args: EditFileArgs, ctx: ToolContext = {}): Promise<string> {
+  const target = await guardPath(args.path, {
+    sessionId: ctx.sessionId,
+    write: true,
+    action: `修改 ${args.path}`
+  })
   const { oldString, newString } = args
   if (typeof oldString !== 'string' || oldString === '') throw new Error('oldString 不能为空')
   if (typeof newString !== 'string') throw new Error('newString 必须是字符串')
@@ -432,8 +444,12 @@ export interface MultiEditArgs {
   edits: Array<{ oldString: string; newString: string; replaceAll?: boolean }>
 }
 
-async function multiEditTool(args: MultiEditArgs): Promise<string> {
-  const target = assertInsideRoot(args.path)
+async function multiEditTool(args: MultiEditArgs, ctx: ToolContext = {}): Promise<string> {
+  const target = await guardPath(args.path, {
+    sessionId: ctx.sessionId,
+    write: true,
+    action: `多处修改 ${args.path}`
+  })
   const edits = Array.isArray(args.edits) ? args.edits : []
   if (edits.length === 0) throw new Error('edits 不能为空')
 
@@ -505,8 +521,13 @@ async function collect(dir: string, depth: number, budget: { left: number }): Pr
   return lines
 }
 
-async function listDirTool(args: ListDirArgs): Promise<string> {
-  const target = assertInsideRoot(args.path)
+async function listDirTool(args: ListDirArgs, ctx: ToolContext = {}): Promise<string> {
+  // path 改成可选：模型经常想「看看项目根」，以前必填 + 要绝对路径
+  // 让它只能瞎猜。不填就是当前工作区根（没项目时是临时区）。
+  const target = await guardPath(args.path || '.', {
+    sessionId: ctx.sessionId,
+    action: `列出目录 ${args.path || '(当前工作区)'}`
+  })
   const stat = await fsp.stat(target)
   if (!stat.isDirectory()) throw new Error(`${target} 不是目录`)
   const depth = Math.max(1, Math.min(3, Math.floor(Number(args.depth) || 1)))
@@ -519,8 +540,15 @@ export interface UndoSnapshotArgs {
   path?: string
 }
 
-async function undoSnapshotTool(args: UndoSnapshotArgs): Promise<string> {
-  const target = args.path ? assertInsideRoot(args.path) : undefined
+async function undoSnapshotTool(args: UndoSnapshotArgs, ctx: ToolContext = {}): Promise<string> {
+  // 撤销是写操作 —— 计划模式下同样要拦
+  const target = args.path
+    ? await guardPath(args.path, {
+        sessionId: ctx.sessionId,
+        write: true,
+        action: `回退 ${args.path}`
+      })
+    : undefined
   const result = undoSnapshot(target)
   if (!result.ok) throw new Error(result.message)
   // 回退后文件内容变了，之前记的读状态已失效 —— 删掉逼模型重新读一遍，
@@ -529,15 +557,23 @@ async function undoSnapshotTool(args: UndoSnapshotArgs): Promise<string> {
   return result.message
 }
 
-/** 供 dispatch 使用：名字 -> 实作 */
-export const FILE_TOOL_HANDLERS: Record<string, (args: never) => Promise<string>> = {
-  readFile: readFileTool as (args: never) => Promise<string>,
-  writeFile: writeFileTool as (args: never) => Promise<string>,
-  editFile: editFileTool as (args: never) => Promise<string>,
-  multiEdit: multiEditTool as (args: never) => Promise<string>,
-  listDir: listDirTool as (args: never) => Promise<string>,
+/**
+ * 供 dispatch 使用：名字 -> 实作。
+ *
+ * 签名统一收 ToolContext（第二个参数），由 tools/index.ts 的 executeTool
+ * 从调用点透传 —— 权限层要靠它区分会话（见 ToolContext 的注释）。
+ */
+export const FILE_TOOL_HANDLERS: Record<
+  string,
+  (args: never, ctx?: ToolContext) => Promise<string>
+> = {
+  readFile: readFileTool as (args: never, ctx?: ToolContext) => Promise<string>,
+  writeFile: writeFileTool as (args: never, ctx?: ToolContext) => Promise<string>,
+  editFile: editFileTool as (args: never, ctx?: ToolContext) => Promise<string>,
+  multiEdit: multiEditTool as (args: never, ctx?: ToolContext) => Promise<string>,
+  listDir: listDirTool as (args: never, ctx?: ToolContext) => Promise<string>,
   // 搜索类实作在 search-tools.ts，但要合并进这张表 —— 调度层只认这一份
-  glob: globTool as (args: never) => Promise<string>,
-  grep: grepTool as (args: never) => Promise<string>,
-  undoSnapshot: undoSnapshotTool as (args: never) => Promise<string>
+  glob: globTool as (args: never, ctx?: ToolContext) => Promise<string>,
+  grep: grepTool as (args: never, ctx?: ToolContext) => Promise<string>,
+  undoSnapshot: undoSnapshotTool as (args: never, ctx?: ToolContext) => Promise<string>
 }

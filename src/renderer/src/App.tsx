@@ -7,7 +7,7 @@ import SettingsPage from './components/SettingsPage'
 import Sidebar from './components/Sidebar'
 import EditorPane from './components/EditorPane'
 import ExplorerPanel from './components/file-tree/ExplorerPanel'
-import PreviewPane, { canPreviewFile } from './components/PreviewPane'
+import { canOpenInBrowser } from '@shared/language'
 import LogDrawer from './components/LogDrawer'
 import { useAppStore } from './store/useAppStore'
 import { useIsMobile } from './hooks/useMedia'
@@ -82,13 +82,6 @@ export default function App(): JSX.Element {
   /** 日志抽屉。主进程 pushLog 的内容以前没有任何地方显示（见 LogDrawer 注释） */
   const [logsOpen, setLogsOpen] = useState(false)
   /**
-   * 内嵌预览面板的开关。
-   *
-   * 预览的目标跟着「当前激活的标签」走，不单独存一个路径 ——
-   * 两份状态会分叉（切了标签而预览还停在上一个文件）。
-   */
-  const [previewOpen, setPreviewOpen] = useState(false)
-  /**
    * 对话区占中间栏的比例（0~1）。
    *
    * 存在 store 里而不是组件 state：它要跟着配置落盘（重启恢复上次拖到的位置），
@@ -112,25 +105,6 @@ export default function App(): JSX.Element {
   const aiRef = useRef<AiPanelHandle | null>(null)
 
   const isMobile = useIsMobile()
-
-  /**
-   * 预览面板占内容区的份额。
-   *
-   * 基础值 0.3，但要**保证对话栏至少还有 18% 的宽度** ——
-   * split 拉到 0.78（上限）时，对话本来只剩 22%，
-   * 再让出 30% 就只剩 15.4%，气泡会挤成一条（与 useSplitter 的
-   * max=0.78 是同一个约束：18% 是消息还能读的下限）。
-   *
-   * 所以这里按「对话让出的部分不超过它自己的一半」来夹：
-   * 宁可预览窄一点，也不能把对话挤到不可用。
-   */
-  const previewShare = (() => {
-    if (!previewOpen) return 0
-    const chatWidth = 1 - split
-    // 对话最多让出一半宽度（即至少保留 50%）
-    const maxByChat = Math.max(0, chatWidth * 0.5)
-    return Math.min(0.3, maxByChat)
-  })()
 
   const splitter = useSplitter({
     axis: 'vertical',
@@ -255,19 +229,48 @@ export default function App(): JSX.Element {
   }, [view, doctorOpen, logsOpen])
 
   /**
-   * 文件树右键「预览文件」→ 打开内嵌预览面板。
+   * 用系统默认浏览器打开一个 HTML。
+   *
+   * 主进程会起一个只绑回环地址的临时静态服务把工作区当根，
+   * 这样页面里的 `./style.css`、`./main.js` 相对路径才加载得出来 ——
+   * 直接丢 file:// 给浏览器会被同源策略拦掉，学生看到的是
+   * 「没样式也没反应」的页面，比不打开更让人困惑。
+   */
+  const openInBrowser = useCallback(async (target: string): Promise<void> => {
+    if (!target) return
+    try {
+      await window.api.previewInBrowser(target)
+    } catch (err) {
+      /*
+       * 失败要说出来：静默的话学生只会觉得「点了没反应」。
+       * 走 store 的 pushLog 进日志抽屉（与其它主进程消息同一条通道），
+       * 而不是 window.alert —— 后者会打断输入，而这里只是提示。
+       */
+      const msg = err instanceof Error ? err.message : String(err)
+      useAppStore.getState().pushLog({
+        time: '',
+        level: 'warn',
+        scope: 'workspace',
+        text: `打开预览失败：${msg}`
+      })
+    }
+  }, [])
+
+  /**
+   * 文件树右键「用浏览器打开」。
    *
    * 订阅 store 的时间戳而不是从 App 往下传回调：右键菜单在文件树组件里，
-   * 而面板挂在 App，中间隔着 Sidebar / TreeNode 好几层。
+   * 而打开动作要用到当前激活文件，中间隔着 Sidebar / TreeNode 好几层。
+   *
+   * store 的 requestPreview 会先 openFile 再发这个时间戳，
+   * 所以这里读到 activePath 时已经是目标文件。
    */
   const previewRequestAt = useAppStore((s) => s.previewRequestAt)
   useEffect(() => {
     if (!previewRequestAt) return
-    setPreviewOpen(true)
-    // 右键预览时如果停在设置页/资源管理器，得先回到对话视图 ——
-    // 那两个视图下 .stage 是单栏的，预览面板不渲染
-    setView((v) => (v === 'chat' ? v : 'chat'))
-  }, [previewRequestAt])
+    const target = useAppStore.getState().activePath
+    if (target) void openInBrowser(target)
+  }, [previewRequestAt, openInBrowser])
 
   /**
    * 磁盘上的文件变了（AI 工具写的、或外部程序改的）→ 编辑器自动重载。
@@ -360,27 +363,17 @@ export default function App(): JSX.Element {
       <div className="shell">
         <Sidebar
           collapsed={navCollapsed}
-          onOpenSettings={openSettings}
-          onNewSession={onNewSession}
+          onToggleCollapse={() => setNavCollapsed((v) => !v)}
         />
 
         <div className="main">
           <header className="topbar">
             {/*
-              侧栏折叠/展开。
-              放在顶栏**最左侧**且两种状态都在同一个位置 ——
-              以前这个按钮在侧栏自己头上，收起后它挤在 52px 的图标列里，
-              和别的图标长得一样，学生找不到「把栏拉回来」的入口。
+              侧栏折叠/展开的按钮**已经移到侧栏自己头上**（Sidebar.tsx）。
+              以前它在顶栏最左侧，理由是「收起后侧栏里找不到展开入口」；
+              现在收起态会保留头部，logo 本身就是展开入口（下面还有
+              工作区 / 文件树两个图标撑着那 52px），所以不必再占顶栏一格。
             */}
-            <button
-              className="bar-btn"
-              aria-label={navCollapsed ? '展开侧栏' : '收起侧栏'}
-              aria-expanded={!navCollapsed}
-              title={navCollapsed ? '展开侧栏' : '收起侧栏'}
-              onClick={() => setNavCollapsed((v) => !v)}
-            >
-              <SidebarIcon collapsed={navCollapsed} />
-            </button>
 
             {/*
               面包屑：项目名 / 模型名。
@@ -430,18 +423,25 @@ export default function App(): JSX.Element {
               <ExplorerIcon />
             </button>
 
+            {/*
+              用默认浏览器打开当前 HTML。
+              原来这里是「在右侧内嵌预览」的开关，内嵌面板已去掉 ——
+              它要自己处理相对路径、沙箱、自动刷新，而系统浏览器本来就有
+              这些都做好的开发者工具，学生也更习惯。
+              不可用时**置灰并说明原因**，而不是隐藏（位置稳定才好找）。
+            */}
             <button
-              className={`bar-btn${previewOpen ? ' active' : ''}`}
-              aria-label="页面预览"
-              aria-pressed={previewOpen}
+              className="bar-btn"
+              aria-label="用浏览器打开"
+              disabled={!canOpenInBrowser(activePath)}
               title={
-                canPreviewFile(activePath)
-                  ? '在右侧预览这个页面（保存或 AI 修改后自动刷新）'
-                  : '预览（先在编辑器里打开一个 .html 文件）'
+                canOpenInBrowser(activePath)
+                  ? '用系统默认浏览器打开这个页面（保存或 AI 修改后刷新浏览器即可）'
+                  : '用浏览器打开（先在编辑器里打开一个 .html 文件）'
               }
-              onClick={() => setPreviewOpen((v) => !v)}
+              onClick={() => void openInBrowser(activePath)}
             >
-              <EyeIcon />
+              <ExternalIcon />
             </button>
 
             <button
@@ -500,21 +500,13 @@ export default function App(): JSX.Element {
               inSettings || inExplorer
                 ? undefined
                 : ({
-                    '--split': String(split),
                     /*
-                     * 预览面板占的份额。
-                     *
-                     * ⚠️ 必须**从 --split 里切**，不能让预览另占一块宽度：
-                     * 编辑器是 split、对话是 (1-split)，两者加起来正好 100%。
-                     * 预览再要 30% 就顶到 130%，结果是横向滚动条 +
-                     * 对话栏被挤出可视区。
-                     *
-                     * 所以这里把 previewShare 从两者按比例扣掉：
-                     * 编辑器变 split*(1-share)，对话变 (1-split)*(1-share)，
-                     * 总和 = (1-share) + share = 100%。比例关系保持不变，
-                     * 拖动分割条的语义也就不用改。
+                     * 只有 --split 了。以前这里还有 --preview-share，
+                     * 是给内嵌预览面板切宽度用的；面板去掉后不需要了 ——
+                     * 布局回到「编辑器 split / 对话 (1-split)」这个
+                     * 加起来正好 100% 的简单约定。
                      */
-                    '--preview-share': String(previewShare)
+                    '--split': String(split)
                   } as React.CSSProperties)
             }
           >
@@ -571,9 +563,7 @@ export default function App(): JSX.Element {
               <AiPanel ref={aiRef} onOpenSettings={openSettings} />
             </div>
 
-            {previewOpen && !inSettings && !inExplorer && (
-              <PreviewPane path={canPreviewFile(activePath) ? activePath : ''} onClose={() => setPreviewOpen(false)} />
-            )}
+            {/* 内嵌预览面板已去掉：HTML 改用系统默认浏览器打开（见顶栏按钮） */}
 
             {inSettings &&
               (config ? (
@@ -690,42 +680,22 @@ function PanelIcon(): JSX.Element {
   )
 }
 
-/**
- * 侧栏开关。
- *
- * 两种状态用同一个图形的镜像（面板 + 一条竖线，竖线贴哪边就表示栏在哪边），
- * 而不是换两个完全不同的图标 —— 位置固定、形状连续，学生一眼就知道
- * 「点它是把栏收起来/放出来」。
- */
-function SidebarIcon({ collapsed }: { collapsed: boolean }): JSX.Element {
-  return (
-    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
-      <rect
-        x="3.5"
-        y="4.5"
-        width="17"
-        height="15"
-        rx="2.5"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-      />
-      <path
-        d={collapsed ? 'M9.5 4.5v15' : 'M14.5 4.5v15'}
-        stroke="currentColor"
-        strokeWidth="1.5"
-      />
-    </svg>
-  )
-}
+/** 预览：一只眼睛 */
 
 /** 预览：一只眼睛 */
-function EyeIcon(): JSX.Element {
+/**
+ * 用浏览器打开：一个方框加一支指向框外的箭头。
+ *
+ * 不用原来的眼睛图标了 —— 眼睛的语义是「在这里看一眼」（内嵌预览），
+ * 而现在这个动作是把页面**送出去**给外部浏览器，箭头朝外才说得通。
+ */
+function ExternalIcon(): JSX.Element {
   return (
     <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
-      <g fill="none" stroke="currentColor" strokeWidth="1.5">
-        <path d="M2.5 12s3.6-6 9.5-6 9.5 6 9.5 6-3.6 6-9.5 6-9.5-6-9.5-6Z" strokeLinejoin="round" />
-        <circle cx="12" cy="12" r="2.6" />
+      <g fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M13.5 4.5H19.5V10.5" />
+        <path d="M19.5 4.5 11 13" />
+        <path d="M18 14.5v4a1.5 1.5 0 0 1-1.5 1.5H5.5A1.5 1.5 0 0 1 4 18.5V7.5A1.5 1.5 0 0 1 5.5 6h4" />
       </g>
     </svg>
   )

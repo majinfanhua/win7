@@ -19,6 +19,7 @@ import { languageFromPath } from '../../shared/language'
 import { checkWorkspaceSafety } from '../command-safety'
 import { getConfig, setConfig, upsertWorkspace } from '../config'
 import { logger } from '../logger'
+import { isInside, setWorkspaceRootValue, getWorkspaceRoot as pathsGetWorkspaceRoot } from '../paths'
 import { listSnapshots, recordSnapshot, undoSnapshot } from '../tools/snapshot'
 import { markToolWrite, watchWorkspace } from '../watcher'
 
@@ -32,15 +33,28 @@ const MAX_FILE_BYTES = 4 * 1024 * 1024
  * 所以不管开关怎么设都不列。真正的 .env / .gitignore 之类交给 showHidden。
  */
 const ALWAYS_IGNORED = new Set(['node_modules', '.git', 'out', 'dist', '__pycache__', '.venv', 'venv', '.trash'])
+/**
+ * `@` 引用候选列表一次最多列出多少个文件。
+ *
+ * 这是**性能边界而不是安全边界**：教学项目通常几十到几百个文件，
+ * 远达不到；真撞上说明这个目录不该整棵遍历（那时该自己敲路径）。
+ * 与搜索工具 MAX_ENTRIES 取同一量级，理由相同（Win7 机械盘 + 杀软）。
+ */
+const LIST_FILES_MAX = 2000
 /** 关掉「显示隐藏文件」时额外忽略的项：所有以 . 开头的 */
 function isHidden(name: string): boolean {
   return name.startsWith('.')
 }
 
-let workspaceRoot = ''
-
+/**
+ * 工作区根状态。
+ *
+ * 真正的值存在 paths.ts（那里是「根是什么」的唯一真源，AI 工具也读它）。
+ * 这里保留 get/set 两个入口只是为了不破坏既有调用方，
+ * 内部一律转发 —— 避免出现两份 workspaceRoot 各自记值。
+ */
 export function getWorkspaceRoot(): string {
-  return workspaceRoot
+  return pathsGetWorkspaceRoot()
 }
 
 /**
@@ -50,29 +64,38 @@ export function getWorkspaceRoot(): string {
  * 左侧边栏的「工作空间」分组和「最近打开」都读这一份，不再单独维护磁盘状态。
  */
 export function setWorkspaceRoot(root: string): void {
-  workspaceRoot = root ? path.resolve(root) : ''
+  const resolved = root ? path.resolve(root) : ''
+  setWorkspaceRootValue(resolved)
   // 换工作区就换监视目标。watchWorkspace 内部会先停掉上一个，
   // 所以这里不用单独调 stopWatching
-  watchWorkspace(workspaceRoot)
-  if (!workspaceRoot) {
+  watchWorkspace(resolved)
+  if (!resolved) {
     setConfig({ lastWorkspace: '' })
     return
   }
   setConfig({
-    lastWorkspace: workspaceRoot,
-    recentWorkspaces: upsertWorkspace(getConfig().recentWorkspaces, workspaceRoot)
+    lastWorkspace: resolved,
+    recentWorkspaces: upsertWorkspace(getConfig().recentWorkspaces, resolved)
   })
 }
 
 /**
- * 所有文件操作必须落在工作区目录内，防止路径穿越。
- * 工具层（src/main/tools）也用这一份，不要另写一个 —— 两份守卫早晚会跑偏。
+ * 界面侧的文件操作守卫。
+ *
+ * ⚠️ 它与 AI 工具走**不同的规则**，这是有意的：
+ *
+ *   - 这里（文件树、编辑器保存）：用户在自己的项目里点，只允许工作区内。
+ *     不存在「越界」这个需求，也绝不该因为点了个文件就弹授权框。
+ *   - AI 工具（src/main/tools）：走 permissions.ts 的 guardPath ——
+ *     允许多个根（工作区 + 临时区），越界要用户授权，计划模式下拦写。
+ *
+ * 两者共用 paths.ts 的 isInside，所以「在不在里面」的判定只有一份实现。
  */
 export function assertInsideRoot(target: string): string {
-  if (!workspaceRoot) throw new Error('尚未打开工作区')
+  const root = getWorkspaceRoot()
+  if (!root) throw new Error('尚未打开工作区')
   const resolved = path.resolve(target)
-  const rel = path.relative(workspaceRoot, resolved)
-  if (rel.startsWith('..') || path.isAbsolute(rel)) throw new Error(`路径越界: ${target}`)
+  if (!isInside(root, resolved)) throw new Error(`路径越界: ${target}`)
   return resolved
 }
 
@@ -168,9 +191,9 @@ export function registerWorkspaceIpc(): void {
   ipcMain.handle(IPC.wsOpen, async (event, preset?: string) => {
     if (preset) {
       setWorkspaceRoot(preset)
-      logger.info('workspace', `打开工作区: ${workspaceRoot}`)
-      warnIfUnsafeWorkspace(workspaceRoot)
-      return workspaceRoot
+      logger.info('workspace', `打开工作区: ${getWorkspaceRoot()}`)
+      warnIfUnsafeWorkspace(getWorkspaceRoot())
+      return getWorkspaceRoot()
     }
     const win = BrowserWindow.fromWebContents(event.sender)
     const result = win
@@ -178,15 +201,60 @@ export function registerWorkspaceIpc(): void {
       : await dialog.showOpenDialog({ properties: ['openDirectory'], title: '选择项目文件夹' })
     if (result.canceled || !result.filePaths[0]) return ''
     setWorkspaceRoot(result.filePaths[0])
-    logger.info('workspace', `打开工作区: ${workspaceRoot}`)
-    warnIfUnsafeWorkspace(workspaceRoot)
-    return workspaceRoot
+    logger.info('workspace', `打开工作区: ${getWorkspaceRoot()}`)
+    warnIfUnsafeWorkspace(getWorkspaceRoot())
+    return getWorkspaceRoot()
   })
 
   ipcMain.handle(IPC.wsReadDir, async (_e, dir: string): Promise<FileNode[]> => {
     const target = assertInsideRoot(dir)
     const entries = await fsp.readdir(target, { withFileTypes: true })
     return sortNodes(visibleEntries(entries).map((e) => toNode(target, e)))
+  })
+
+  /**
+   * 列出工作区里所有文件的相对路径，给输入框的 @ 引用做候选。
+   *
+   * 一次取回全量再让渲染层本地过滤，而不是每敲一个字问一次主进程：
+   * 后者在 Win7 机械盘 + 杀软实时扫描下，每次递归遍历都要几十到几百毫秒，
+   * 打字时会明显发涩。
+   *
+   * 遍历规则与搜索工具保持一致（同一份 ALWAYS_IGNORED / 同一量级上限），
+   * 否则会出现「文件树里看不见的东西却被 @ 列出来」这种不一致。
+   * 上限不是安全边界而是性能边界：教学项目远不到，真撞上说明不该整棵遍历。
+   */
+  ipcMain.handle(IPC.wsListFiles, async (): Promise<string[]> => {
+    const root = getWorkspaceRoot()
+    if (!root) return []
+    const out: string[] = []
+    let left = LIST_FILES_MAX
+
+    const visit = async (dir: string): Promise<void> => {
+      if (left <= 0) return
+      let entries: fs.Dirent[]
+      try {
+        entries = await fsp.readdir(dir, { withFileTypes: true })
+      } catch {
+        // 权限不足 / 目录刚被删：跳过它继续，不因一个目录让整个列表失败
+        return
+      }
+      for (const entry of entries) {
+        if (left <= 0) return
+        if (entry.isDirectory()) {
+          if (ALWAYS_IGNORED.has(entry.name)) continue
+          await visit(path.join(dir, entry.name))
+          continue
+        }
+        if (!entry.isFile()) continue
+        left--
+        const rel = path.relative(root, path.join(dir, entry.name))
+        if (rel) out.push(rel.replace(/\\/g, '/'))
+      }
+    }
+
+    await visit(root)
+    out.sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
+    return out
   })
 
   ipcMain.handle(IPC.wsReadFile, async (_e, file: string): Promise<LoadedFile> => {
@@ -346,19 +414,12 @@ export function registerWorkspaceIpc(): void {
     return true
   })
 
-  /**
-   * 只取预览 URL，**不**打开系统浏览器 —— 给内嵌预览面板用。
-   *
-   * 与 wsPreview 分开而不是加个参数：两者的副作用完全不同
-   * （一个会拉起浏览器抢焦点，一个什么也不做）。
-   * 合成一个的话，以后有人传错参数就会莫名其妙弹出浏览器。
+  /*
+   * 这里原来还有一个 wsPreviewUrl（只取 URL 不打开浏览器），
+   * 专给内嵌预览面板用。面板已去掉 —— 预览统一交给系统默认浏览器，
+   * 所以那个通道连同它的 API 一并删掉，避免留一个没人调、
+   * 但会把工作区暴露成本地 HTTP 服务的口子。
    */
-  ipcMain.handle(IPC.wsPreviewUrl, async (_e, target: string): Promise<string> => {
-    const file = assertInsideRoot(target)
-    if (!fs.existsSync(file)) throw new Error(`文件不存在: ${file}`)
-    const root = getWorkspaceRoot()
-    return serveOnce(root, path.relative(root, file))
-  })
 
   ipcMain.handle(IPC.wsSetHidden, (_e, showHidden: boolean): unknown => {
     logger.info('workspace', `显示隐藏文件: ${showHidden ? '开' : '关'}`)
@@ -421,7 +482,7 @@ export function registerWorkspaceIpc(): void {
    */
   ipcMain.handle(IPC.editorListSnapshots, (): SnapshotSummary[] => {
     const all = listSnapshots(50)
-    const root = workspaceRoot
+    const root = getWorkspaceRoot()
     if (!root) return all
     return all.filter((item) => {
       const rel = path.relative(root, item.path)

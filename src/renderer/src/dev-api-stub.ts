@@ -481,6 +481,30 @@ function createApi(): AppApi {
       return stubConfig
     },
 
+    /*
+     * 权限模式。
+     *
+     * 浏览器预览里没有主进程，也就没有真正的边界判定 ——
+     * 这份桩只让设置界面能切、能读回，并明确记一条日志说明它是假的。
+     * 别在这里「模拟审批」：那会让人误以为浏览器里验证过权限逻辑了。
+     */
+    getPermissionMode: async () => stubConfig.permission.mode,
+    setPermissionMode: async (mode: string) => {
+      stubConfig = {
+        ...stubConfig,
+        permission: { mode: mode as AppConfig['permission']['mode'] }
+      }
+      emitLog('permission', `权限模式已切到 ${mode}（浏览器预览模式，无真实边界判定）`, 'warn')
+      return stubConfig.permission.mode
+    },
+    startExecuting: async (_sessionId: string) => {
+      emitLog('permission', '已批准执行（浏览器预览模式，无实际效果）')
+      return true
+    },
+    resolveApproval: async () => false,
+    // 浏览器预览里不会有越界请求（没有主进程），但接口要能对上
+    onApprovalRequest: () => () => {},
+
     openWorkspace: async (preset?: string) => {
       /*
        * 浏览器预览模式才用 prompt（在浏览器里是好的）。
@@ -611,6 +635,18 @@ function createApi(): AppApi {
       return true
     },
 
+    /**
+     * @ 引用的候选列表。
+     *
+     * 浏览器预览里的「工作区」就是内存虚拟目录，所以直接列出 files 里
+     * 相对 DEMO_ROOT 的路径 —— 与真实主进程返回「相对工作区根」的路径语义一致。
+     */
+    listFiles: async () =>
+      [...files.keys()]
+        .filter((p) => p.startsWith(`${DEMO_ROOT}/`))
+        .map((p) => p.slice(DEMO_ROOT.length + 1))
+        .sort((a, b) => a.localeCompare(b, 'zh-Hans-CN')),
+
     // 以下这批只在浏览器预览里能跑，用来核对左边侧栏与右键菜单的交互
     listWorkspaces: async () => stubWorkspaces,
 
@@ -641,21 +677,12 @@ ${target}
       return true
     },
 
-    /**
-     * 桩里的「预览 URL」。
-     *
-     * 返回一个 data: URL，把内存文件系统里这个文件的内容原样塞进去 ——
-     * 这样内嵌预览面板在浏览器预览模式下**真的能看到页面**，
-     * 而不是一个写着「真机才能用」的占位。
-     * 代价是相对路径（./style.css）在 data: URL 下没有基准，解析不了。
+    /*
+     * 内嵌预览的 previewUrl 已随面板一起去掉。
+     * 浏览器预览模式下 openExternal 打不开真实浏览器（没有主进程），
+     * 所以只记一条日志说明「这里点了不会真的开浏览器」——
+     * 假装成功会让人以为浏览器预览里验证过这条路径了。
      */
-    previewUrl: async (target: string) => {
-      const key = normalize(target)
-      const html = files.get(key) ?? ''
-      emitLog('ws', `取预览 URL：${target}`)
-      return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`
-    },
-
     setShowHidden: async (showHidden: boolean) => {
       stubConfig = { ...stubConfig, explorer: { ...stubConfig.explorer, showHidden } }
       emitLog('tree', `显示隐藏文件：${showHidden ? '开' : '关'}`)

@@ -256,18 +256,25 @@ window.__SELFTEST__ = async () => {
   /*
    * 侧栏折叠 / 展开。
    *
-   * 这条是为一个真实的死路加的：折叠按钮原本在侧栏自己头上，
-   * 收起后它被挤进 52px 的图标列，和别的图标长得一样 ——
+   * 这条断言盯的是一个真实踩过的死路：折叠按钮曾经在侧栏自己头上，
+   * 收起后被挤进 52px 的图标列，和别的图标长得一样 ——
    * 学生找不到「把栏拉回来」的入口，界面等于坏了。
-   * 现在按钮在顶栏最左侧，断言两种状态下它都在、且能来回切。
+   *
+   * 现在的设计是：**收起态的整个头部就是展开按钮**（点 logo 展开），
+   * 展开态的头部右侧是收起按钮。两端都必须能找到并真的切换。
+   * 注意选择器不再是 .topbar —— 按钮已经移回侧栏内部了。
    */
   try {
-    const toggle = document.querySelector(
-      '.topbar [aria-label="收起侧栏"], .topbar [aria-label="展开侧栏"]'
-    ) as HTMLElement | null
+    const asideOf = (): HTMLElement | null => document.querySelector('.sidenav')
+    const findToggle = (): HTMLElement | null =>
+      document.querySelector(
+        '.sidenav-head.is-collapsed, .sidenav-head [aria-label="收起侧栏"]'
+      ) as HTMLElement | null
+
+    const toggle = findToggle()
     checks.sidebarToggleFound = Boolean(toggle)
 
-    const aside = document.querySelector('.sidenav') as HTMLElement | null
+    const aside = asideOf()
     const widthOf = (): number => Math.round(aside?.getBoundingClientRect().width || 0)
 
     /*
@@ -304,11 +311,19 @@ window.__SELFTEST__ = async () => {
     )
     const widthCollapsed = await waitForWidthSettled(2_000)
 
-    // 收起后按钮必须还在原处（这是这条断言的核心）
+    /*
+     * 收起后必须仍有**可点到的展开入口**（这是这条断言的核心）。
+     * 而且它得是那个头部按钮，不是藏在图标堆里的某个图标 ——
+     * 所以断言具体到 .sidenav-head.is-collapsed。
+     */
     const toggleAfter = document.querySelector(
-      '.topbar [aria-label="展开侧栏"]'
+      '.sidenav-head.is-collapsed'
     ) as HTMLElement | null
     checks.sidebarToggleStillReachable = Boolean(toggleAfter)
+    /* 收起态这一列还得有东西：文件树与工作区两个图标入口 */
+    checks.sidebarCollapsedHasIcons = Boolean(
+      document.querySelector('.sidenav.is-collapsed [aria-label="文件树"]')
+    )
     toggleAfter?.click()
     checks.sidebarExpanded = await waitFor(
       () => !document.querySelector('.sidenav.is-collapsed'),
@@ -322,6 +337,7 @@ window.__SELFTEST__ = async () => {
       checks.sidebarToggleFound &&
         checks.sidebarCollapsed &&
         checks.sidebarToggleStillReachable &&
+        checks.sidebarCollapsedHasIcons &&
         checks.sidebarExpanded &&
         widthCollapsed < widthBefore - 100 &&
         Math.abs(widthBack - widthBefore) < 2
@@ -464,64 +480,47 @@ window.__SELFTEST__ = async () => {
   }
 
   /*
-   * 内嵌预览面板。
+   * 「用浏览器打开」按钮。
    *
-   * 它是最容易出现「元素都在但布局是坏的」的一块：预览是 .stage 里的
-   * 第三栏，而编辑器的宽度是 split、对话是 (1-split)，两者加起来已经
-   * 正好 100%。预览再另占一块就会顶到 100% 以上，表现为横向滚动条 +
-   * 对话栏被挤出可视区 —— 不会报错，只会「看着不对劲」。
-   *
-   * 所以这里量的是**三者宽度之和 ≈ 内容区宽度**，而不只是元素存在。
+   * 内嵌预览面板已去掉，预览改为交给系统默认浏览器。这条断言盯两件事：
+   *   1. 按钮在，且**没有可开的 HTML 时是禁用的**（禁用要能看出原因，
+   *      所以 title 必须非空 —— 与工具条那条「死按钮」判据同一个道理）
+   *   2. 布局回到「编辑器 + 分割条 + 对话」两栏，宽度之和 ≈ 内容区宽度。
+   *      以前这里是三栏之和的断言（编辑器 split / 对话 1-split / 预览另占
+   *      一块），预览去掉后若还按三栏量，会误报成「有溢出」。
    */
   try {
-    const previewBtn = document.querySelector('.topbar [aria-label="页面预览"]') as HTMLElement | null
-    checks.previewButtonFound = Boolean(previewBtn)
-    previewBtn?.click()
-
-    checks.previewPaneOpened = await waitFor(
-      () => Boolean(document.querySelector('.preview-pane')),
-      5_000
-    )
+    const openBtn = document.querySelector('.topbar [aria-label="用浏览器打开"]') as HTMLElement | null
+    checks.browserOpenButtonFound = Boolean(openBtn)
+    // 自检跑在空工作区上（没有打开 HTML），此时应当禁用且给出原因
+    checks.browserOpenDisabledWithoutHtml = Boolean(openBtn?.hasAttribute('disabled'))
+    checks.browserOpenHasReason = Boolean((openBtn?.getAttribute('title') || '').trim())
 
     const stage = document.querySelector('.stage') as HTMLElement | null
     const dock = document.querySelector('.editor-dock') as HTMLElement | null
     const view = document.querySelector('.view') as HTMLElement | null
-    const pane = document.querySelector('.preview-pane') as HTMLElement | null
 
     const stageW = stage?.getBoundingClientRect().width || 0
     const dockW = dock?.getBoundingClientRect().width || 0
     const viewW = view?.getBoundingClientRect().width || 0
-    const paneW = pane?.getBoundingClientRect().width || 0
-    checks.previewWidths = {
+    checks.twoPaneWidths = {
       stage: Math.round(stageW),
       dock: Math.round(dockW),
-      view: Math.round(viewW),
-      pane: Math.round(paneW)
+      view: Math.round(viewW)
     }
-    // 容差 4px：三处 calc 各有一次取整，加上 1px 边框
-    checks.previewNoOverflow = Boolean(
-      stageW > 0 && dockW + viewW + paneW <= stageW + 4
-    )
-    // 每一栏都要有实际宽度（盯着「某一栏被算成 0」这种塌陷）
-    checks.previewAllPanesHaveWidth = dockW > 80 && viewW > 80 && paneW > 80
-
-    const closeBtn = document.querySelector(
-      '.preview-pane [aria-label="关闭预览"]'
-    ) as HTMLElement | null
-    checks.previewCloseFound = Boolean(closeBtn)
-    closeBtn?.click()
-    checks.previewPaneClosed = await waitFor(
-      () => !document.querySelector('.preview-pane'),
-      5_000
-    )
+    // 容差 4px：两处 calc 各一次取整，加 1px 边框
+    checks.twoPaneNoOverflow = Boolean(stageW > 0 && dockW + viewW <= stageW + 4)
+    checks.twoPaneBothHaveWidth = dockW > 80 && viewW > 80
+    // 内嵌面板不该再出现在 DOM 里（真删干净了，而不是只是不渲染）
+    checks.previewPaneGone = !document.querySelector('.preview-pane')
 
     checks.previewOk = Boolean(
-      checks.previewButtonFound &&
-        checks.previewPaneOpened &&
-        checks.previewNoOverflow &&
-        checks.previewAllPanesHaveWidth &&
-        checks.previewCloseFound &&
-        checks.previewPaneClosed
+      checks.browserOpenButtonFound &&
+        checks.browserOpenDisabledWithoutHtml &&
+        checks.browserOpenHasReason &&
+        checks.twoPaneNoOverflow &&
+        checks.twoPaneBothHaveWidth &&
+        checks.previewPaneGone
     )
   } catch (err) {
     checks.previewOk = false
@@ -720,6 +719,68 @@ window.__SELFTEST__ = async () => {
   }
 
   /*
+   * 本轮改动：@ 引用、历史浮层、设置分栏。
+   *
+   * 三件事都是「界面看着对、实际点不动」的高危类型：
+   *   - @ 触发依赖 textarea 的 caret 位置，用的是 JS 逻辑而不是 CSS，
+   *     坏了不会有任何样式异常
+   *   - 历史浮层是条件渲染，按钮在但浮层不出现是最常见的坏法
+   *   - 设置分栏的名字改了（history → skills/mcp），分栏对不上就是白屏一块
+   * 所以每条都真的去点、去等元素出现。
+   */
+  try {
+    // --- 1) @ 触发候选浮层 ---
+    const ta = document.querySelector('.composer textarea') as HTMLTextAreaElement | null
+    checks.atTextareaFound = Boolean(ta)
+    if (ta) {
+      /*
+       * 用原生 setter 写值再派发 input —— React 是受控组件，
+       * 直接改 ta.value 不会触发 onChange（React 覆写了 value 的 setter）。
+       */
+      const setter = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value'
+      )?.set
+      setter?.call(ta, '@')
+      ta.setSelectionRange(1, 1)
+      ta.dispatchEvent(new Event('input', { bubbles: true }))
+
+      checks.atPopOpened = await waitFor(() => Boolean(document.querySelector('.at-pop')), 3_000)
+      // 没打开项目时浮层里要给一句说明，而不是空白
+      checks.atPopHasText = Boolean(document.querySelector('.at-pop')?.textContent?.trim())
+
+      // Esc 关掉它 —— 不然浮层会一直挡着输入框
+      ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      checks.atPopClosed = await waitFor(() => !document.querySelector('.at-pop'), 2_000)
+
+      // 复原输入框，别把状态留给后面的断言
+      setter?.call(ta, '')
+      ta.dispatchEvent(new Event('input', { bubbles: true }))
+    }
+
+    checks.atRefOk = Boolean(checks.atTextareaFound && checks.atPopOpened && checks.atPopClosed)
+
+    // --- 2) 历史浮层（最近会话已从侧栏移到这里）---
+    const histBtn = document.querySelector('.chat-head [aria-label="历史会话"]') as HTMLElement | null
+    checks.historyButtonFound = Boolean(histBtn)
+    histBtn?.click()
+    checks.historyPopOpened = await waitFor(() => Boolean(document.querySelector('.chat-pop')), 3_000)
+    histBtn?.click()
+    checks.historyPopClosed = await waitFor(() => !document.querySelector('.chat-pop'), 3_000)
+    // 会话列表不该再出现在侧栏里
+    checks.sessionsNotInSidebar = !document.querySelector('.sidenav .nav-group-head')
+      ?.textContent?.includes('最近会话')
+
+    checks.historyPopoverOk = Boolean(
+      checks.historyButtonFound && checks.historyPopOpened && checks.historyPopClosed
+    )
+  } catch (err) {
+    checks.atRefOk = false
+    checks.historyPopoverOk = false
+    checks.newFeaturesError = String(err)
+  }
+
+  /*
    * Monaco 语言注册检查。
    *
    * 这条是给「按需引入 Monaco」那次优化兜底的。
@@ -793,6 +854,8 @@ window.__SELFTEST__ = async () => {
     previewOk: Boolean(checks.previewOk),
     sidebarToggleOk: Boolean(checks.sidebarToggleOk),
     composerOk: Boolean(checks.composerOk),
+    atRefOk: Boolean(checks.atRefOk),
+    historyPopoverOk: Boolean(checks.historyPopoverOk),
     layoutOk: Boolean(checks.layoutOk),
     welcomeOk: Boolean(checks.welcomeOk),
     newLayoutOk: Boolean(checks.newLayoutOk),

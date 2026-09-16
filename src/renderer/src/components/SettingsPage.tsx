@@ -3,6 +3,7 @@ import type {
   AppConfig,
   CapabilityInfo,
   CapabilityMode,
+  PermissionMode,
   SystemDocState,
   UsageBucket,
   UsageByDay,
@@ -52,9 +53,11 @@ function snapshot(config: AppConfig): string {
 const SECTIONS = [
   { id: 'ai', label: 'AI 模型', hint: '中转站、密钥与模型' },
   { id: 'persona', label: 'AI 设定', hint: '它叫什么、怎么称呼你' },
+  { id: 'permission', label: '权限模式', hint: 'AI 能伸到哪儿' },
   { id: 'usage', label: '用量统计', hint: '花了多少 token' },
   { id: 'capability', label: '工具能力', hint: 'AI 能对文件做什么' },
-  { id: 'history', label: '修改历史', hint: '撤销 AI 的改动' },
+  { id: 'skills', label: 'Skills', hint: '当前可用的工具能力' },
+  { id: 'mcp', label: 'MCP', hint: '接入外部工具服务' },
   { id: 'about', label: '关于', hint: '快捷键与使用说明' }
 ] as const
 
@@ -76,15 +79,7 @@ export default function SettingsPage({
   onBack: () => void
 }): JSX.Element {
   const applyConfig = useAppStore((s) => s.applyConfig)
-  const snapshots = useAppStore((s) => s.snapshots)
-  const refreshSnapshots = useAppStore((s) => s.refreshSnapshots)
-  const undoLast = useAppStore((s) => s.undoLast)
   const [section, setSection] = useState<SectionId>('ai')
-
-  /** 设置页打开与切到「修改历史」时都拉一次最新记录 */
-  useEffect(() => {
-    void refreshSnapshots()
-  }, [refreshSnapshots, section])
 
   /**
    * 切到「用量统计」时拉一次。
@@ -98,16 +93,6 @@ export default function SettingsPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [section])
 
-  /**
-   * 退回某次修改。
-   *
-   * 撤完由 store 重新拉列表 —— 撤销会把那条记录消费掉，不刷新的话
-   * 界面上还显示着刚撤掉的那一条，学生再点一次只会得到「没有可撤销的修改」。
-   */
-  const undo = async (path: string): Promise<void> => {
-    const result = await undoLast(path)
-    setStatus(result.message)
-  }
   const [draft, setDraft] = useState<AppConfig>(initial)
   const [headerText, setHeaderText] = useState(formatHeaders(initial.ai.extraHeaders || {}))
   const [models, setModels] = useState<string[]>([])
@@ -133,6 +118,10 @@ export default function SettingsPage({
 
   const patchCapability = (patch: Partial<AppConfig['capability']>): void => {
     setDraft((prev) => ({ ...prev, capability: { ...prev.capability, ...patch } }))
+  }
+
+  const patchPermission = (mode: PermissionMode): void => {
+    setDraft((prev) => ({ ...prev, permission: { mode } }))
   }
 
   /* ---------------- 「AI 设定」相关的三个动作 ---------------- */
@@ -610,6 +599,77 @@ export default function SettingsPage({
               </>
             )}
 
+            {/*
+              权限模式。
+              与「工具能力」是两件事，所以单独一栏：
+              工具能力决定 AI 手里有哪些工具，权限模式决定这些工具能伸到哪儿。
+            */}
+            {section === 'permission' && (
+              <section className="card">
+                <div className="card-title">权限模式</div>
+                <div className="hint card-hint">
+                  决定 AI 的文件操作能伸到哪儿。工具本身没有边界，边界由这里划。
+                </div>
+
+                <div className="field">
+                  <label>当前模式</label>
+                  <select
+                    value={draft.permission.mode}
+                    onChange={(e) => patchPermission(e.target.value as PermissionMode)}
+                  >
+                    <option value="chat">对话模式 — 工作区内自由，越界先问我</option>
+                    <option value="plan">计划模式 — 先给方案，我说开始才动手</option>
+                    <option value="full">完全允许模式 — 不做任何限制，全局可操作</option>
+                  </select>
+                </div>
+
+                <div className="cap-status">
+                  {draft.permission.mode === 'chat' && (
+                    <>
+                      <div className="cap-line">
+                        <span className="muted">默认范围</span> 当前项目文件夹 +
+                        临时工作区
+                      </div>
+                      <div className="cap-line muted">
+                        超出这个范围的读写会弹一张授权卡片：
+                        「只允许这一次 / 允许整个目录 / 拒绝」。允许过的目录本次运行内不再重复问。
+                      </div>
+                    </>
+                  )}
+                  {draft.permission.mode === 'plan' && (
+                    <>
+                      <div className="cap-line">
+                        <span className="muted">现在能做</span> 只能查看文件，不能修改
+                      </div>
+                      <div className="cap-line muted">
+                        AI 会先给出完整方案并问清必须确认的问题。你看过之后在对话里点
+                        「开始执行」，它才会真的改文件。切换到别的会话需要重新批准。
+                      </div>
+                    </>
+                  )}
+                  {draft.permission.mode === 'full' && (
+                    <>
+                      <div className="cap-line">
+                        <span className="muted">警告</span>{' '}
+                        <span style={{ color: 'var(--danger)' }}>
+                          不做任何边界检查，AI 可以读写磁盘上任何位置
+                        </span>
+                      </div>
+                      <div className="cap-line muted">
+                        只在你明确知道自己在做什么时使用（例如让 AI 批量重构多个项目）。
+                        日常写代码请用对话模式。
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                <div className="hint card-hint">
+                  切换模式会清空本次运行内已授予的越界许可 ——
+                  否则从宽松模式切回严格模式时，之前放行的目录会继续免检。
+                </div>
+              </section>
+            )}
+
             {section === 'usage' && (
               <section className="card">
                 <div className="card-title">用量统计</div>
@@ -748,40 +808,69 @@ export default function SettingsPage({
               </section>
             )}
 
-            {section === 'history' && (
+            {/*
+              Skills 与 MCP 原先在左侧栏的三个动作键里（新对话 / Skills / MCP）。
+              移进设置页的原因：这两项都是「填一次就不动」的配置，不是高频动作，
+              占着侧栏最显眼的位置反而不划算 —— 侧栏该留给会话与文件树。
+            */}
+            {section === 'skills' && (
               <section className="card">
-                <div className="card-title">修改历史</div>
+                <div className="card-title">Skills（工具能力）</div>
                 <div className="hint card-hint">
-                  AI 每改一次文件都会先存一份原文。这里可以退回任意一次 ——
-                  撤销后会删掉这条记录，所以「撤销的撤销」需要重新让 AI 改一次。
+                  Skills 决定 AI 手上有什么工具。它由两层共同决定：你在「工具能力」里的设置，
+                  以及本机实际探测到的能力（缺 python / node / PowerShell 时会相应少一批）。
                 </div>
 
-                {snapshots.length === 0 ? (
-                  <div className="empty-line">当前项目还没有可撤销的修改</div>
-                ) : (
-                  <div className="snap-list">
-                    {snapshots.map((item) => (
-                      <div key={item.id} className="snap-row">
-                        <div className="snap-main">
-                          <div className="snap-path" title={item.path}>
-                            {item.path.split(/[\\/]/).pop()}
-                          </div>
-                          <div className="snap-meta">
-                            {formatWhen(item.time)} · {sourceLabel(item.source)} ·{' '}
-                            {item.lineDelta > 0 ? `+${item.lineDelta} 行` : `${item.lineDelta} 行`}
-                          </div>
-                        </div>
-                        <button className="ghost btn-sm" onClick={() => void undo(item.path)}>
-                          退回这次
-                        </button>
+                {caps ? (
+                  <div className="cap-status">
+                    <div className="cap-line">
+                      <span className="muted">当前生效</span> {caps.effective.length} 个：
+                      {caps.effective.map((name) => caps.labels[name] || name).join('、')}
+                    </div>
+                    <div className="cap-line">
+                      <span className="muted">本机</span> {caps.profile}
+                      {caps.overridden ? '（已被命令行参数覆盖，仅供测试）' : ''}
+                    </div>
+                    {caps.filtered.length > 0 && (
+                      <div className="cap-line muted">
+                        未启用：
+                        {caps.filtered
+                          .map((item) => `${caps.labels[item.name] || item.name}（${item.reason}）`)
+                          .join('；')}
                       </div>
-                    ))}
+                    )}
+                    <div className="cap-line muted">{caps.notes.join('；')}</div>
                   </div>
+                ) : (
+                  <div className="empty-line">正在读取…</div>
                 )}
 
+                <button className="primary" onClick={() => setSection('capability')}>
+                  去「工具能力」里调整
+                </button>
+              </section>
+            )}
+
+            {section === 'mcp' && (
+              <section className="card">
+                <div className="card-title">MCP 服务器</div>
                 <div className="hint card-hint">
-                  只列出当前项目里的修改。其他项目的记录不会动到。
+                  当前版本用中转站直连模型，MCP 外部工具服务尚未接入。
+                  这一栏先占位，接入后在这里配置服务器地址与工具白名单。
                 </div>
+
+                <div className="cap-status">
+                  <div className="cap-line">
+                    <span className="muted">接入状态</span> 未接入
+                  </div>
+                </div>
+
+                <div className="hint card-hint">
+                  在接入之前，需要 AI 具备的能力请通过「工具能力」逐项开启。
+                </div>
+                <button className="primary" onClick={() => setSection('ai')}>
+                  配置 AI 模型
+                </button>
               </section>
             )}
 
@@ -835,25 +924,6 @@ export default function SettingsPage({
 }
 
 /** 把 ISO 时间转成「几分钟前」式的中文短描述 */
-function formatWhen(iso: string): string {
-  const at = new Date(iso).getTime()
-  if (!Number.isFinite(at)) return ''
-  const diff = Date.now() - at
-  if (diff < 60_000) return '刚刚'
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`
-  return new Date(at).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
-}
-
-/** 快照来源的中文标签 */
-function sourceLabel(source: string): string {
-  if (source === 'manual') return '手动保存'
-  if (source === 'writeFile') return 'AI 覆写'
-  if (source === 'editFile') return 'AI 替换'
-  if (source === 'multiEdit') return 'AI 多处替换'
-  return source
-}
-
 function BackIcon(): JSX.Element {
   return (
     <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">

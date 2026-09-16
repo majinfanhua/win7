@@ -1,4 +1,4 @@
-import { ext } from './shared'
+import { canOpenInBrowser } from '@shared/language'
 
 /**
  * 文件树的右键菜单定义。
@@ -56,9 +56,14 @@ export type TreeMenuActions = {
   onSort: (sortBy: 'name' | 'type' | 'mtime') => void
 }
 
-/** 「预览文件」只在 HTML 上有意义；其余文件交系统默认程序（通过打开所在目录） */
+/**
+ * 「用浏览器打开」只在 HTML 上有意义；其余文件交系统默认程序（通过打开所在目录）。
+ *
+ * 判断本身在 @shared/language 的 canOpenInBrowser 里 —— 顶栏那个按钮
+ * 用的是同一个函数，两边不会再出现「右键能开、顶栏开不了」的不一致。
+ */
 export function canPreview(target: TreeMenuTarget): boolean {
-  return Boolean(target.path) && target.kind !== 'dir' && ['html', 'htm'].includes(ext(target.path))
+  return Boolean(target.path) && target.kind !== 'dir' && canOpenInBrowser(target.path)
 }
 
 /** 排序方式在菜单里的显示名 */
@@ -76,9 +81,9 @@ export function buildTreeMenu(ctx: TreeMenuContext, act: TreeMenuActions): TreeM
   return [
     {
       key: 'preview',
-      label: '预览文件',
+      label: '用浏览器打开',
       kind: 'item',
-      disabledReason: canPreview(ctx.target) ? undefined : '只有 HTML 文件可以预览',
+      disabledReason: canPreview(ctx.target) ? undefined : '只有 HTML 文件可以用浏览器打开',
       run: act.onPreview
     },
     { key: 'sep1', label: '', kind: 'sep' },

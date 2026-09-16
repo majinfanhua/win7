@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { BrowserWindow, Menu, app, dialog, ipcMain, shell } from 'electron'
-import { IPC } from '../shared/types'
+import { IPC, type AppConfig } from '../shared/types'
 import { getConfig, initConfig, setConfig } from './config'
 import { initLogger, installCrashHandlers, logger, setLogSink } from './logger'
 import { applyPlatformCompat, detectPlatform } from './platform-compat'
@@ -16,6 +16,13 @@ import { invalidateSystemPrompt } from './system-doc'
 import { drainWrites } from './atomic-file'
 import { killAllJobs } from './tools/jobs'
 import { setFileChangeEmitter, stopWatching, watchWorkspace } from './watcher'
+import { initRoots } from './paths'
+import {
+  getPermissionMode,
+  markExecuting,
+  resolveApproval,
+  setApprovalSender
+} from './permissions'
 
 interface CliOptions {
   forceGpu: boolean
@@ -154,6 +161,37 @@ function registerConfigIpc(): void {
   })
   // 每次调用都重新与设置求交，所以设置改完立即生效，不用重启
   ipcMain.handle(IPC.appCapabilities, () => getCapabilityInfo())
+}
+
+/**
+ * 权限模式与越界审批的 IPC。
+ *
+ * 审批的方向值得注意：**主进程发问、渲染层回答**（evtApprovalRequest /
+ * permissionResolve），而不是渲染层先答应再让主进程干活。因为要动文件的是
+ * 主进程，它必须自己等到用户点头 —— 否则渲染层一旦被绕过或出 bug，
+ * 审批就只是装饰。
+ */
+function registerPermissionIpc(): void {
+  ipcMain.handle(IPC.permissionGetMode, () => getPermissionMode())
+  ipcMain.handle(IPC.permissionSetMode, (_e, mode: string) => {
+    // 走 setConfig 而不是直接调 setPermissionMode：这样模式会落盘，
+    // 重启后保持用户的选择（setConfig 内部会把值灌进权限层）
+    setConfig({ permission: { mode: mode as AppConfig['permission']['mode'] } })
+    return getPermissionMode()
+  })
+  ipcMain.handle(IPC.permissionStartExecuting, (_e, sessionId: string) => {
+    /*
+     * 计划模式的「开始执行」按会话记。
+     *
+     * sessionId 由渲染层传入（它本来就知道当前会话），主进程不自己猜 ——
+     * 猜错的后果是批准落到了别的会话上，而那个会话的 AI 因此被放行写文件。
+     */
+    markExecuting(typeof sessionId === 'string' ? sessionId : '')
+    return true
+  })
+  ipcMain.handle(IPC.permissionResolve, (_e, id: string, choice: string) => {
+    return resolveApproval(id, choice as 'once' | 'dir' | 'deny')
+  })
 }
 
 function buildMenu(): void {
@@ -386,8 +424,11 @@ function main(): void {
 
   app.whenReady()
     .then(() => {
+      // 路径根要在任何文件操作之前就位（临时工作区依赖 app.getPath）
+      initRoots()
       registerDiagnosticsIpc()
       registerConfigIpc()
+      registerPermissionIpc()
       registerWorkspaceIpc()
       registerSessionIpc()
       registerAiIpc()
@@ -398,6 +439,17 @@ function main(): void {
       scheduleArchiveCatchUp()
 
       mainWindow = createWindow()
+      /*
+       * 越界审批的送信通道。
+       *
+       * 必须在建窗口之后接上：没有窗口时 permissions 层会直接拒绝越界请求
+       * （宁可让 AI 报个可读的错，也不能在无人确认时越界）。
+       */
+      setApprovalSender((req) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(IPC.evtApprovalRequest, req)
+        }
+      })
       setLogSink((line) => {
         if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC.evtLog, line)
       })
