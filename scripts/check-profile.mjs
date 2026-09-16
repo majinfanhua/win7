@@ -349,6 +349,86 @@ const { scanSecrets, hasSecret, redactSecrets, describeSecretBlock } = secret
   check('反复扫描结果恒定（无 lastIndex 污染）', stableHits)
 }
 
+/* ══ 10. 仓库里不能有「看起来像真凭证」的字面量 ══════════════ */
+
+{
+  /*
+   * ★★ 这一组是**被 GitHub 教会的**。
+   *
+   * 第一次提交时推送被拦下：
+   *   remote: error: GH013: Repository rule violations found
+   *   remote:   - GITHUB PUSH PROTECTION
+   *   remote:     - Push cannot contain secrets
+   *   remote:       —— Slack API Token —— path: scripts/check-profile.mjs:202
+   *
+   * 原因是**本项目自己的敏感信息扫描器的测试样本**触发了
+   * GitHub 的推送保护。两边都没错：仓库要拦真密钥，
+   * 测试要形状逼真的样本（不像真凭证就匹配不上，测试也就没意义）。
+   *
+   * 解法是样本在运行时拼出来（scripts/lib/fake-secrets.mjs）。
+   * 这个检查就是那道自动化守卫 —— 本地跑一次比等推送被拒快得多，
+   * 而且推送被拒时 GitHub **只报第一个命中点**，得反复试才能清干净。
+   */
+  const secretShapes = [
+    [/sk-[A-Za-z0-9_-]{20,}/, 'OpenAI/Anthropic 风格的密钥'],
+    [/gh[pousr]_[A-Za-z0-9]{20,}/, 'GitHub token'],
+    [/xox[baprs]-[A-Za-z0-9-]{10,}/, 'Slack token'],
+    [/AKIA[0-9A-Z]{16}/, 'AWS Access Key'],
+    [/AIza[0-9A-Za-z_-]{35}/, 'Google API Key'],
+    [/-----BEGIN[ A-Z]*PRIVATE KEY-----/, 'PEM 私钥头']
+  ]
+
+  const offenders = []
+  const scanDir = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (
+        entry.name === 'node_modules' ||
+        entry.name === '.git' ||
+        entry.name.startsWith('参考项目')
+      ) {
+        continue
+      }
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        scanDir(full)
+        continue
+      }
+      if (!/\.(ts|tsx|mjs|js|md|json)$/.test(entry.name)) continue
+      const text = fs.readFileSync(full, 'utf8')
+      for (const [pattern, label] of secretShapes) {
+        if (pattern.test(text)) offenders.push(`${path.relative(root, full)}（${label}）`)
+      }
+    }
+  }
+  scanDir(root)
+
+  check(
+    '仓库里没有「看起来像真凭证」的字面量',
+    offenders.length === 0,
+    offenders.length > 0
+      ? `${offenders.join('、')} —— 请改成运行时拼接，见 scripts/lib/fake-secrets.mjs`
+      : ''
+  )
+
+  /*
+   * 守「别把样本偷偷换成占位符」。
+   *
+   * 用 'sk-XXXX' 能让上面的检查通过，但测试就废了：规则要求
+   * sk- 后至少 20 个字符，占位符太短、压根不匹配，
+   * 于是「能认出 OpenAI 密钥」证明不了任何事。
+   * 所以确认拼出来的样本**确实够长、确实会被规则命中**。
+   */
+  const fake = await import('./lib/fake-secrets.mjs')
+  check('假 OpenAI 密钥会被规则命中', scanSecrets(fake.FAKE_OPENAI).hits.length === 1)
+  check('假 Slack token 会被规则命中', scanSecrets(fake.FAKE_SLACK).hits.length === 1)
+  check('假 PEM 会被规则命中', scanSecrets(fake.FAKE_PEM_RSA).hits.length === 1)
+  check('假 JWT 会被规则命中', scanSecrets(fake.FAKE_JWT).hits.length === 1)
+  check(
+    '假样本不是占位符式短串（否则测试会假通过）',
+    !/sk-X{2,}/.test(fake.FAKE_OPENAI) && fake.FAKE_GITHUB.length > 24
+  )
+}
+
 console.log('')
 if (failures > 0) {
   console.log(`共 ${failures} 项失败`)
