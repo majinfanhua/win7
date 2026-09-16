@@ -38,7 +38,23 @@ export default function NewEntryDialog({ kind, target, onSubmit, onCancel }: Pro
   const isFile = kind === 'file'
   const [ext, setExt] = useState<string>(isFile ? FILE_TEMPLATES[0].ext : '')
 
-  const template = isFile ? FILE_TEMPLATES.find((item) => item.ext === ext) : undefined
+  /**
+   * 用户手敲进来的名字。
+   *
+   * 存它而不是只存在 InputDialog 内部：类型胶囊要跟着扩展名走 ——
+   * 学生在名字里打 `a.css` 而胶囊还高亮着「HTML」，那是自相矛盾的，
+   * 提交时按哪个走也会让人猜。
+   *
+   * 这是 VS Code 的做法：文件名是主输入，类型是它的**推论**；
+   * 胶囊只是给「不想敲扩展名」的人准备的快捷方式。
+   */
+  const [typedName, setTypedName] = useState('')
+
+  /** 名字里带了扩展名就用它，否则用胶囊选的 */
+  const byName = isFile && typedName ? templateFromName(typedName) : undefined
+  const template = isFile
+    ? byName || FILE_TEMPLATES.find((item) => item.ext === ext)
+    : undefined
 
   /** 重名集合。用 Set 而不是数组 includes：目录里几十个文件时 includes 是 O(n) */
   const taken = useMemo(
@@ -66,11 +82,9 @@ export default function NewEntryDialog({ kind, target, onSubmit, onCancel }: Pro
   const seed = isFile ? (template?.defaultName || '新建文件.txt') : '新建文件夹'
 
   const submit = async (name: string): Promise<string> => {
-    // 用户可能把 index.html 改成了 a.css：此时按名字里的扩展名定模板，
-    // 名字是最后一次、最明确的表达
-    const byName = isFile ? templateFromName(name) : undefined
-    const chosen = byName || template
-    return onSubmit(name, chosen)
+    // template 已经在渲染期按「名字优先」算好了（见上面的 byName），
+    // 这里直接用 —— 两处各算一遍早晚会不一致
+    return onSubmit(name, template)
   }
 
   return (
@@ -90,6 +104,7 @@ export default function NewEntryDialog({ kind, target, onSubmit, onCancel }: Pro
       validate={validate}
       onSubmit={submit}
       onCancel={onCancel}
+      onValueChange={setTypedName}
     >
       <div className="field">
         <label>创建位置</label>
@@ -109,7 +124,7 @@ export default function NewEntryDialog({ kind, target, onSubmit, onCancel }: Pro
               <button
                 key={item.ext}
                 type="button"
-                className={`type-pill${item.ext === ext ? ' is-on' : ''}`}
+                className={`type-pill${item.ext === template?.ext ? ' is-on' : ''}`}
                 aria-pressed={item.ext === ext}
                 title={`新建 ${item.label} 文件`}
                 onClick={() => setExt(item.ext)}

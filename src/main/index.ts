@@ -46,7 +46,7 @@ function createWindow(): BrowserWindow {
     show: false,
     // 和默认主题（深色）的底色一致，避免启动瞬间闪一下别的颜色
     backgroundColor: '#0e1116',
-    title: 'HangKe',
+    title: '航科教育 · AI 代码编辑器',
     icon: windowIconPath(),
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),

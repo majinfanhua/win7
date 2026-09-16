@@ -33,17 +33,19 @@
   padding: 10px 10px 12px;
 }
 
+/*
+ * 左上角 logo。
+ *
+ * 是 <img> 而不是画出来的色块：logo 本身是白底彩色的火箭图，
+ * 用 CSS 拼不出来。白底在深色主题下会形成一个白色小方块 ——
+ * 这是刻意的：logo 自带白底，强行抠成透明会让黑描边在深色背景上消失。
+ */
 .sidenav-logo {
   flex: none;
-  width: 24px;
-  height: 24px;
-  border-radius: 8px;
-  display: grid;
-  place-items: center;
-  font-size: 12px;
-  font-weight: 700;
-  color: #fff;
-  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  object-fit: contain;
 }
 
 .sidenav-title {

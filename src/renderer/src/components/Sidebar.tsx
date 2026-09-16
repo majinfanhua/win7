@@ -23,7 +23,6 @@ import { useFileTreeController } from './file-tree/useFileTreeController'
 
 type Props = {
   collapsed: boolean
-  onToggle: () => void
   onOpenSettings: () => void
   onNewSession: () => void
 }
@@ -55,7 +54,6 @@ function modeLabel(mode?: string): string {
 
 export default function Sidebar({
   collapsed,
-  onToggle,
   onOpenSettings,
   onNewSession
 }: Props): JSX.Element {
@@ -99,19 +97,19 @@ export default function Sidebar({
 
   return (
     <aside className={`sidenav${collapsed ? ' is-collapsed' : ''}`} ref={rootRef}>
-      <div className="sidenav-head">
-        <span className="sidenav-logo">H</span>
-        {!collapsed && <span className="sidenav-title">HangKe</span>}
-        <span className="spacer" />
-        <button
-          className="sidenav-icon"
-          aria-label={collapsed ? '展开侧栏' : '收起侧栏'}
-          title={collapsed ? '展开侧栏' : '收起侧栏'}
-          onClick={onToggle}
-        >
-          <PanelIcon />
-        </button>
-      </div>
+      {/*
+        收起态**不渲染头部**。
+        以前这里放着一个「展开」按钮，但它自己在 52px 的窄栏里，
+        和其他图标挤在一起，学生根本认不出哪个是「把栏拉回来」的 ——
+        点了没反应就成了死路。现在展开按钮在顶栏最左侧（见 App.tsx），
+        位置固定、任何状态下都在同一个地方。
+      */}
+      {!collapsed && (
+        <div className="sidenav-head">
+          <img className="sidenav-logo" src="./logo.png" alt="" />
+          <span className="sidenav-title">航科教育</span>
+        </div>
+      )}
 
       <div className="sidenav-body">
         {/*
@@ -370,14 +368,6 @@ export default function Sidebar({
  * 图标：统一 14px 线性图标，currentColor 上色，深浅主题都不用改
  * ------------------------------------------------------------------ */
 
-function PanelIcon(): JSX.Element {
-  return (
-    <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">
-      <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.6" />
-      <path d="M9.5 4.5v15" stroke="currentColor" strokeWidth="1.6" />
-    </svg>
-  )
-}
 
 function PlusIcon(): JSX.Element {
   return (

@@ -8,10 +8,20 @@
  * 弹窗
  * ========================================================================== */
 
+/*
+ * ⚠️ 必须是 fixed，不能是 absolute。
+ *
+ * absolute 的定位基准是最近的**定位祖先**，而弹层会渲染在左侧栏内部
+ * （侧栏有 overflow:hidden）—— 结果是 560px 宽的弹窗被 232px 的栏裁掉，
+ * 右边一大截和底部按钮都点不到。学生看到的是「弹窗被按钮挡住了」。
+ * fixed 以视口为基准，直接绕开所有祖先的裁剪。
+ */
 .overlay {
-  position: absolute;
+  position: fixed;
   inset: 0;
-  z-index: 10;
+  /* 50 > 右键菜单的 40：菜单还开着时点「新建文件」会同时出现两者，
+     弹层必须在上面，否则它被菜单压住、按钮点不到 */
+  z-index: 50;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -30,6 +40,16 @@
   backdrop-filter: none;
 }
 
+/*
+ * 弹窗本体。
+ *
+ * ⚠️ background 不能省。之前这里没有背景色（也没挂 .glass），
+ * 于是弹窗是**透明**的 —— 后面的文件树直接透出来，文字叠文字。
+ * 那些「看着像样式没加载」的截图多半就是这个。
+ *
+ * 用实色而不是毛玻璃：弹窗后面是任意内容，模糊起来反而看不清；
+ * 而且毛玻璃在 Win7 软件渲染下很贵（见 base.css 的 .glass 注释）。
+ */
 .dialog {
   width: 560px;
   max-width: 100%;
@@ -37,6 +57,8 @@
   overflow-y: auto;
   padding: 20px 22px 16px;
   border-radius: 18px;
+  background: var(--surface-solid);
+  border: 1px solid var(--border-strong);
   box-shadow: var(--shadow-lg);
 }
 

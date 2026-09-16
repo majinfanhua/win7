@@ -233,6 +233,104 @@ window.__SELFTEST__ = async () => {
   }
 
   /*
+   * 侧栏折叠 / 展开。
+   *
+   * 这条是为一个真实的死路加的：折叠按钮原本在侧栏自己头上，
+   * 收起后它被挤进 52px 的图标列，和别的图标长得一样 ——
+   * 学生找不到「把栏拉回来」的入口，界面等于坏了。
+   * 现在按钮在顶栏最左侧，断言两种状态下它都在、且能来回切。
+   */
+  try {
+    const toggle = document.querySelector(
+      '.topbar [aria-label="收起侧栏"], .topbar [aria-label="展开侧栏"]'
+    ) as HTMLElement | null
+    checks.sidebarToggleFound = Boolean(toggle)
+
+    const aside = document.querySelector('.sidenav') as HTMLElement | null
+    const widthBefore = aside?.getBoundingClientRect().width || 0
+
+    toggle?.click()
+    checks.sidebarCollapsed = await waitFor(
+      () => Boolean(document.querySelector('.sidenav.is-collapsed')),
+      3_000
+    )
+    const widthCollapsed = aside?.getBoundingClientRect().width || 0
+
+    // 收起后按钮必须还在原处（这是这条断言的核心）
+    const toggleAfter = document.querySelector(
+      '.topbar [aria-label="展开侧栏"]'
+    ) as HTMLElement | null
+    checks.sidebarToggleStillReachable = Boolean(toggleAfter)
+    toggleAfter?.click()
+    checks.sidebarExpanded = await waitFor(
+      () => !document.querySelector('.sidenav.is-collapsed'),
+      3_000
+    )
+    const widthBack = aside?.getBoundingClientRect().width || 0
+
+    checks.sidebarWidths = {
+      before: Math.round(widthBefore),
+      collapsed: Math.round(widthCollapsed),
+      back: Math.round(widthBack)
+    }
+    // 收起要真的变窄，展开要真的回到原宽 —— 只查 class 会被「CSS 没生效」骗过
+    checks.sidebarToggleOk = Boolean(
+      checks.sidebarToggleFound &&
+        checks.sidebarCollapsed &&
+        checks.sidebarToggleStillReachable &&
+        checks.sidebarExpanded &&
+        widthCollapsed < widthBefore - 100 &&
+        Math.abs(widthBack - widthBefore) < 2
+    )
+  } catch (err) {
+    checks.sidebarToggleOk = false
+    checks.sidebarToggleError = String(err)
+  }
+
+  /*
+   * 输入框贴底 + 发送/停止合成一个按钮 + 工具条只留可用入口。
+   *
+   * 「贴底」是这次改的：.chat 少了 flex:1，高度由内容决定，
+   * 于是消息少的时候输入框悬在半空。断言方式：量输入框底边与
+   * 对话栏底边的距离 —— 只查元素存在看不出这个。
+   */
+  try {
+    const composer = document.querySelector('.composer') as HTMLElement | null
+    const view = document.querySelector('.view') as HTMLElement | null
+    const sendBtn = document.querySelector('.send-btn') as HTMLElement | null
+    const tools = Array.from(document.querySelectorAll('.composer-tool')) as HTMLElement[]
+
+    const cb = composer?.getBoundingClientRect()
+    const vb = view?.getBoundingClientRect()
+    checks.composerGapToBottom = cb && vb ? Math.round(vb.bottom - cb.bottom) : -1
+    // 容差 24px：对话栏自己有 padding
+    checks.composerAtBottom = Boolean(cb && vb && vb.bottom - cb.bottom < 24)
+
+    checks.sendButtonIsSingle = Boolean(sendBtn)
+    // 发送键要在工具条右端
+    const bar = document.querySelector('.composer-bar') as HTMLElement | null
+    checks.sendButtonAtRight = Boolean(
+      bar && sendBtn && sendBtn.getBoundingClientRect().right > bar.getBoundingClientRect().right - 8
+    )
+
+    // 工具条里的图标数：现在应当是 3 个（引用文件 / 图片 / 展开）
+    checks.composerToolCount = tools.length
+    // 不该再有「暂未支持」的灰按钮
+    const disabled = tools.filter((el) => el.hasAttribute('disabled')).length
+    checks.composerNoDeadTools = disabled === 0
+
+    checks.composerOk = Boolean(
+      checks.composerAtBottom &&
+        checks.sendButtonIsSingle &&
+        checks.sendButtonAtRight &&
+        checks.composerNoDeadTools
+    )
+  } catch (err) {
+    checks.composerOk = false
+    checks.composerError = String(err)
+  }
+
+  /*
    * 日志抽屉与体检弹层。
    *
    * 这两块以前是「主进程侧写好了、渲染层完全没接」的状态：
@@ -625,6 +723,8 @@ window.__SELFTEST__ = async () => {
     logDrawerOk: Boolean(checks.logDrawerOk),
     splitterRangeConsistent: Boolean(checks.splitterRangeConsistent),
     previewOk: Boolean(checks.previewOk),
+    sidebarToggleOk: Boolean(checks.sidebarToggleOk),
+    composerOk: Boolean(checks.composerOk),
     layoutOk: Boolean(checks.layoutOk),
     welcomeOk: Boolean(checks.welcomeOk),
     newLayoutOk: Boolean(checks.newLayoutOk),

@@ -483,8 +483,12 @@ export default function SettingsPage({
             {section === 'about' && (
               <section className="card">
                 <div className="card-title">关于</div>
-                <div className="hint card-hint">
-                  带 AI 助手的代码编辑器。支持 Windows 7 SP1 及以上系统。
+                <div className="about-brand">
+                  <img className="about-logo" src="./logo.png" alt="" />
+                  <div>
+                    <div className="about-name">航科教育 · AI 代码编辑器</div>
+                    <div className="hint">带 AI 助手的代码编辑器，支持 Windows 7 SP1 及以上系统</div>
+                  </div>
                 </div>
 
                 <div className="about-block">

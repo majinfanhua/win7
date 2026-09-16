@@ -177,28 +177,34 @@
   align-items: center;
   gap: 18px;
   max-width: 560px;
-  /* 空态整体略偏上。居中会让它显得浮在中间很空，
-     留一点上部空白更接近截图的观感 */
-  margin: 12vh auto 0;
+  /* 空态整体偏上、输入框仍贴底。这里只控上边距，不要用 auto ——
+     auto 会把空态推到垂直中央，而输入框是要贴底的，
+     两者一起用会让空态与输入框之间空出一大块 */
+  margin: 10vh auto 0;
   text-align: center;
 }
 
 /* 方形深底的火箭图标，对应截图里那个 app icon */
+/*
+ * 欢迎页的 logo。
+ *
+ * 是 <img>（真 logo）而不是 svg 图标：界面上只该有一种火箭。
+ * 之前那套「深色主题翻成浅底」的规则不需要了 —— logo 自带白底，
+ * 两种主题下都不会和背景糊在一起。反而要给它一点留白与圆角，
+ * 否则白底方块的直角在深色页面上会很突兀。
+ */
 .welcome-badge {
-  width: 58px;
-  height: 58px;
-  border-radius: 13px;
-  display: grid;
-  place-items: center;
-  color: #e8eef7;
-  background: #161b26;
+  width: 64px;
+  height: 64px;
+  padding: 8px;
+  box-sizing: border-box;
+  border-radius: 16px;
+  object-fit: contain;
+  background: #ffffff;
   box-shadow: 0 10px 26px rgba(10, 14, 22, 0.28);
 }
 
-/* 深色主题下这个深底会和背景糊在一起，翻成浅底深图标 */
 :root[data-theme='dark'] .welcome-badge {
-  color: #161b26;
-  background: #e8eef7;
   box-shadow: 0 10px 26px rgba(0, 0, 0, 0.45);
 }
 
@@ -506,4 +512,122 @@
 .img-note {
   font-size: 11px;
   flex: none;
+}
+
+/* ==========================================================================
+ * 工具调用过程（可折叠）
+ *
+ * 默认折叠：一次回答可能调七八个工具，展开时占掉大半屏，
+ * 把真正的答案挤到看不见的地方。学生要的是结论。
+ * ========================================================================== */
+
+.tool-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tool-toggle:hover {
+  background: var(--bubble-ai);
+  color: var(--text-2);
+}
+
+/* 三角形靠 rotate 变化，不换字符 —— 与文件树 caret 同一套做法 */
+.tool-caret {
+  display: inline-block;
+  font-size: 9px;
+  transition: transform 0.14s ease;
+}
+
+.tool-caret.is-open {
+  transform: rotate(90deg);
+}
+
+/* 「有失败」标记：折叠时也要看得见，否则学生会以为全都成功了 */
+.tool-flag {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  color: var(--danger);
+  background: rgba(240, 119, 110, 0.16);
+}
+
+.tool-steps {
+  padding-left: 4px;
+}
+
+/* ==========================================================================
+ * 消息操作（修改 / 重试 / 删除）
+ *
+ * 悬停才出现：三条按钮常驻会让每条消息都拖着一截工具栏，长对话里很吵。
+ * 用 visibility 而不是 display —— 后者会让高度跳动，鼠标扫过时整列消息抖。
+ * ========================================================================== */
+
+.msg-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 3px;
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.msg-row:hover .msg-actions,
+.msg-actions:focus-within {
+  visibility: visible;
+  opacity: 1;
+}
+
+.msg-act {
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.msg-act:hover {
+  color: var(--text-1);
+  border-color: var(--border-strong);
+}
+
+.msg-act.is-danger:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+/* ==========================================================================
+ * 展开态的输入框
+ * ========================================================================== */
+
+.composer textarea[rows='6'] {
+  /* 展开时给一个最小高度，避免 rows 在窄屏上被压扁 */
+  min-height: 110px;
+}
+
+/*
+ * 停止态。
+ *
+ * 基底是 accent 实色，所以不能只改 color（会被背景吞掉）——
+ * 要连背景一起换成警示色，形状（方块 vs 纸飞机）加上颜色双重区分。
+ */
+.send-btn.is-stop {
+  color: #fff;
+  background: var(--danger);
+}
+
+.send-btn.is-stop:hover:not(:disabled) {
+  filter: brightness(1.08);
 }

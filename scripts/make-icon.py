@@ -1,103 +1,108 @@
 #!/usr/bin/env python3
-"""生成应用图标。
+"""从「航科教育」logo 生成应用图标。
 
-为什么用脚本画而不是丢一个 png 进仓库：
+为什么用脚本裁切而不是手工导出：
   - 图标需要多尺寸（16 到 256），手工导出容易漏
-  - 以后想调颜色 / 改符号，改几行重跑一次即可
+  - 原图是**竖版**（火箭 + 中文 + 英文三行），直接缩放当图标会在
+    16px 下糊成一团 —— 必须只取火箭那部分，且要留出视觉边距
+  - 以后换 logo 只要替换 SOURCE 再跑一次
 
 产物：
   build/icon.ico                     打包用（16/24/32/48/64/128/256）
   build/icon.png                     256 预览图
   resources/icon.png                 运行时窗口图标
+  src/renderer/public/logo.png       界面左上角与关于页用的方形 logo
   src/renderer/public/favicon.png    浏览器预览时的页面图标
 
 用法：python3 scripts/make-icon.py
 """
 
 import os
+import sys
 
-from PIL import Image, ImageDraw
+from PIL import Image
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# 原始 logo（竖版：火箭 / 中文 / 英文三行）。
+# 用 LOGO_SOURCE=<路径> 换成别的图。
+SOURCE = os.environ.get(
+    'LOGO_SOURCE',
+    os.path.join(ROOT, 'build', 'logo-source.png'),
+)
+
+# 火箭在竖版里的位置。数值是量出来的：
+# 整体内容 bbox 是 (154, 201, 889, 874)，其中
+#   火箭   y 204 - 640
+#   中文   y 692 - 804
+#   英文   y 828 - 876
+# 只取火箭那一段 —— 带上文字的话，256px 下每个字只有几个像素，等于一团噪点。
+ROCKET_BOX = (140, 190, 905, 655)
+
 SIZE = 256
-SS = 4  # 超采样倍数：在 4 倍画布上画完再缩，自带抗锯齿
-W = SIZE * SS
+# 超采样倍数：在更大的画布上合成再缩，自带抗锯齿
+SS = 4
 
-# 和界面主色一致（--accent / --accent-2）
-C1 = (91, 157, 255)  # #5B9DFF
-C2 = (124, 108, 255)  # #7C6CFF
-
-RADIUS = round(W * 0.22)
-STROKE = round(W * 0.065)
+# 图标底色。用 logo 自己的白底，不用界面主色 ——
+# 这个 logo 是白底彩色的，套深色圆角底会让火箭的黑描边糊掉。
+BG = (255, 255, 255, 255)
 
 ICO_SIZES = (16, 24, 32, 48, 64, 128, 256)
 
 
-def gradient(w, h, c1, c2):
-    """对角渐变。用 2x2 底图放大，比逐像素循环快得多。"""
-    mid = tuple((a + b) // 2 for a, b in zip(c1, c2))
-    small = Image.new('RGB', (2, 2))
-    small.putpixel((0, 0), c1)
-    small.putpixel((1, 0), mid)
-    small.putpixel((0, 1), mid)
-    small.putpixel((1, 1), c2)
-    return small.resize((w, h), Image.BILINEAR)
+def load_rocket():
+    """取火箭部分，等比放进正方形画布，四周留一点边距。"""
+    if not os.path.exists(SOURCE):
+        sys.exit(
+            f'[icon] 找不到原图：{SOURCE}\n'
+            '        把 logo 放到 build/logo-source.png，或用 LOGO_SOURCE=<路径> 指定。'
+        )
+    im = Image.open(SOURCE).convert('RGBA')
+    rocket = im.crop(ROCKET_BOX)
 
+    # 方形画布 + 留白。留白 8%：太小（贴边）在任务栏里会显得比别的图标大，
+    # 太大则主体缩得太小、16px 下认不出。
+    W = SIZE * SS
+    pad = round(W * 0.08)
+    inner = W - pad * 2
 
-def rounded_mask(size, radius):
-    mask = Image.new('L', (size, size), 0)
-    ImageDraw.Draw(mask).rounded_rectangle([0, 0, size - 1, size - 1], radius=radius, fill=255)
-    return mask
+    rw, rh = rocket.size
+    scale = min(inner / rw, inner / rh)
+    new = (max(1, round(rw * scale)), max(1, round(rh * scale)))
+    rocket = rocket.resize(new, Image.LANCZOS)
 
-
-def draw_symbol(img):
-    """画 </> —— 用线段而不是字体，免得受系统字体影响。
-
-    坐标基于超采样后的画布 W（即 1024），不是最终尺寸 256。
-    """
-    d = ImageDraw.Draw(img)
-    white = (255, 255, 255, 255)
-    half = STROKE / 2
-
-    def stroke(x1, y1, x2, y2):
-        d.line([(x1, y1), (x2, y2)], fill=white, width=STROKE)
-        # 两端补圆，做出圆头效果（PIL 的线默认是平头）
-        for cx, cy in ((x1, y1), (x2, y2)):
-            d.ellipse([cx - half, cy - half, cx + half, cy + half], fill=white)
-
-    # <
-    stroke(375, 296, 200, 512)
-    stroke(200, 512, 375, 728)
-    # /
-    stroke(450, 752, 574, 272)
-    # >
-    stroke(649, 296, 824, 512)
-    stroke(824, 512, 649, 728)
+    canvas = Image.new('RGBA', (W, W), BG)
+    canvas.paste(rocket, ((W - new[0]) // 2, (W - new[1]) // 2), rocket)
+    return canvas
 
 
 def main():
-    base = Image.new('RGBA', (W, W), (0, 0, 0, 0))
-    base.paste(gradient(W, W, C1, C2).convert('RGBA'), (0, 0), rounded_mask(W, RADIUS))
-    draw_symbol(base)
+    canvas = load_rocket()
+    base = canvas.resize((SIZE, SIZE), Image.LANCZOS)
 
-    icon = base.resize((SIZE, SIZE), Image.LANCZOS)
+    icon_png = os.path.join(ROOT, 'build', 'icon.png')
+    icon_ico = os.path.join(ROOT, 'build', 'icon.ico')
+    resources_png = os.path.join(ROOT, 'resources', 'icon.png')
+    public_dir = os.path.join(ROOT, 'src', 'renderer', 'public')
+    logo_png = os.path.join(public_dir, 'logo.png')
+    favicon_png = os.path.join(public_dir, 'favicon.png')
 
-    build_dir = os.path.join(ROOT, 'build')
-    res_dir = os.path.join(ROOT, 'resources')
-    pub_dir = os.path.join(ROOT, 'src', 'renderer', 'public')
-    for d in (build_dir, res_dir, pub_dir):
-        os.makedirs(d, exist_ok=True)
+    os.makedirs(os.path.dirname(icon_png), exist_ok=True)
+    os.makedirs(os.path.dirname(resources_png), exist_ok=True)
+    os.makedirs(public_dir, exist_ok=True)
 
-    icon.save(os.path.join(build_dir, 'icon.png'))
-    icon.save(os.path.join(build_dir, 'icon.ico'), sizes=[(s, s) for s in ICO_SIZES])
-    icon.save(os.path.join(res_dir, 'icon.png'))
-    icon.resize((64, 64), Image.LANCZOS).save(os.path.join(pub_dir, 'favicon.png'))
+    base.save(icon_png)
+    base.save(resources_png)
+    base.save(logo_png)
+    base.save(favicon_png)
 
-    print('icon.png  ', os.path.join(build_dir, 'icon.png'))
-    print('icon.ico  ', os.path.join(build_dir, 'icon.ico'), f'({len(ICO_SIZES)} 个尺寸)')
-    print('resources ', os.path.join(res_dir, 'icon.png'))
-    print('favicon   ', os.path.join(pub_dir, 'favicon.png'))
+    # ICO 的每个尺寸单独缩，而不是让 PIL 从 256 往下抽 ——
+    # 自动缩放对 16/24/32 这几个小尺寸质量一般，会明显发虚
+    frames = [base.resize((s, s), Image.LANCZOS) for s in ICO_SIZES]
+    frames[-1].save(icon_ico, format='ICO', sizes=[(s, s) for s in ICO_SIZES])
+
+    for path in (icon_png, icon_ico, resources_png, logo_png, favicon_png):
+        print(f'[icon] {os.path.relpath(path, ROOT)}  {os.path.getsize(path)} bytes')
 
 
 if __name__ == '__main__':

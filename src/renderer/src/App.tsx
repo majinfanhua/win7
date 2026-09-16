@@ -360,13 +360,28 @@ export default function App(): JSX.Element {
       <div className="shell">
         <Sidebar
           collapsed={navCollapsed}
-          onToggle={() => setNavCollapsed((v) => !v)}
           onOpenSettings={openSettings}
           onNewSession={onNewSession}
         />
 
         <div className="main">
           <header className="topbar">
+            {/*
+              侧栏折叠/展开。
+              放在顶栏**最左侧**且两种状态都在同一个位置 ——
+              以前这个按钮在侧栏自己头上，收起后它挤在 52px 的图标列里，
+              和别的图标长得一样，学生找不到「把栏拉回来」的入口。
+            */}
+            <button
+              className="bar-btn"
+              aria-label={navCollapsed ? '展开侧栏' : '收起侧栏'}
+              aria-expanded={!navCollapsed}
+              title={navCollapsed ? '展开侧栏' : '收起侧栏'}
+              onClick={() => setNavCollapsed((v) => !v)}
+            >
+              <SidebarIcon collapsed={navCollapsed} />
+            </button>
+
             {/*
               面包屑：项目名 / 模型名。
               点一下去设置页 —— 以前它带个 ▾ 箭头却点不动（点了是开工作区），
@@ -671,6 +686,35 @@ function PanelIcon(): JSX.Element {
     <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
       <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
       <path d="M14.5 4.5v15" stroke="currentColor" strokeWidth="1.5" />
+    </svg>
+  )
+}
+
+/**
+ * 侧栏开关。
+ *
+ * 两种状态用同一个图形的镜像（面板 + 一条竖线，竖线贴哪边就表示栏在哪边），
+ * 而不是换两个完全不同的图标 —— 位置固定、形状连续，学生一眼就知道
+ * 「点它是把栏收起来/放出来」。
+ */
+function SidebarIcon({ collapsed }: { collapsed: boolean }): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+      <rect
+        x="3.5"
+        y="4.5"
+        width="17"
+        height="15"
+        rx="2.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+      />
+      <path
+        d={collapsed ? 'M9.5 4.5v15' : 'M14.5 4.5v15'}
+        stroke="currentColor"
+        strokeWidth="1.5"
+      />
     </svg>
   )
 }

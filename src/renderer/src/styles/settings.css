@@ -395,3 +395,28 @@ kbd {
   border-bottom-width: 2px;
   border-radius: 5px;
 }
+
+/* 关于页的品牌块：logo + 名称 */
+.about-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.about-logo {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  /* logo 自带白底，加内边距让火箭不贴边 */
+  padding: 5px;
+  box-sizing: border-box;
+  background: #ffffff;
+}
+
+.about-name {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 2px;
+}

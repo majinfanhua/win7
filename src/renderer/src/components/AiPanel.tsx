@@ -6,12 +6,8 @@ import {
   AtIcon,
   BulbIcon,
   CompassIcon,
-  GitIcon,
-  KeyIcon,
   PaperclipIcon,
-  RocketIcon,
   SendIcon,
-  StarIcon,
   WrenchIcon
 } from './icons'
 
@@ -177,6 +173,8 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
   const [images, setImages] = useState<Array<{ dataUrl: string; bytes: number; name: string }>>([])
   /** 压缩中：压缩是异步的，期间要禁用发送，否则会发出一条没有图的空消息 */
   const [imageBusy, setImageBusy] = useState(false)
+  /** 输入框是否展开（单行 ↔ 6 行）。写长提示词时用 */
+  const [expanded, setExpanded] = useState(false)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const requestRef = useRef('')
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -402,6 +400,22 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
   const configured = Boolean(config?.ai.baseUrl && config?.ai.apiKey && config?.ai.model)
 
   /**
+   * 把任意一份 items 写回 store。
+   *
+   * 与 syncStore 的区别：那个是「把流式结果补进来」，依赖 requestRef 找气泡；
+   * 这个是「消息被增删改之后同步」,按传入的列表整份写。
+   * 两者都做「items → messages」的转换，但触发时机与数据来源不同，
+   * 合成一个会得到一堆 if。
+   */
+  const syncFromItems = (list: ChatItem[]): void => {
+    const at = new Date().toISOString()
+    const payload = list
+      .filter((it) => it.role === 'user' || it.role === 'assistant')
+      .map((it) => ({ role: it.role as 'user' | 'assistant', text: it.text, at }))
+    useAppStore.getState().setSessionMessages(payload)
+  }
+
+  /**
    * 把当前 items 写回 store 的 messages（进而落盘）。
    *
    * 只在「一轮回答结束」和「用户主动停止」这两个时刻调，不在流式过程中调 ——
@@ -573,6 +587,76 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
     syncStore(flushDelta())
   }
 
+  /**
+   * 删除一条消息。
+   *
+   * 删的是**展示态与持久化态两份**（items 与 store.messages）——
+   * 只删 items 的话，下次切会话回来它又出现了（因为 messages 里还在）。
+   *
+   * 不做二次确认：消息删错了重新问一次就行，而 confirm 弹窗
+   * 在「连续清几条」时会变得很烦。这和删文件的性质不同 ——
+   * 那个是不可逆的，这个只是聊天记录。
+   */
+  const deleteMessage = (target: ChatItem): void => {
+    setItems((prev) => {
+      const next = prev.filter((it) => it.id !== target.id)
+      syncFromItems(next)
+      return next
+    })
+  }
+
+  /**
+   * 修改一条提问。
+   *
+   * 把原文放回输入框并**删掉这条及其之后的所有消息** ——
+   * 因为后续回答都是基于原来那句话的，留着它们会前后矛盾。
+   * 这也是主流对话产品的做法（改了就分叉，不保留旧分支）。
+   */
+  const editMessage = (target: ChatItem): void => {
+    if (busy) return
+    setItems((prev) => {
+      const idx = prev.findIndex((it) => it.id === target.id)
+      if (idx < 0) return prev
+      const next = prev.slice(0, idx)
+      syncFromItems(next)
+      return next
+    })
+    setInput(target.text)
+    inputRef.current?.focus()
+  }
+
+  /**
+   * 重试一条回答。
+   *
+   * 同样要**删掉这条及其之后的**，再拿它前面那条用户提问重发。
+   * 只重发不删的话，同一轮会出现两个回答，而模型下一轮会看到
+   * 「自己说过两遍」，上下文就脏了。
+   */
+  const retryMessage = (target: ChatItem): void => {
+    if (busy) return
+    const list = items
+    const idx = list.findIndex((it) => it.id === target.id)
+    if (idx < 0) return
+    // 往前找最近的一条用户提问
+    let askIndex = -1
+    for (let i = idx - 1; i >= 0; i--) {
+      if (list[i].role === 'user') {
+        askIndex = i
+        break
+      }
+    }
+    if (askIndex < 0) return
+    const question = list[askIndex].text
+
+    setItems((prev) => {
+      const next = prev.slice(0, askIndex)
+      syncFromItems(next)
+      return next
+    })
+    // 下一帧再发：setItems 是异步的，立刻 send 会读到旧的 items
+    window.setTimeout(() => void send(question), 0)
+  }
+
   const stop = async (): Promise<void> => {
     if (requestRef.current) await window.api.aiAbort(requestRef.current)
     setBusy(false)
@@ -617,9 +701,8 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
         <div className="chat-inner">
           {items.length === 0 ? (
             <div className="welcome">
-              <div className="welcome-badge" aria-hidden="true">
-                <RocketIcon />
-              </div>
+              {/* 用真 logo 而不是手绘的火箭 svg —— 界面上只该有一种火箭 */}
+              <img className="welcome-badge" src="./logo.png" alt="" />
               <h1>{greeting()}，今天想从哪里开始？</h1>
 
               {/*
@@ -673,7 +756,15 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
               )}
             </div>
           ) : (
-            items.map((it) => <MessageBubble key={it.id} item={it} />)
+            items.map((it) => (
+              <MessageBubble
+                key={it.id}
+                item={it}
+                onRetry={retryMessage}
+                onEdit={editMessage}
+                onDelete={deleteMessage}
+              />
+            ))
           )}
         </div>
       </div>
@@ -704,7 +795,12 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
         <RefRow refs={refs} onOpen={(file) => void openFile(file)} onRemove={removeRef} onClear={clearRefs} />
         <textarea
           ref={inputRef}
-          rows={1}
+          /*
+           * 展开态 6 行、常态 1 行。
+           * 用 rows 而不是 CSS 高度：textarea 的滚动与自动增高都由 rows 决定，
+           * 用 CSS 改高度会让它在内容超过时出现双重滚动条。
+           */
+          rows={expanded ? 6 : 1}
           placeholder={
             visionOn
               ? '输入消息，可直接粘贴截图（Ctrl+V）…'
@@ -746,6 +842,12 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
           }}
         />
 
+        {/*
+          底部工具条。
+          **只留真的能用的入口** —— 以前这里有「截图 / 配色 / Git 仓库」三个
+          永远置灰的图标，占着位置却只能告诉学生「还没做」。
+          一排灰按钮不会让人觉得「以后会有」，只会让人觉得这软件没做完。
+        */}
         <div className="composer-bar">
           <ComposerTool
             label="引用文件"
@@ -765,39 +867,40 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
           >
             <AtIcon />
           </ComposerTool>
-          <ComposerTool label="截图" hint="暂未支持，敬请期待">
-            <KeyIcon />
-          </ComposerTool>
-          <ComposerTool label="配色" hint="暂未支持，敬请期待">
-            <StarIcon />
-          </ComposerTool>
-          <ComposerTool label="Git 仓库" hint="暂未支持，敬请期待">
-            <GitIcon />
+
+          {/* 展开输入框：写长提示词时用，点击在单行与 5 行间切换 */}
+          <ComposerTool
+            label={expanded ? '收起输入框' : '展开输入框'}
+            hint={expanded ? '收起输入框' : '展开输入框（写长提示词时用）'}
+            onClick={() => setExpanded((v) => !v)}
+          >
+            <ExpandIcon expanded={expanded} />
           </ComposerTool>
 
           <span className="spacer" />
 
           {imageBusy && <span className="muted img-note">正在压缩图片…</span>}
 
-          {busy && (
-            <button className="ghost btn-sm" onClick={() => void stop()}>
-              停止
-            </button>
-          )}
-
+          {/*
+            发送键与停止键是**同一个按钮**，靠图标切换。
+            以前是两个并排的按钮，问题在于「停止」只在生成时出现 ——
+            它一出现就把发送键挤走，而学生这时候眼睛盯着输入框，
+            很容易点错。合成一个之后位置永远不变，图标状态即语义。
+          */}
           <button
-            className="send-btn"
-            aria-label="发送"
-            title="发送（Ctrl + Enter）"
+            className={`send-btn${busy ? ' is-stop' : ''}`}
+            aria-label={busy ? '停止生成' : '发送'}
+            title={busy ? '停止生成' : '发送（Ctrl + Enter）'}
             disabled={
-              !configured ||
-              busy ||
-              imageBusy ||
-              (!input.trim() && refs.length === 0 && images.length === 0)
+              busy
+                ? false
+                : !configured ||
+                  imageBusy ||
+                  (!input.trim() && refs.length === 0 && images.length === 0)
             }
-            onClick={() => void send()}
+            onClick={() => (busy ? void stop() : void send())}
           >
-            <SendIcon />
+            {busy ? <StopIcon /> : <SendIcon />}
           </button>
         </div>
       </div>
@@ -818,30 +921,78 @@ export default AiPanel
  *
  * memo 的浅比较在这里够用：只有 text/usage/tools 真的变了的那一条会被重渲。
  */
-const MessageBubble = memo(function MessageBubble({ item }: { item: ChatItem }): JSX.Element {
+const MessageBubble = memo(function MessageBubble({
+  item,
+  onRetry,
+  onEdit,
+  onDelete
+}: {
+  item: ChatItem
+  onRetry: (item: ChatItem) => void
+  onEdit: (item: ChatItem) => void
+  onDelete: (item: ChatItem) => void
+}): JSX.Element {
+  /**
+   * 工具调用过程默认**折叠**。
+   *
+   * 一次回答可能调七八个工具（读文件、搜内容、改文件…），
+   * 展开时占掉大半屏，把真正的答案挤到看不见的地方。
+   * 学生要的是结论，过程只在「它到底干了什么」时才需要看。
+   *
+   * 但**正在跑的时候不折叠** —— 那时候过程就是全部内容
+   * （还没有答案），折起来会让人以为卡死了。
+   */
+  const running = item.tools?.some((step) => step.phase === 'start') ?? false
+  const [showTools, setShowTools] = useState(running)
+  // 从「正在跑」变成「跑完了」时自动收起，把屏幕让给答案
+  useEffect(() => {
+    if (!running) setShowTools(false)
+  }, [running])
+
+  const toolCount = item.tools?.length ?? 0
+  const failed = item.tools?.some((step) => step.phase === 'done' && step.ok === false) ?? false
+  const canAct = item.role === 'user' || item.role === 'assistant'
+
   return (
     <div className={`msg-row ${item.role}`}>
       <div className="msg-col">
-        {item.tools && item.tools.length > 0 && (
+        {toolCount > 0 && (
           <div className="tool-trace">
-            {item.tools.map((step) => (
-              <div
-                key={step.id}
-                className={[
-                  'tool-step',
-                  step.phase === 'start' ? 'running' : step.ok === false ? 'failed' : 'ok'
-                ].join(' ')}
-              >
-                <span className="tool-mark" />
-                <span className="tool-text">{step.summary}</span>
+            <button
+              className="tool-toggle"
+              aria-expanded={showTools}
+              onClick={() => setShowTools((v) => !v)}
+            >
+              <span className={`tool-caret${showTools ? ' is-open' : ''}`} aria-hidden="true">
+                ▸
+              </span>
+              <span>
+                {running ? `正在执行 ${toolCount} 步…` : `执行了 ${toolCount} 步`}
+              </span>
+              {failed && <span className="tool-flag">有失败</span>}
+            </button>
+            {showTools && (
+              <div className="tool-steps">
+                {item.tools?.map((step) => (
+                  <div
+                    key={step.id}
+                    className={[
+                      'tool-step',
+                      step.phase === 'start' ? 'running' : step.ok === false ? 'failed' : 'ok'
+                    ].join(' ')}
+                  >
+                    <span className="tool-mark" />
+                    <span className="tool-text">{step.summary}</span>
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
           </div>
         )}
         <div className="bubble">
           {item.text ? (
             item.text
-          ) : item.tools && item.tools.length > 0 ? (
+          ) : toolCount > 0 ? (
             <span className="muted">正在处理…</span>
           ) : (
             <span className="dots">
@@ -852,6 +1003,29 @@ const MessageBubble = memo(function MessageBubble({ item }: { item: ChatItem }):
           )}
         </div>
         {item.usage && <div className="usage">{formatUsage(item.usage)}</div>}
+
+        {/*
+          消息操作。**悬停才出现** —— 三条按钮常驻会让每条消息都拖着
+          一截工具栏，长对话里非常吵。触屏没有 hover，所以用 focus-within
+          兜底（键盘 Tab 也能到）。
+        */}
+        {canAct && (
+          <div className="msg-actions">
+            {item.role === 'user' && (
+              <button className="msg-act" title="修改这条提问后重发" onClick={() => onEdit(item)}>
+                修改
+              </button>
+            )}
+            {item.role === 'assistant' && (
+              <button className="msg-act" title="用同一个问题重新回答" onClick={() => onRetry(item)}>
+                重试
+              </button>
+            )}
+            <button className="msg-act is-danger" title="删除这条消息" onClick={() => onDelete(item)}>
+              删除
+            </button>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -895,6 +1069,36 @@ function RefRow({
         清空引用
       </button>
     </div>
+  )
+}
+
+/** 展开/收起输入框：双向箭头 */
+function ExpandIcon({ expanded }: { expanded: boolean }): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+      <g fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+        {expanded ? (
+          <>
+            <path d="M9 4.5v4.5H4.5M15 19.5V15h4.5" />
+            <path d="m4.5 9 5-4.5M19.5 15l-5 4.5" opacity=".55" />
+          </>
+        ) : (
+          <>
+            <path d="M4.5 9V4.5H9M19.5 15v4.5H15" />
+            <path d="m9 4.5-4.5 5M15 19.5l4.5-5" opacity=".55" />
+          </>
+        )}
+      </g>
+    </svg>
+  )
+}
+
+/** 停止：一个方块。与「发送」的纸飞机形状差得远，一眼能分辨 */
+function StopIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+      <rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" />
+    </svg>
   )
 }
 

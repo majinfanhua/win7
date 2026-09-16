@@ -325,12 +325,27 @@ textarea {
   z-index: 1;
 }
 
+/*
+ * ⚠️ 这三条一起构成「输入框贴底」：
+ *
+ *   flex: 1            —— .chat 要**撑满** .view 的高度。
+ *                         少了它，.chat 的高度由内容决定（flex 容器里
+ *                         不写 flex 的项按内容高度算），于是消息少的时候
+ *                         整块贴在上方、输入框悬在半空。
+ *   min-height: 0      —— 允许被压缩。没有它，内容超高时 flex 项
+ *                         不肯收缩，.chat-scroll 的 overflow 就不生效
+ *   .chat-scroll flex:1 —— 把多余的高度全给消息区，输入框自然被推到底
+ */
 .chat {
+  flex: 1;
   width: 100%;
   max-width: 820px;
   display: flex;
   flex-direction: column;
   min-height: 0;
+  /* 居中但不改变自身高度：margin auto 在 flex 项上会均分剩余空间，
+     而这里要的是「水平居中、垂直撑满」 */
+  margin: 0 auto;
 }
 
 .chat-scroll {

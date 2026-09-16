@@ -33,6 +33,14 @@ type Props = {
   onCancel: () => void
   /** 弹层里除了输入框还要渲染的东西（新建弹层的类型胶囊就从这里进去） */
   children?: React.ReactNode
+  /**
+   * 输入内容变化时回调。
+   *
+   * 新建弹层用它把「当前输入的名字」接出去 —— 类型胶囊要跟着
+   * 名字里的扩展名走（打 a.css 就高亮 CSS），而那需要知道用户敲了什么。
+   * 可选：重命名弹层不关心这个。
+   */
+  onValueChange?: (value: string) => void
 }
 
 /** 只在第一次渲染时算一次：选中主干所需的 offset 与长度 */
@@ -52,7 +60,8 @@ export default function InputDialog({
   validate,
   onSubmit,
   onCancel,
-  children
+  children,
+  onValueChange: notifyChange
 }: Props): JSX.Element {
   const [value, setValue] = useState(initial)
   const [error, setError] = useState('')
@@ -104,6 +113,7 @@ export default function InputDialog({
   /** 边输边清错误：错误还挂在屏幕上但用户已经在改了，会很困惑 */
   const onValueChange = (next: string): void => {
     setValue(next)
+    notifyChange?.(next)
     if (error) setError(validate(next))
   }
 
