@@ -55,6 +55,26 @@ npm run smoke -- --software --self-test-out=t.json
 > 这样 `npm run dev` 不会和本机已解压的打包版抢单实例锁，也不会写坏真实配置。
 > 启动日志会打印实际目录。
 
+### 只跑 Vite（Electron 窗口起不来时用）
+
+`npm run dev` 会同时拉起 Vite 与 Electron 窗口。两者是**同生共死**的 ——
+窗口如果在受限环境里崩掉（`chrome-sandbox` 权限不对、容器里 futex 不可用），
+Vite 也跟着退出，表现就是「5173 打不开」。
+
+这时可以只跑渲染层：
+
+```bash
+npx vite --config vite.preview.config.ts
+```
+
+浏览器打开 5173 就能看界面 —— `dev-api-stub.ts` 会接管 `window.api`
+（内存文件系统 + 模拟 AI 流），文件树、对话、设置页都能点。
+代价是没有真实文件系统与 IPC。
+
+> 另一种情况：本机残留着**上次没退干净的 electron 进程**，它占着
+> `~/.config/AIEditor-dev` 的单实例锁，会让新启动的窗口直接退出。
+> `ps -eo pid,cmd | grep electron` 看一下，有残留就 kill 掉。
+
 ### dev server
 
 | 项 | 值 |
