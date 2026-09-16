@@ -39,6 +39,17 @@ export interface AIConfig {
    * 不勾但支持 → 只是用不上图片，功能仍在。所以默认关闭，由人确认。
    */
   supportsVision: boolean
+  /**
+   * 上下文窗口上限（token）。留 0 表示按内置的模型名表自动判断。
+   *
+   * 为什么需要：中转站的 /models 只给模型名、不给窗口大小，
+   * 而模型名用户想怎么填就怎么填。内置表按常见模型名做了保守估计，
+   * 但这个表一定会过时 —— 所以留一个手填的口子，
+   * 让遇到问题的用户可以自己修正，而不是只能等应用更新。
+   */
+  contextWindow: number
+  /** 单次回答的输出上限（token）。留 0 表示按内置表。 */
+  maxOutputTokens: number
 }
 
 export interface EditorConfig {
@@ -510,7 +521,10 @@ export const DEFAULT_CONFIG: AppConfig = {
     systemPrompt: DEFAULT_SYSTEM_PROMPT,
     extraHeaders: {},
     // 默认关：见 AIConfig.supportsVision 的注释（猜错的代价不对称）
-    supportsVision: false
+    supportsVision: false,
+    // 0 = 交给内置模型表判断。填了就以填的为准
+    contextWindow: 0,
+    maxOutputTokens: 0
   },
   editor: { fontSize: 14, tabSize: 2, wordWrap: true, minimap: false },
   legacyGraphics: { softwareRendering: true },

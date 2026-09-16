@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { app } from 'electron'
+import { resolveSystemProgram } from './command-safety'
 import { logger } from './logger'
 
 /**
@@ -37,8 +38,18 @@ export function cmdPath(): string | null {
   } catch {
     /* 权限等异常当不存在处理 */
   }
-  // 兜底：System32 被重定向或路径异常时，仍让系统自己去 PATH 里找
-  return 'cmd.exe'
+  /*
+   * 兜底：System32 被重定向或路径异常时再找一次。
+   *
+   * ⚠️ 这里**不能**返回裸名 'cmd.exe'。子进程的 cwd 是工作区，
+   * 而工作区是模型能写文件的地方 —— 一旦返回裸名，Windows 会优先在
+   * cwd 里找 cmd.exe，模型放一个同名文件就能劫持我们的每次命令执行。
+   * 宁可返回 null（表现为「本机不支持命令执行」），也不留这个口子。
+   */
+  const resolved = resolveSystemProgram('cmd')
+  if (resolved) return resolved
+  logger.warn('shell', '未能定位 cmd.exe 的绝对路径，命令执行能力将不可用')
+  return null
 }
 
 /**

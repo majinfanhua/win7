@@ -16,6 +16,7 @@ import {
   type WorkspaceEntry
 } from '../../shared/types'
 import { languageFromPath } from '../../shared/language'
+import { checkWorkspaceSafety } from '../command-safety'
 import { getConfig, setConfig, upsertWorkspace } from '../config'
 import { logger } from '../logger'
 import { listSnapshots, recordSnapshot, undoSnapshot } from '../tools/snapshot'
@@ -146,11 +147,29 @@ async function moveToTrash(target: string): Promise<void> {
   await shell.trashItem(target)
 }
 
+/**
+ * 工作区落在敏感目录（home、磁盘根、~/.ssh …）时记一条警告。
+ *
+ * 这里**只警告、不阻止**。原因：这是给教学用的编辑器，
+ * 直接拒绝打开会变成「老师打不开自己的课件文件夹」这种莫名其妙的故障；
+ * 而风险本身是「AI 的读写范围过大」，靠一条日志 + 设置页的提示足以让
+ * 使用者知道该换个目录。真出问题是可解释的，不是静默发生的。
+ */
+function warnIfUnsafeWorkspace(root: string): void {
+  const verdict = checkWorkspaceSafety(root)
+  if (verdict.ok) return
+  logger.warn(
+    'workspace',
+    `当前工作区范围过大：${verdict.reason}（AI 的读写围栏等于没有，建议换一个具体的项目文件夹）`
+  )
+}
+
 export function registerWorkspaceIpc(): void {
   ipcMain.handle(IPC.wsOpen, async (event, preset?: string) => {
     if (preset) {
       setWorkspaceRoot(preset)
       logger.info('workspace', `打开工作区: ${workspaceRoot}`)
+      warnIfUnsafeWorkspace(workspaceRoot)
       return workspaceRoot
     }
     const win = BrowserWindow.fromWebContents(event.sender)
@@ -160,6 +179,7 @@ export function registerWorkspaceIpc(): void {
     if (result.canceled || !result.filePaths[0]) return ''
     setWorkspaceRoot(result.filePaths[0])
     logger.info('workspace', `打开工作区: ${workspaceRoot}`)
+    warnIfUnsafeWorkspace(workspaceRoot)
     return workspaceRoot
   })
 

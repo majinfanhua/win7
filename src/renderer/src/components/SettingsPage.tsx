@@ -365,6 +365,45 @@ export default function SettingsPage({
                   </div>
                 </div>
 
+                {/*
+                  上下文窗口：内置表按模型名猜，猜不到就用保守值。
+                  留 0 表示交给内置表 —— 绝大多数人不需要动这里。
+                  填了就以填的为准，给「内置表过时了」留一个自救口子。
+                */}
+                <div className="field">
+                  <label>上下文窗口（token，可留空）</label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={1024}
+                    placeholder="留空 = 按模型名自动判断"
+                    value={draft.ai.contextWindow || ''}
+                    onChange={(e) => patchAi({ contextWindow: Number(e.target.value) || 0 })}
+                  />
+                  <div className="hint">
+                    一次提问里，之前的所有对话都会发给模型。这个值决定「聊到多长就该开新对话」。
+                    留空时按模型名自动判断（内置表覆盖了常见的 GPT / Claude / Gemini / DeepSeek 等）。
+                    <strong>如果被误判成很小的窗口</strong>（表现为很短的对话就提示超预算），
+                    在这里填上模型的真实窗口大小即可。
+                  </div>
+                </div>
+
+                <div className="field">
+                  <label>单次回答上限（token，可留空）</label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={256}
+                    placeholder="留空 = 按模型名自动判断"
+                    value={draft.ai.maxOutputTokens || ''}
+                    onChange={(e) => patchAi({ maxOutputTokens: Number(e.target.value) || 0 })}
+                  />
+                  <div className="hint">
+                    留给模型这一轮回答的空间。它越大，触发「该开新对话了」的阈值就越早。
+                    不确定就留空。
+                  </div>
+                </div>
+
                 <div className="card-foot">
                   <button className="ghost" disabled={busy} onClick={() => void testConnection()}>
                     测试连接

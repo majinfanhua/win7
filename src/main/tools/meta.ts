@@ -131,12 +131,17 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
     function: {
       name: 'editFile',
       description:
-        '把文件里的一段文字替换成另一段。oldString 必须在文件里**只出现一次**，否则会报错——多给几行上下文就能保证唯一。改错地方比改不动更麻烦，所以宁可报错。',
+        '把文件里的一段文字替换成另一段。oldString 必须在文件里**只出现一次**，否则会报错——多给几行上下文就能保证唯一。改错地方比改不动更麻烦，所以宁可报错。\n\n' +
+        '空白不必和磁盘上一模一样：如果没找到完全一致的原文，会自动按「行尾符差异（CRLF/LF）→ 行尾多余空白 → 整块缩进偏移」逐级放宽再试一次，并在结果里告诉你用的是哪一级。' +
+        '所以**不要**为了让 oldString 匹配而自己猜缩进或补空格——照着你读到（或记得）的内容原样给就行。相对缩进必须正确：只接受「每一行都平移同样一段空白」的情况。',
       parameters: {
         type: 'object',
         properties: {
           path: { type: 'string', description: '文件绝对路径' },
-          oldString: { type: 'string', description: '要被替换掉的原文（需在文件中唯一）' },
+          oldString: {
+            type: 'string',
+            description: '要被替换掉的原文（需在文件中唯一）。空白可略有出入，见工具说明'
+          },
           newString: { type: 'string', description: '替换成的新内容' },
           replaceAll: { type: 'boolean', description: 'true 时替换全部出现处，默认 false' }
         },
@@ -149,7 +154,8 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
     function: {
       name: 'multiEdit',
       description:
-        '对同一个文件做多处替换，**要么全部成功、要么全部不写**。任何一处失败都会中止且不修改文件，所以可以放心地把一组修改一次性提交。',
+        '对同一个文件做多处替换，**要么全部成功、要么全部不写**。任何一处失败都会中止且不修改文件，所以可以放心地把一组修改一次性提交。\n\n' +
+        '每一处的空白匹配规则与 editFile 相同（会逐级放宽），按列表顺序依次应用，所以后面的替换看到的是前面已经改过的内容。',
       parameters: {
         type: 'object',
         properties: {

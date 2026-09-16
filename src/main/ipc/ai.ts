@@ -11,9 +11,20 @@ import {
 } from '../../shared/types'
 import { chatEndpoint, describeHttpError, modelsEndpoint } from '../../shared/ai-endpoint'
 import { getConfig } from '../config'
+import {
+  isModelKnown,
+  PRUNE_MINIMUM_TOKENS,
+  resolveBudgetForModel,
+  resolveThreshold
+} from '../compaction-policy'
 import { getCapabilityInfo } from '../capabilities'
 import { describeRuntimesForModel, detectRuntimes } from '../runtimes'
 import { executeTool, summarizeCall, toolSchemasForModel } from '../tools'
+import {
+  describeTruncatedCall,
+  ToolArgumentTracker,
+  type TruncationReport
+} from '../tools/argument-guard'
 import { logger } from '../logger'
 
 /** 正在进行的流式请求，用于中断 */
@@ -221,11 +232,10 @@ interface RoundOptions {
 type RoundResult =
   | { kind: 'final'; usage: AiUsage }
   /** text 是模型这一轮先说出口的话（可能为空），要跟着 tool_calls 一起回灌 */
-  | { kind: 'tools'; calls: WireToolCall[]; usage: AiUsage; text: string }
+  | { kind: 'tools'; calls: WireToolCall[]; usage: AiUsage; text: string; truncated: TruncationReport }
   | { kind: 'error'; message: string }
   /** 中转站不认某个参数，去掉后重试。不计入工具轮数。 */
   | { kind: 'retry'; reason: 'stream-options' | 'tools' }
-
 /** 模型给的工具调用增量分片 */
 interface RawToolCallDelta {
   index?: number
@@ -264,6 +274,10 @@ function streamRound(
     let rawUsage: RawUsage | null = null
     let completionText = ''
     const calls = new Map<number, WireToolCall>()
+    // 记录参数分片原文，用于识别「参数没传完」的截断调用。
+    // 必须在这里顺手记：拼好的 arguments 已经丢掉了分片边界，
+    // 事后再看无法区分真截断和「累计快照流」。
+    const argTracker = new ToolArgumentTracker()
 
     const settle = (result: RoundResult): void => {
       if (settled) return
@@ -277,8 +291,9 @@ function streamRound(
     const finish = (): void => {
       const usage = buildUsage(rawUsage, messages, completionText)
       const list = [...calls.entries()].sort((a, b) => a[0] - b[0]).map(([, value]) => value)
-      if (list.length > 0) settle({ kind: 'tools', calls: list, usage, text: completionText })
-      else settle({ kind: 'final', usage })
+      if (list.length > 0) {
+        settle({ kind: 'tools', calls: list, usage, text: completionText, truncated: argTracker.report(list) })
+      } else settle({ kind: 'final', usage })
     }
 
     /**
@@ -299,6 +314,8 @@ function streamRound(
       const args = delta.function?.arguments
       if (args) acc.function.arguments += args
       calls.set(index, acc)
+      // 原文分片单独记一份，供截断判定使用
+      argTracker.noteDelta(index, args || '')
     }
 
     let request: Electron.ClientRequest
@@ -437,6 +454,15 @@ async function runStream(
   // 放在补完 system 之后：否则算出来的前缀与真正发出去的不一致
   const promptText = flattenPrompt(wire)
 
+  // 发出去之前先算一次预算。撑爆窗口就在这里拦住并说清原因，
+  // 别让用户对着中转站那句 "context length exceeded" 发懵
+  const overBudget = checkContextBudget(wire)
+  if (overBudget) {
+    logger.warn('ai', `上下文超出预算，已拒绝本次请求: 约 ${roughTokens(promptText)} token`)
+    emit({ requestId, kind: 'error', message: overBudget })
+    return
+  }
+
   let includeUsage = true
   let useTools = toolSchemasForModel().length > 0
   if (useTools) {
@@ -469,6 +495,20 @@ async function runStream(
       logger.info('ai', `请求 ${requestId} 已被用户停止`)
       return
     }
+
+    /*
+     * 发请求之前先看一眼上下文预算。
+     *
+     * 只做两件**无副作用**的事：
+     *   1. 裁掉历史里最占地方的旧工具输出（不花钱、不改写对话语义，
+     *      被裁掉的只是「AI 之前读过什么」，它可以再读一次）
+     *   2. 如果裁完仍逼近窗口上限，提示用户 —— 而不是等中转站报 400
+     *
+     * 刻意**不做**自动总结压缩：那要额外发一次请求、要花钱、要等，
+     * 而且总结错了会静默丢信息。教学场景里「明确告诉用户该开新对话了」
+     * 比「悄悄丢掉一半历史」更可解释。
+     */
+    if (round > 0) pruneOldToolOutput(wire)
 
     const result = await streamRound(requestId, wire, emit, { includeUsage, useTools })
 
@@ -509,6 +549,27 @@ async function runStream(
         tool: { name, phase: 'start', summary: summarizeCall(name, rawArgs) }
       })
 
+      /*
+       * 参数没传完就断了 —— 绝不能执行。
+       *
+       * 这类残缺参数有时能被「宽容修复」成语法合法、语义错误的值
+       * （路径被截断成另一个真实存在的路径是最典型的），
+       * 执行下去就是改了不该改的文件。所以这里直接拒绝，
+       * 并把原因作为工具结果回灌，让模型重新发起这次调用。
+       */
+      if (result.truncated.truncated.has(call.id)) {
+        const reason = result.truncated.reasons.get(call.id) || '参数不完整'
+        const text = describeTruncatedCall(name, reason)
+        logger.warn('ai', `拒绝执行参数不完整的工具调用: ${name} (${call.id})`)
+        emit({
+          requestId,
+          kind: 'tool',
+          tool: { name, phase: 'done', summary: `${name}：参数不完整，已拒绝执行`, ok: false }
+        })
+        wire.push({ role: 'tool', tool_call_id: call.id, content: text })
+        continue
+      }
+
       const outcome = await executeTool({ id: call.id, name, arguments: rawArgs })
 
       emit({
@@ -535,6 +596,114 @@ async function runStream(
   })
   emit({ requestId, kind: 'done', usage: finalUsage() })
 }
+
+/* ------------------------------------------------------------------ *
+ * 上下文预算
+ * ------------------------------------------------------------------ */
+
+/** 被裁掉的工具输出替换成这句话，让模型知道「这里原本有内容」 */
+const PRUNED_PLACEHOLDER = '[输出已被裁剪以腾出上下文空间。需要的话请重新读取。]'
+
+/**
+ * 裁剪历史里较旧的工具输出。
+ *
+ * ## 为什么只裁工具输出
+ *
+ * 一轮工具往返可能把整个文件读进上下文（readFile 一次几千行）。
+ * 这些内容的特点是**可以重新获得**：模型只要再调一次 readFile 就有。
+ * 而用户的提问、模型的回答不能重来 —— 裁掉它们等于篡改对话。
+ *
+ * ## 保护策略
+ *
+ * 从**最新往前**数，保留最近若干条工具输出；再往前的才裁。
+ * 这样模型对「刚才那几步」的记忆是完整的，丢掉的只是更早的、
+ * 通常已经用完的中间结果。
+ *
+ * 这是第一道防线，成本为零。裁完还超预算才提示用户开新对话。
+ */
+function pruneOldToolOutput(wire: WireMessage[]): void {
+  const ai = getConfig().ai
+  const budget = resolveBudgetForModel(ai)
+  const threshold = resolveThreshold({
+    intent: 'optimization',
+    contextWindow: budget.contextWindow,
+    maxOutputToken: budget.maxOutputToken,
+    pressureLevel: 0
+  })
+
+  const total = roughTokens(flattenPrompt(wire))
+  // 还宽裕就什么都不做 —— 不要在没压力时动历史
+  if (total < threshold * 0.8) return
+
+  // 收集可裁的工具消息下标（从新到旧）
+  const toolIndexes: number[] = []
+  for (let i = wire.length - 1; i >= 0; i--) {
+    if (wire[i].role === 'tool') toolIndexes.push(i)
+  }
+  // 最近 4 条留着：模型正在用的上下文
+  const PROTECT_RECENT = 4
+  const candidates = toolIndexes.slice(PROTECT_RECENT)
+
+  let released = 0
+  let pruned = 0
+  for (const index of candidates) {
+    const content = wire[index].content
+    if (typeof content !== 'string') continue
+    // 已经裁过的不重复裁
+    if (content === PRUNED_PLACEHOLDER) continue
+    const size = roughTokens(content)
+    // 太短的裁了没意义，还会让消息语义变模糊
+    if (size < 500) continue
+    released += size - roughTokens(PRUNED_PLACEHOLDER)
+    wire[index] = { ...wire[index], content: PRUNED_PLACEHOLDER }
+    pruned++
+    if (released >= PRUNE_MINIMUM_TOKENS) break
+  }
+
+  if (pruned > 0) {
+    logger.info(
+      'ai',
+      `上下文接近上限，已裁剪 ${pruned} 条旧工具输出，释放约 ${released} token（当前约 ${total}）`
+    )
+  }
+}
+
+/**
+ * 检查这次请求会不会撑爆窗口。
+ *
+ * 返回一句给用户看的话，或 null（没问题）。
+ * 宁可提前说清楚，也不要让用户看着一个 HTTP 400 猜原因 ——
+ * 中转站的报错信息通常只有一句「context length exceeded」，
+ * 学生根本不知道该怎么办。
+ */
+function checkContextBudget(wire: WireMessage[]): string | null {
+  const cfg = getConfig().ai
+  const budget = resolveBudgetForModel(cfg)
+  const total = roughTokens(flattenPrompt(wire))
+  const threshold = resolveThreshold({
+    intent: 'protection',
+    contextWindow: budget.contextWindow,
+    maxOutputToken: budget.maxOutputToken,
+    pressureLevel: 0
+  })
+
+  if (total <= threshold) return null
+
+  const known = isModelKnown(cfg.model)
+  return (
+    `这次提问的上下文约 ${total} token，已经超过当前模型的预算（约 ${threshold}）。\n\n` +
+    (known
+      ? `当前模型按「${cfg.model}」判定窗口为 ${budget.contextWindow} token。`
+      : `内置表不认识模型「${cfg.model}」，已按保守值 ${budget.contextWindow} token 估算；` +
+        '如果这个模型实际窗口更大，可以在「设置 → 模型」里手动填写上下文窗口。') +
+    '\n\n建议：**新建一个对话**再继续问。当前这个会话的历史已经很长，' +
+    '继续下去即使能发出去，模型也容易忽略前面的内容。'
+  )
+}
+
+/* ------------------------------------------------------------------ *
+ * 各 IPC 入口
+ * ------------------------------------------------------------------ */
 
 /** 连通性自检：用最小请求验证地址 / 密钥 / 模型三者是否可用 */
 function testConnection(): Promise<AiTestResult> {

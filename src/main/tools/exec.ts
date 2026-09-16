@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { StringDecoder } from 'node:string_decoder'
+import { resolveSystemProgram } from '../command-safety'
 import { logger } from '../logger'
 import { cmdPath, writeScriptFile } from '../shell'
 import { RUN_TIMEOUT_DEFAULT_MS, RUN_TIMEOUT_MAX_MS } from './limits'
@@ -179,23 +180,36 @@ export function startCommand(command: string, options: ExecOptions): ExecHandle 
   const killTree = (): void => {
     if (closed) return
     if (process.platform === 'win32' && child.pid) {
-      try {
-        spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], {
-          windowsHide: true,
-          stdio: 'ignore'
-        })
-        // taskkill 正常在几十毫秒内结束；万一没生效（权限、杀软拦截），
-        // 再兜一层直接杀主进程 —— 至少不让 powershell.exe 挂在那里
-        fallbackTimer = setTimeout(() => {
-          try {
-            child.kill()
-          } catch {
-            /* ignore */
-          }
-        }, 1500)
-        return
-      } catch {
-        /* taskkill 都拉不起来就只能直接杀主进程了 */
+      /*
+       * taskkill 必须用绝对路径。
+       *
+       * 子进程的 cwd 是工作区（模型可写），而裸名在 Windows 上会先被
+       * cwd 补全 —— 模型在工作区里放一个 taskkill.bat，
+       * 我们「杀进程」的动作就变成执行它的脚本。解析不到就跳过这步，
+       * 退回到 child.kill()，宁可少杀一层也不执行来路不明的程序。
+       */
+      const taskkill = resolveSystemProgram('taskkill')
+      if (taskkill) {
+        try {
+          spawn(taskkill, ['/PID', String(child.pid), '/T', '/F'], {
+            windowsHide: true,
+            stdio: 'ignore'
+          })
+          // taskkill 正常在几十毫秒内结束；万一没生效（权限、杀软拦截），
+          // 再兜一层直接杀主进程 —— 至少不让 cmd.exe 挂在那里
+          fallbackTimer = setTimeout(() => {
+            try {
+              child.kill()
+            } catch {
+              /* ignore */
+            }
+          }, 1500)
+          return
+        } catch {
+          /* taskkill 都拉不起来就只能直接杀主进程了 */
+        }
+      } else {
+        logger.warn('exec', '未能定位 taskkill 的绝对路径，改为直接终止主进程')
       }
     }
     try {

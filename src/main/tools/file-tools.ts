@@ -1,9 +1,16 @@
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { assertInsideRoot } from '../ipc/workspace'
 import { logger } from '../logger'
 import { markToolWrite } from '../watcher'
+import {
+  applyEditReplacements,
+  buildEditMatchStrategyNote,
+  findEditMatches,
+  type EditMatchStrategy
+} from './edit-match'
 import { globTool, grepTool } from './search-tools'
 import { recordSnapshot, undoSnapshot } from './snapshot'
 
@@ -39,33 +46,132 @@ const MAX_SCAN_BYTES = 4 * 1024 * 1024
 const MAX_ENTRIES = 500
 
 /**
- * 本会话读过哪些文件。
+ * 本会话读过哪些文件，以及读的时候磁盘上是什么样子。
+ *
  * whole=false 表示只读到了片段 —— 这种情况下不允许整篇覆盖。
+ *
+ * mtimeMs + hash 是给「读陈旧」用的（见 assertFreshRead）：
+ * 光记 whole 只挡得住「本进程没读过」，挡不住「读完之后被别的程序改了」——
+ * 学生用记事本改了文件，AI 再照旧的记忆去改，就会把人的修改冲掉。
  */
-const readState = new Map<string, { whole: boolean }>()
+interface ReadRecord {
+  whole: boolean
+  /** 读的那一刻文件的大小与修改时间，用于快速比对 */
+  mtimeMs: number
+  size: number
+  /** 读到的内容的哈希，用于确认内容真的没变（mtime 精度可能不够） */
+  hash: string
+}
+
+const readState = new Map<string, ReadRecord>()
+
+function hashContent(text: string): string {
+  return crypto.createHash('sha1').update(text, 'utf8').digest('hex')
+}
+
+/**
+ * 写之前确认「读到的版本」还是磁盘上的版本。
+ *
+ * 只对「完整读过」的文件生效 —— 片段读（whole=false）记下的哈希是那一小段
+ * 的内容，拿它跟整个文件比必然不等，会误报「被改过」。所以片段读完全不参与
+ * 本检查，由 writeFile 自己的 whole 判断去挡整篇覆盖。
+ *
+ * 判定顺序：先比 size（最便宜且不会误判），再比 mtime，
+ * 最后才读内容算哈希。
+ */
+async function assertFreshRead(target: string): Promise<void> {
+  const state = readState.get(target)
+  if (!state || !state.whole) return
+
+  let stat: fs.Stats
+  try {
+    stat = await fsp.stat(target)
+  } catch {
+    // 文件被删了 —— 交给调用方的读取逻辑去报「文件不存在」，更贴切
+    return
+  }
+  if (stat.size === state.size && stat.mtimeMs === state.mtimeMs) return
+
+  // size 或 mtime 变了不代表内容真变了（有些编辑器与同步盘会空写一遍），
+  // 所以再比一次内容，避免无谓地打断模型。
+  const current = await fsp.readFile(target, 'utf8')
+  if (hashContent(current) === state.hash) {
+    readState.set(target, { ...state, mtimeMs: stat.mtimeMs, size: stat.size })
+    return
+  }
+
+  throw new Error(
+    `拒绝修改：${base(target)} 在本次读取之后被其他程序改动过。` +
+      '如果照旧内容改，会把别人的修改覆盖掉。请先 readFile 重新读一遍确认当前内容，再重试。'
+  )
+}
 
 function base(target: string): string {
   return path.basename(target)
 }
 
-function countOccurrences(haystack: string, needle: string): number {
-  if (!needle) return 0
-  let count = 0
-  let from = 0
-  while (true) {
-    const at = haystack.indexOf(needle, from)
-    if (at === -1) return count
-    count++
-    from = at + needle.length
+/**
+ * 记下刚写完的文件状态，供后续的读陈旧检测比对。
+ * 写完之后的磁盘内容就是 content 本身，不必再读一遍。
+ */
+async function rememberWritten(target: string, content: string): Promise<void> {
+  try {
+    const stat = await fsp.stat(target)
+    readState.set(target, {
+      whole: true,
+      mtimeMs: stat.mtimeMs,
+      size: stat.size,
+      hash: hashContent(content)
+    })
+  } catch {
+    // 记录失败只是退化成「下次不做陈旧检测」，不该让写入本身算失败
+    readState.delete(target)
   }
 }
 
-/** 临时文件 + rename，避免写一半掉电把源码写坏 */
+/**
+ * 临时文件 + rename，避免写一半掉电把源码写坏。
+ *
+ * ⚠️ Windows 上不能直接 `rename(tmp, target)` 覆盖已存在的文件：
+ * 目标被占用（杀毒软件、编辑器、同步盘都会短暂占住）时，这一步可能
+ * 既失败、又已经把原文件弄没了，结果两份内容一起丢。
+ * 所以先 `rename(target → backup)` 把原件挪开，再 `rename(tmp → target)`；
+ * 第二步失败就把 backup 挪回去。这样任何时刻磁盘上都至少有一份完整内容。
+ */
 async function atomicWrite(target: string, content: string): Promise<void> {
   await fsp.mkdir(path.dirname(target), { recursive: true })
   const tmp = `${target}.tmp-${process.pid}`
   await fsp.writeFile(tmp, content, 'utf8')
-  await fsp.rename(tmp, target)
+
+  const exists = fs.existsSync(target)
+  if (!exists) {
+    await fsp.rename(tmp, target)
+    return
+  }
+
+  const backup = `${target}.bak-${process.pid}`
+  await fsp.rename(target, backup)
+  try {
+    await fsp.rename(tmp, target)
+  } catch (err) {
+    // 尽力还原：还原失败也不能把 tmp 删掉，那会变成「一份都不剩」
+    try {
+      await fsp.rename(backup, target)
+    } catch (restoreErr) {
+      logger.error(
+        'tool',
+        `写入失败且原件还原失败：${target}（备份留在 ${backup}）：${String(restoreErr)}`
+      )
+      throw new Error(`写入 ${base(target)} 失败，原文件已备份到 ${backup}。原始错误：${String(err)}`)
+    }
+    throw err
+  }
+  // 成功后才清理备份；清不掉也无所谓（下次写入会覆盖同名备份）
+  try {
+    await fsp.unlink(backup)
+  } catch {
+    /* 备份残留不影响正确性 */
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -152,7 +258,16 @@ async function readFileTool(args: ReadFileArgs): Promise<string> {
 
   const { lines, reachedEof, hitScanCap } = await readLineWindow(target, offset, limit)
   const whole = offset === 1 && reachedEof
-  readState.set(target, { whole })
+
+  // 记录「读到的版本」，供写之前做读陈旧检测。
+  // 哈希用读到的行重新拼（而不是重读整个文件），大文件上不会多一次 IO。
+  const seen = lines.join('\n')
+  readState.set(target, {
+    whole,
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
+    hash: hashContent(seen)
+  })
 
   const shown = lines.map((line) =>
     line.length > MAX_LINE_CHARS ? `${line.slice(0, MAX_LINE_CHARS)}…[本行过长已截断]` : line
@@ -200,7 +315,7 @@ async function writeFileTool(args: WriteFileArgs): Promise<string> {
   markToolWrite(target, true)
   await atomicWrite(target, content)
   markToolWrite(target, false)
-  readState.set(target, { whole: true })
+  await rememberWritten(target, content)
   logger.info('tool', `writeFile: ${target}（${content.length} 字符）`)
   return `已写入 ${base(target)}（${content.length} 字符${exists ? `，原 ${before.length} 字符` : '，新建文件'}）`
 }
@@ -212,37 +327,104 @@ export interface EditFileArgs {
   replaceAll?: boolean
 }
 
+/** 一次替换的匹配结果，只保留调用方需要的信息 */
+interface ResolvedEdit {
+  after: string
+  /** 实际替换了几处 */
+  count: number
+  strategy: EditMatchStrategy
+}
+
+/**
+ * 把一批 oldString→newString 依次作用到文本上。
+ *
+ * 关键点：走的是宽容匹配级联（见 edit-match.ts），而不是 indexOf。
+ * 模型把 CRLF 抄成 LF、行尾少个空格、整段缩进多一级，都能自动救回来，
+ * 并且把「靠哪一级救回来的」回报给模型，避免它下一轮继续错下去。
+ *
+ * replaceAll=false 时要求「唯一匹配」——在一处都不匹配、或匹配到多处时抛错，
+ * 文件一个字节都不动。
+ */
+function applyEdits(
+  source: string,
+  edits: Array<{ oldString: string; newString: string; replaceAll?: boolean }>,
+  fileLabel: string,
+  /** 出错的措辞前缀，multiEdit 会带上「第 N 处」 */
+  label: (index: number) => string
+): ResolvedEdit {
+  let work = source
+  let applied = 0
+  let weakest: EditMatchStrategy = 'exact'
+  const rank: Record<EditMatchStrategy, number> = {
+    exact: 0,
+    'line-endings': 1,
+    'trailing-whitespace': 2,
+    indentation: 3
+  }
+
+  for (const [index, edit] of edits.entries()) {
+    const prefix = label(index)
+    if (typeof edit?.oldString !== 'string' || edit.oldString === '') {
+      throw new Error(`${prefix}的 oldString 不能为空。本次未修改任何内容。`)
+    }
+    const newString = typeof edit.newString === 'string' ? edit.newString : ''
+
+    const outcome = findEditMatches(work, edit.oldString, newString)
+    if (!outcome) {
+      throw new Error(
+        `${prefix}没在 ${fileLabel} 里找到这段原文` +
+          `${index > 0 ? '（也可能被前面的替换改掉了）' : ''}。` +
+          '本次未修改任何内容。请先用 readFile 看清实际内容 —— ' +
+          '注意缩进、空行、标点都要对得上。'
+      )
+    }
+
+    const total = outcome.replacements.length
+    if (total > 1 && !edit.replaceAll) {
+      throw new Error(
+        `${prefix}的原文在 ${fileLabel} 里出现了 ${total} 次，无法确定改哪一处。` +
+          '本次未修改任何内容。请多给几行上下文让它唯一，或明确设 replaceAll=true 改全部。'
+      )
+    }
+
+    const used = edit.replaceAll ? outcome.replacements : outcome.replacements.slice(0, 1)
+    work = applyEditReplacements(work, used)
+    applied += used.length
+    if (rank[outcome.strategy] > rank[weakest]) weakest = outcome.strategy
+    // 后续级别的查找要在「已改过」的文本上重新判断换行风格
+  }
+
+  return { after: work, count: applied, strategy: weakest }
+}
+
 async function editFileTool(args: EditFileArgs): Promise<string> {
   const target = assertInsideRoot(args.path)
   const { oldString, newString } = args
   if (typeof oldString !== 'string' || oldString === '') throw new Error('oldString 不能为空')
   if (typeof newString !== 'string') throw new Error('newString 必须是字符串')
 
+  await assertFreshRead(target)
   const before = await fsp.readFile(target, 'utf8')
-  const count = countOccurrences(before, oldString)
 
-  if (count === 0) {
-    throw new Error(
-      `在 ${base(target)} 里没找到这段原文。请先用 readFile 看清实际内容（缩进、空行、标点都必须完全一致）。`
-    )
-  }
-  if (count > 1 && !args.replaceAll) {
-    throw new Error(
-      `这段原文在 ${base(target)} 里出现了 ${count} 次，无法确定改哪一处。请多给几行上下文让它唯一，或明确设 replaceAll=true 改全部。`
-    )
-  }
+  const resolved = applyEdits(before, [{ oldString, newString, replaceAll: args.replaceAll }], base(target), () => '')
+  if (resolved.after === before) return `${base(target)} 内容没变化，未写入。`
 
-  const after = args.replaceAll
-    ? before.split(oldString).join(newString)
-    : before.replace(oldString, newString)
-
-  recordSnapshot(target, before, after, 'editFile')
+  recordSnapshot(target, before, resolved.after, 'editFile')
   markToolWrite(target, true)
-  await atomicWrite(target, after)
+  await atomicWrite(target, resolved.after)
   markToolWrite(target, false)
-  readState.set(target, { whole: true })
-  logger.info('tool', `editFile: ${target}（替换 ${args.replaceAll ? count : 1} 处）`)
-  return `已修改 ${base(target)}：替换 ${args.replaceAll ? count : 1} 处`
+  const stat = await fsp.stat(target)
+  readState.set(target, {
+    whole: true,
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
+    hash: hashContent(resolved.after)
+  })
+  logger.info('tool', `editFile: ${target}（替换 ${resolved.count} 处，策略 ${resolved.strategy}）`)
+  return (
+    `已修改 ${base(target)}：替换 ${resolved.count} 处` +
+    buildEditMatchStrategyNote(resolved.strategy)
+  )
 }
 
 export interface MultiEditArgs {
@@ -255,36 +437,30 @@ async function multiEditTool(args: MultiEditArgs): Promise<string> {
   const edits = Array.isArray(args.edits) ? args.edits : []
   if (edits.length === 0) throw new Error('edits 不能为空')
 
+  await assertFreshRead(target)
   const before = await fsp.readFile(target, 'utf8')
-  let work = before
 
   // 先在内存里全部走一遍，任何一处不过关就直接抛错，文件一个字节也不动
-  for (const [index, edit] of edits.entries()) {
-    const label = `第 ${index + 1} 处替换`
-    if (typeof edit?.oldString !== 'string' || edit.oldString === '') {
-      throw new Error(`${label} 的 oldString 不能为空。本次未修改任何内容。`)
-    }
-    const count = countOccurrences(work, edit.oldString)
-    if (count === 0) {
-      throw new Error(`${label}没找到原文（可能被前面的替换改掉了）。本次未修改任何内容。`)
-    }
-    if (count > 1 && !edit.replaceAll) {
-      throw new Error(`${label}的原文出现 ${count} 次，无法确定改哪一处。本次未修改任何内容。`)
-    }
-    work = edit.replaceAll
-      ? work.split(edit.oldString).join(edit.newString ?? '')
-      : work.replace(edit.oldString, edit.newString ?? '')
-  }
+  const resolved = applyEdits(before, edits, base(target), (i) => `第 ${i + 1} 处替换`)
 
-  if (work === before) return `${base(target)} 内容没变化，未写入。`
+  if (resolved.after === before) return `${base(target)} 内容没变化，未写入。`
 
-  recordSnapshot(target, before, work, 'multiEdit')
+  recordSnapshot(target, before, resolved.after, 'multiEdit')
   markToolWrite(target, true)
-  await atomicWrite(target, work)
+  await atomicWrite(target, resolved.after)
   markToolWrite(target, false)
-  readState.set(target, { whole: true })
-  logger.info('tool', `multiEdit: ${target}（${edits.length} 处）`)
-  return `已修改 ${base(target)}：共 ${edits.length} 处替换全部成功`
+  const stat = await fsp.stat(target)
+  readState.set(target, {
+    whole: true,
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
+    hash: hashContent(resolved.after)
+  })
+  logger.info('tool', `multiEdit: ${target}（${edits.length} 处，共替换 ${resolved.count} 处）`)
+  return (
+    `已修改 ${base(target)}：共 ${edits.length} 处替换全部成功` +
+    buildEditMatchStrategyNote(resolved.strategy)
+  )
 }
 
 export interface ListDirArgs {
@@ -347,7 +523,9 @@ async function undoSnapshotTool(args: UndoSnapshotArgs): Promise<string> {
   const target = args.path ? assertInsideRoot(args.path) : undefined
   const result = undoSnapshot(target)
   if (!result.ok) throw new Error(result.message)
-  if (result.path) readState.set(result.path, { whole: true })
+  // 回退后文件内容变了，之前记的读状态已失效 —— 删掉逼模型重新读一遍，
+  // 而不是拿旧的 mtime/hash 去做「没被改过」的误判
+  if (result.path) readState.delete(result.path)
   return result.message
 }
 

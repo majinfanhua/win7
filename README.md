@@ -42,9 +42,16 @@ AIEditor-<version>-win7-win10-ia32.zip
 npm ci
 npm run dev        # 开发模式（Vite HMR）
 npm run typecheck  # 类型检查（主进程 + 渲染层，两份 tsconfig）
-npm run build      # 构建（会先跑 check:node16 与 check:watch）
+npm run build      # 构建（会先跑下面 5 个离线校验）
 npm run smoke      # 无头启动自检（Linux 需 xvfb，其他平台会直接弹窗口）
-npm run check:watch # 单独校验文件监视的时序（纯 Node，不用开窗口）
+
+# 离线校验：全是纯逻辑，几毫秒跑完，不需要窗口/文件系统/AI
+npm run check:node16     # Node 16 API 边界（主进程跑在 Electron 22 的 Node 16 上）
+npm run check:watch      # 文件监视的时序
+npm run check:editmatch  # editFile 的宽容匹配级联（4 级）
+npm run check:argguard   # 工具参数截断守卫（4 种流形态的区分）
+npm run check:cmdsafety  # 命令行引号 / PATH 防投毒 / 工作区安全校验
+npm run check:budget     # 上下文预算与压缩阈值
 
 # 自检支持追加参数，用于在本地复现 CI 里那几次不同配置的运行
 npm run smoke -- --capability-profile=win7   # 强制 Win7 工具能力档
@@ -396,4 +403,5 @@ AI 改完 → 学生自己又存了一次 → 按撤销时退到 AI 改之前，
 
 - `docs/技术框架方案.md` —— 完整技术方案
 - `docs/7gai工具对照与实现规划.md` —— 工具对照、取舍理由、门控设计
+- `docs/参考LiveAgent改造记录.md` —— 参考 LiveAgent 移植了什么、**以及沙箱等为什么不能移植**
 - `docs/多系统-测试清单.md` —— 分发前真机验证清单
