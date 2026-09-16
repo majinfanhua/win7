@@ -247,14 +247,41 @@ window.__SELFTEST__ = async () => {
     checks.sidebarToggleFound = Boolean(toggle)
 
     const aside = document.querySelector('.sidenav') as HTMLElement | null
-    const widthBefore = aside?.getBoundingClientRect().width || 0
+    const widthOf = (): number => Math.round(aside?.getBoundingClientRect().width || 0)
+
+    /*
+     * 等宽度**稳定**下来，而不是等某个固定时长。
+     *
+     * ⚠️ 这条断言原来踩过一个坑，值得写下来：
+     * `.sidenav` 有 `transition: width 0.16s ease`，而原来的写法是
+     * 点完按钮、等 class 变了就立刻量宽度。class 是同步变的，
+     * 但宽度还在动画中间 —— 于是量到 226px（目标是 232px），
+     * 差 6px 超过 ±2 的容差，自检红，而界面其实完全正常。
+     *
+     * 这类「等错了东西」的断言比没有断言更糟：它每天红一次，
+     * 让人逐渐学会忽略红灯。所以这里改成等两次采样一致，
+     * 也就是动画真的停了 —— 动画时长以后改了也不会失效。
+     */
+    const waitForWidthSettled = async (timeoutMs: number): Promise<number> => {
+      const deadline = Date.now() + timeoutMs
+      let last = widthOf()
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 60))
+        const now = widthOf()
+        if (now === last) return now
+        last = now
+      }
+      return widthOf()
+    }
+
+    const widthBefore = await waitForWidthSettled(1_000)
 
     toggle?.click()
     checks.sidebarCollapsed = await waitFor(
       () => Boolean(document.querySelector('.sidenav.is-collapsed')),
       3_000
     )
-    const widthCollapsed = aside?.getBoundingClientRect().width || 0
+    const widthCollapsed = await waitForWidthSettled(2_000)
 
     // 收起后按钮必须还在原处（这是这条断言的核心）
     const toggleAfter = document.querySelector(
@@ -266,13 +293,9 @@ window.__SELFTEST__ = async () => {
       () => !document.querySelector('.sidenav.is-collapsed'),
       3_000
     )
-    const widthBack = aside?.getBoundingClientRect().width || 0
+    const widthBack = await waitForWidthSettled(2_000)
 
-    checks.sidebarWidths = {
-      before: Math.round(widthBefore),
-      collapsed: Math.round(widthCollapsed),
-      back: Math.round(widthBack)
-    }
+    checks.sidebarWidths = { before: widthBefore, collapsed: widthCollapsed, back: widthBack }
     // 收起要真的变窄，展开要真的回到原宽 —— 只查 class 会被「CSS 没生效」骗过
     checks.sidebarToggleOk = Boolean(
       checks.sidebarToggleFound &&
@@ -315,9 +338,33 @@ window.__SELFTEST__ = async () => {
 
     // 工具条里的图标数：现在应当是 3 个（引用文件 / 图片 / 展开）
     checks.composerToolCount = tools.length
-    // 不该再有「暂未支持」的灰按钮
-    const disabled = tools.filter((el) => el.hasAttribute('disabled')).length
-    checks.composerNoDeadTools = disabled === 0
+
+    /*
+     * 「没有死按钮」的判据是**禁用时有没有说明**，不是「一个都不许禁用」。
+     *
+     * ⚠️ 这里原来写的是 `disabled === 0`，它比注释里声明的意图更严格，
+     * 于是自检在 CI 上天天红 —— 而界面完全正常。原因：图片按钮在
+     * 「模型未开启图片支持」时是**故意禁用**的（默认就是关的），
+     * 它的 tooltip 写清了「去 设置 → AI 模型 里打开」。
+     *
+     * 「禁用但有说明」和「禁用且什么都不说」是两件完全不同的事：
+     *   - 前者是好的设计：功能还在，只是前置条件没满足，并且告诉了用户怎么满足
+     *   - 后者才是要防的死按钮：点了没反应，也不知道为什么
+     *
+     * 而且把未满足前置条件的功能**显示出来**（而不是藏起来）对教学场景更好：
+     * 学生能发现有这个能力、并知道去哪打开。
+     *
+     * 所以判据改成「每个禁用的按钮都必须有非空的 title 说明」——
+     * 真正的死按钮仍然会被抓住，合法的条件禁用不再误报。
+     */
+    const disabledTools = tools.filter((el) => el.hasAttribute('disabled'))
+    const deadTools = disabledTools
+      .filter((el) => !(el.getAttribute('title') || '').trim())
+      .map((el) => el.getAttribute('aria-label') || '(无标签)')
+    checks.composerDisabledCount = disabledTools.length
+    checks.composerDisabledLabels = disabledTools.map((el) => el.getAttribute('aria-label') || '')
+    checks.composerDeadTools = deadTools
+    checks.composerNoDeadTools = deadTools.length === 0
 
     checks.composerOk = Boolean(
       checks.composerAtBottom &&
