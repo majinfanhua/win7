@@ -1,7 +1,6 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
-import { installDevApiStub } from './dev-api-stub'
 import { applyTheme, readTheme } from './theme'
 // 只取副作用：这个模块负责 Monaco 的语言注册与 worker 注入。
 // 必须在 App 渲染前执行 —— EditorPane 一挂载就会调 monaco.editor.create，
@@ -12,21 +11,43 @@ import './monaco-setup'
 import './styles/index.css'
 
 /**
- * 必须放在 render 之前：App 的 useEffect 一跑就会调 window.api。
- * Electron 里 preload 已注入真实 api，这个函数会直接返回 false，什么也不做；
- * 只有「用普通浏览器打开 dev server」时才会真的装上桩。
+ * 启动。做成 async 只为一件事：让 dev 桩能走**动态 import**。
+ *
+ * 为什么不用顶层静态 `import { installDevApiStub } from './dev-api-stub'`：
+ * 静态 import 无条件把模块拉进依赖图，而 dev-stub-fs 里有
+ * `new Map(Object.entries(DEMO_FILES))` 这样的顶层初始化 —— 对 Rollup 来说
+ * 就是副作用，删不得。结果打包版里虽然 installDevApiStub 本体被摇掉了，
+ * 它引用的五个演示文件全文仍被拖进产物（实测残留 ~1.9KB 死代码）。
+ *
+ * 换成 DEV 分支里的动态 import 后，生产构建里 `import.meta.env.DEV` 是字面量
+ * false，整个分支连同那个 import() 一起被消除，桩与演示数据一个字节都不进包。
+ *
+ * 顺序仍是安全的：await 保证桩在 render 之前装好；生产环境走不到 await，
+ * render 依旧同步发生，不会推迟首屏。
  */
-installDevApiStub()
+async function bootstrap(): Promise<void> {
+  if (import.meta.env.DEV) {
+    /*
+     * 必须放在 render 之前：App 的 useEffect 一跑就会调 window.api。
+     * Electron 里 preload 已注入真实 api，installDevApiStub() 会返回 false、
+     * 什么也不做；只有「用普通浏览器打开 dev server」时才真的装上桩。
+     */
+    const { installDevApiStub } = await import('./dev-api-stub')
+    installDevApiStub()
+  }
 
-// 主题要在首次渲染前落到 <html> 上，否则浅色主题会先闪一下深色
-applyTheme(readTheme())
+  // 主题要在首次渲染前落到 <html> 上，否则浅色主题会先闪一下深色
+  applyTheme(readTheme())
 
-const container = document.getElementById('root')
-if (!container) throw new Error('未找到 #root 挂载点')
+  const container = document.getElementById('root')
+  if (!container) throw new Error('未找到 #root 挂载点')
 
-ReactDOM.createRoot(container).render(
-  React.createElement(React.StrictMode, null, React.createElement(App))
-)
+  ReactDOM.createRoot(container).render(
+    React.createElement(React.StrictMode, null, React.createElement(App))
+  )
+}
+
+void bootstrap()
 
 /**
  * 自检入口：主进程 --self-test 时调用。

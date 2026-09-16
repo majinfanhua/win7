@@ -63,6 +63,21 @@ jobs:
             exit 1
           }
 
+      - name: 护栏 - CSS Chromium 108 边界
+        # build.target=chrome108 只约束 JS（交给 esbuild 降级），CSS 不在那条链路上：
+        # esbuild 对 color-mix()/@container 这类特性不做目标校验，原样输出。
+        # 后果是「浏览器预览正常、Win7 上样式静默失效」，所以单独扫一遍 CSS。
+        shell: pwsh
+        run: |
+          $out = & npm run check:css108 2>&1 | Out-String
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) {
+            $tail = (($out -split "`r?`n") | Where-Object { $_ -ne '' } | Select-Object -Last 25) -join '%0A'
+            $tail = $tail -replace '%', '%25' -replace "`r", '%0D'
+            Write-Host "::error title=check:css108 失败::$tail"
+            exit 1
+          }
+
       - name: 构建（electron-vite）
         shell: pwsh
         run: |
