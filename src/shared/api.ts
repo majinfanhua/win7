@@ -2,6 +2,7 @@ import type {
   AiStreamChunk,
   AiTestResult,
   AppConfig,
+  ArchivedSession,
   CapabilityInfo,
   ChatMessage,
   DoctorReport,
@@ -15,7 +16,9 @@ import type {
   SessionEntry,
   SnapshotSummary,
   StoredSession,
+  SystemDocState,
   UndoOutcome,
+  UsageStats,
   WorkspaceEntry
 } from './types'
 
@@ -76,6 +79,30 @@ export interface AppApi {
   /** 整体覆写一个会话的正文。整份写而不是追加，避免 jsonl 半截损坏 */
   saveSession(session: StoredSession): Promise<boolean>
 
+  /**
+   * 归档一条会话。
+   *
+   * 归档 = 「这段对话结束了，可以总结了」。归档后主进程会在后台
+   * 生成一段梗概，并把这条会话放进 AI 可检索的范围。
+   */
+  archiveSession(id: string): Promise<{ message: string; entries: ArchivedSession[] }>
+  /** 取消归档，同时撤掉它的梗概 */
+  unarchiveSession(id: string): Promise<{ message: string; entries: ArchivedSession[] }>
+  /** 已归档会话的索引（含标题与梗概） */
+  listArchive(): Promise<ArchivedSession[]>
+
+  /** `系统.md` 的当前内容与同步状态 */
+  getSystemDoc(): Promise<SystemDocState>
+  /** 按当前设置重新生成 `系统.md`，返回新内容 */
+  regenerateSystemDoc(): Promise<SystemDocState>
+  /** 用系统默认程序打开 `系统.md` */
+  openSystemDoc(): Promise<boolean>
+
+  /** token 用量统计 */
+  getUsageStats(): Promise<UsageStats>
+  /** 清空统计，返回清空后的结果 */
+  resetUsageStats(): Promise<UsageStats>
+
   /** 上次退出时的编辑器状态（打开过哪些文件、光标在哪、分割比例） */
   getEditorSession(): Promise<EditorSession>
   /** 落盘编辑器状态。关窗时调一次，以及拖动分割条结束后 */
@@ -86,7 +113,16 @@ export interface AppApi {
   /** 列出可撤销的记录（只有摘要，不含文件正文） */
   listSnapshots(): Promise<SnapshotSummary[]>
 
-  aiChat(requestId: string, messages: ChatMessage[]): Promise<void>
+  /**
+   * 发起一次流式对话。
+   *
+   * `sessionId` 是**必需**的信息，虽然形式上可选：主进程用它判断
+   * 「这是不是一次新会话」。换了会话就要重新校验 userData/系统.md
+   * （覆盖用户的手改、让设置改动立刻生效），同一会话内则复用快照
+   * 以保证前后一致并命中 prompt 缓存。不传的后果是「改了设置/手改了
+   * 系统.md 也不生效」，所以调用方一定要传。
+   */
+  aiChat(requestId: string, messages: ChatMessage[], sessionId?: string): Promise<void>
   aiAbort(requestId: string): Promise<boolean>
   aiTest(): Promise<AiTestResult>
   aiListModels(): Promise<ModelListResult>

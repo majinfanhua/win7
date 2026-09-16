@@ -15,13 +15,15 @@
     "check:argguard": "node scripts/check-argguard.mjs",
     "check:cmdsafety": "node scripts/check-command-safety.mjs",
     "check:budget": "node scripts/check-context-budget.mjs",
-    "build": "npm run check:node16 && npm run check:watch && npm run check:editmatch && npm run check:argguard && npm run check:cmdsafety && npm run check:budget && electron-vite build",
+    "build": "npm run check:node16 && npm run check:watch && npm run check:editmatch && npm run check:argguard && npm run check:cmdsafety && npm run check:budget && npm run check:profile && npm run check:profileio && electron-vite build",
     "preview": "electron-vite preview",
     "typecheck:node": "tsc --noEmit -p tsconfig.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "smoke": "node scripts/smoke.mjs",
-    "dist:win": "node scripts/guard-ci.mjs && electron-builder --win --x64 --ia32 --publish never"
+    "dist:win": "node scripts/guard-ci.mjs && electron-builder --win --x64 --ia32 --publish never",
+    "check:profile": "node scripts/check-profile.mjs",
+    "check:profileio": "node scripts/check-profile-io.mjs"
   },
   "devDependencies": {
     "@types/node": "20.17.9",

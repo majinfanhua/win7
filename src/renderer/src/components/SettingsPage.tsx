@@ -1,5 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
-import type { AppConfig, CapabilityInfo, CapabilityMode } from '@shared/types'
+import type {
+  AppConfig,
+  CapabilityInfo,
+  CapabilityMode,
+  SystemDocState,
+  UsageBucket,
+  UsageByDay,
+  UsageStats
+} from '@shared/types'
+import { DEFAULT_SYSTEM_PROMPT, USAGE_KEEP_DAYS } from '@shared/types'
+import { AI_NAME_MAX, HABITS_MAX, USER_NAME_MAX } from '@shared/system-doc'
 import { useAppStore } from '../store/useAppStore'
 
 /** 把「Key: Value」多行文本解析成请求头对象 */
@@ -41,6 +51,8 @@ function snapshot(config: AppConfig): string {
  */
 const SECTIONS = [
   { id: 'ai', label: 'AI 模型', hint: '中转站、密钥与模型' },
+  { id: 'persona', label: 'AI 设定', hint: '它叫什么、怎么称呼你' },
+  { id: 'usage', label: '用量统计', hint: '花了多少 token' },
   { id: 'capability', label: '工具能力', hint: 'AI 能对文件做什么' },
   { id: 'history', label: '修改历史', hint: '撤销 AI 的改动' },
   { id: 'about', label: '关于', hint: '快捷键与使用说明' }
@@ -75,6 +87,18 @@ export default function SettingsPage({
   }, [refreshSnapshots, section])
 
   /**
+   * 切到「用量统计」时拉一次。
+   *
+   * 依赖 section 而不是只在挂载时拉：用量会随着对话增长，
+   * 用户开设置页 → 聊两句 → 再回来看，应该看到新的数字。
+   */
+  useEffect(() => {
+    if (section === 'usage') void refreshUsage()
+    // refreshUsage 每次渲染都是新函数，放进依赖会无限循环，所以只依赖 section
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [section])
+
+  /**
    * 退回某次修改。
    *
    * 撤完由 store 重新拉列表 —— 撤销会把那条记录消费掉，不刷新的话
@@ -97,12 +121,84 @@ export default function SettingsPage({
   const [confirmLeave, setConfirmLeave] = useState(false)
   const scrollRef = useRef<HTMLDivElement | null>(null)
 
+  /** `系统.md` 的状态与预览。预览为 null 表示收起 */
+  const [docState, setDocState] = useState<SystemDocState | null>(null)
+  const [docPreview, setDocPreview] = useState<string | null>(null)
+  /** token 用量统计 */
+  const [usage, setUsage] = useState<UsageStats | null>(null)
+
   const patchAi = (patch: Partial<AppConfig['ai']>): void => {
     setDraft((prev) => ({ ...prev, ai: { ...prev.ai, ...patch } }))
   }
 
   const patchCapability = (patch: Partial<AppConfig['capability']>): void => {
     setDraft((prev) => ({ ...prev, capability: { ...prev.capability, ...patch } }))
+  }
+
+  /* ---------------- 「AI 设定」相关的三个动作 ---------------- */
+
+  /**
+   * 看 `系统.md` 全文。
+   *
+   * 先 `persist()` 再 `regenerateSystemDoc()`（而不是 getSystemDoc）。
+   * 用 regenerate 的理由：它**保证**文件是刚按当前设置生成的，
+   * 而 getSystemDoc 只是「读现在是什么」—— 如果主进程那边的生成
+   * 还没落盘（或者用户手改过），读到的就不是用户刚改的那份，
+   * 表现出来就是「我改了名字，点查看全文，看到的还是旧的」。
+   *
+   * 这也让「查看全文」顺带变成一个「修一下」的动作，符合它的直觉。
+   */
+  const viewSystemDoc = async (): Promise<void> => {
+    setBusy(true)
+    try {
+      await persist()
+      const state = await window.api.regenerateSystemDoc()
+      setDocState(state)
+      setDocPreview(state.content)
+      setStatus('已按当前设置刷新系统.md')
+    } catch (err) {
+      setStatus(`读取失败：${String(err)}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /** 重新生成。与「查看全文」同一件事，按钮语不同、给用户的预期不同 */
+  const regenerateDoc = async (): Promise<void> => {
+    await viewSystemDoc()
+  }
+
+  const openDocFile = async (): Promise<void> => {
+    setBusy(true)
+    try {
+      // 同样先落盘：用户点「打开文件」的意图是「我要看现在这份」
+      await persist()
+      await window.api.openSystemDoc()
+      setStatus('已用系统默认程序打开')
+    } catch (err) {
+      setStatus(`打开失败：${String(err)}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /* ---------------- 用量统计 ---------------- */
+
+  const refreshUsage = async (): Promise<void> => {
+    try {
+      setUsage(await window.api.getUsageStats())
+    } catch (err) {
+      setStatus(`读取用量失败：${String(err)}`)
+    }
+  }
+
+  const clearUsage = async (): Promise<void> => {
+    try {
+      setUsage(await window.api.resetUsageStats())
+      setStatus('用量统计已清空')
+    } catch (err) {
+      setStatus(`清空失败：${String(err)}`)
+    }
   }
 
   /** 逐个工具的开关：写进 disabled 列表 */
@@ -413,6 +509,176 @@ export default function SettingsPage({
               </section>
             )}
 
+            {section === 'persona' && (
+              <>
+                <section className="card">
+                  <div className="card-title">AI 设定</div>
+                  <div className="hint card-hint">
+                    这些内容会拼成一份 <code>系统.md</code>，作为发给 AI 的 system prompt。
+                    可以随时点下面的「查看全文」确认它到底收到了什么。
+                  </div>
+
+                  <div className="field">
+                    <label>AI 命名（最多 {AI_NAME_MAX} 字）</label>
+                    <input
+                      maxLength={AI_NAME_MAX}
+                      placeholder="例如：小助"
+                      value={draft.ai.aiName}
+                      onChange={(e) => patchAi({ aiName: e.target.value })}
+                    />
+                    <div className="hint">
+                      给它一个名字，长对话里它就不会搞混「你」是在说它还是说别人。留空则不做要求。
+                    </div>
+                  </div>
+
+                  <div className="field">
+                    <label>你希望 AI 称呼你什么（最多 {USER_NAME_MAX} 字）</label>
+                    <input
+                      maxLength={USER_NAME_MAX}
+                      placeholder="例如：同学"
+                      value={draft.ai.userName}
+                      onChange={(e) => patchAi({ userName: e.target.value })}
+                    />
+                    <div className="hint">留空则它不会特意称呼你。</div>
+                  </div>
+
+                  <div className="field">
+                    <label>默认提示词（告诉 AI 它是什么）</label>
+                    <textarea
+                      rows={7}
+                      value={draft.ai.systemPrompt}
+                      onChange={(e) => patchAi({ systemPrompt: e.target.value })}
+                    />
+                    <div className="hint">
+                      这一段决定它的身份与回答风格。改坏了可以点右下角「恢复默认」。
+                    </div>
+                  </div>
+
+                  <div className="field">
+                    <label>习惯</label>
+                    <textarea
+                      rows={4}
+                      maxLength={HABITS_MAX}
+                      placeholder={'例如：\n- 我只用 Windows，命令请按 cmd 写\n- 解释尽量短，先给能跑的代码\n- 不要用我没学过的语法'}
+                      value={draft.ai.habits}
+                      onChange={(e) => patchAi({ habits: e.target.value })}
+                    />
+                    <div className="hint">
+                      你的固定偏好，会作为补充要求附在提示词后面。一行一条最清楚。
+                    </div>
+                  </div>
+
+                  <div className="card-foot">
+                    <button className="ghost" disabled={busy} onClick={() => void viewSystemDoc()}>
+                      查看全文
+                    </button>
+                    <button className="ghost" disabled={busy} onClick={() => void regenerateDoc()}>
+                      重新生成
+                    </button>
+                    <button className="ghost" disabled={busy} onClick={() => void openDocFile()}>
+                      打开文件
+                    </button>
+                    <button
+                      className="ghost"
+                      disabled={busy}
+                      onClick={() => patchAi({ systemPrompt: DEFAULT_SYSTEM_PROMPT })}
+                    >
+                        恢复默认提示词
+                    </button>
+                  </div>
+                </section>
+
+                {/* 「系统.md」的全文预览。默认收起，需要时才看 */}
+                {docPreview !== null && (
+                  <section className="card">
+                    <div className="card-title">
+                      系统.md 全文
+                      <span className="muted"> {docState?.inSync ? '（与设置一致）' : '（下次对话前会被设置覆盖）'}</span>
+                    </div>
+                    <div className="hint card-hint">
+                      这就是每次对话真正发出去的 system prompt 原文。放在文件里的好处是能直接看、直接确认。
+                    </div>
+                    <textarea className="doc-preview" readOnly rows={18} value={docPreview} />
+                    <div className="card-foot">
+                      <button className="ghost" onClick={() => setDocPreview(null)}>
+                        收起
+                      </button>
+                      <span className="muted">{docState?.path || ''}</span>
+                    </div>
+                  </section>
+                )}
+              </>
+            )}
+
+            {section === 'usage' && (
+              <section className="card">
+                <div className="card-title">用量统计</div>
+                <div className="hint card-hint">
+                  按天统计每次请求的 token。缓存命中的部分通常只按原价的几分之一计费，
+                  所以「命中率」比总量更值得盯 —— 它掉下来往往意味着每次对话都换了 system prompt。
+                </div>
+
+                {usage ? (
+                  <>
+                    <div className="usage-grid">
+                      <UsageCell label="今天" bucket={usage.today} />
+                      <UsageCell label="最近 7 天" bucket={usage.week} />
+                      <UsageCell label="全部" bucket={usage.total} />
+                    </div>
+
+                    {usage.days.length > 0 && (
+                      <>
+                        <div className="usage-sub">最近 7 天</div>
+                        <div className="usage-bars">
+                          {usage.days.map((day) => (
+                            <UsageBar key={day.day} day={day} max={maxDailyTokens(usage.days)} />
+                          ))}
+                        </div>
+                      </>
+                    )}
+
+                    {usage.models.length > 0 && (
+                      <>
+                        <div className="usage-sub">按模型（全部历史）</div>
+                        <div className="usage-list">
+                          {usage.models.map((item) => (
+                            <div key={item.model} className="usage-row">
+                              <span className="usage-model">{item.model}</span>
+                              <span className="muted">
+                                {item.requests} 次 · 输入 {formatTokens(item.promptTokens)} · 输出{' '}
+                                {formatTokens(item.completionTokens)} · 命中{' '}
+                                {hitRate(item.promptTokens, item.cachedTokens)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    )}
+
+                    <div className="hint card-hint">
+                      {usage.total.estimatedRequests > 0
+                        ? `注意：其中 ${usage.total.estimatedRequests} 次请求的 token 是按字数估算的（中转站没有返回用量），这部分数字只能看量级。`
+                        : '全部数字都来自接口返回的用量。'}
+                      {usage.since ? ` 记录始于 ${usage.since}。` : ''}
+                      逐日明细保留最近 {USAGE_KEEP_DAYS} 天。
+                    </div>
+                  </>
+                ) : (
+                  <div className="hint">正在读取…</div>
+                )}
+
+                <div className="card-foot">
+                  <button className="ghost" disabled={busy} onClick={() => void refreshUsage()}>
+                    刷新
+                  </button>
+                  <button className="ghost" disabled={busy} onClick={() => void clearUsage()}>
+                    清空统计
+                  </button>
+                  <span className="muted">清空只删统计，不影响对话记录与设置</span>
+                </div>
+              </section>
+            )}
+
             {section === 'capability' && (
               <section className="card">
                 <div className="card-title">工具能力</div>
@@ -600,5 +866,71 @@ function BackIcon(): JSX.Element {
         strokeLinejoin="round"
       />
     </svg>
+  )
+}
+
+/* ------------------------------------------------------------------ *
+ * 用量统计的展示组件
+ * ------------------------------------------------------------------ */
+
+/**
+ * token 数的中文可读写法。
+ *
+ * 用「万」而不是「k」：使用者是中文用户，12000 写成「1.2 万」
+ * 比「12.0k」更快理解，也不容易把 12k 和 12 万看混。
+ * 分级到亿就够 —— 个人使用的额度不会到那个量级。
+ */
+function formatTokens(value: number): string {
+  if (value >= 100_000_000) return `${(value / 100_000_000).toFixed(2)} 亿`
+  if (value >= 10_000) return `${(value / 10_000).toFixed(2)} 万`
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)} 千`
+  return String(value)
+}
+
+/** 缓存命中率。分母为 0 时不要显示 0%（那会让人以为命中率是 0） */
+function hitRate(promptTokens: number, cachedTokens: number): string {
+  if (promptTokens <= 0) return '—'
+  return `${Math.round((cachedTokens / promptTokens) * 100)}%`
+}
+
+/** 一格统计 */
+function UsageCell({ label, bucket }: { label: string; bucket: UsageBucket }): JSX.Element {
+  return (
+    <div className="usage-cell">
+      <div className="usage-cell-label">{label}</div>
+      <div className="usage-cell-value">{formatTokens(bucket.promptTokens + bucket.completionTokens)}</div>
+      <div className="usage-cell-note">
+        输入 {formatTokens(bucket.promptTokens)} · 输出 {formatTokens(bucket.completionTokens)}
+      </div>
+      <div className="usage-cell-note">
+        {bucket.requests} 次 · 命中 {hitRate(bucket.promptTokens, bucket.cachedTokens)}
+      </div>
+    </div>
+  )
+}
+
+/** 柱状图里的最大值，用来算每根柱子的相对高度。全是 0 时返回 1 避免除零 */
+function maxDailyTokens(days: UsageByDay[]): number {
+  return Math.max(1, ...days.map((day) => day.promptTokens + day.completionTokens))
+}
+
+/**
+ * 一天一根柱子。
+ *
+ * 用 CSS 高度百分比而不是引一个图表库：
+ * 这个图只有 7 根柱子、一个维度，引库要多几百 KB（还要考虑 Win7 下的兼容），
+ * 而手写这几行的可读性并不差。
+ */
+function UsageBar({ day, max }: { day: UsageByDay; max: number }): JSX.Element {
+  const total = day.promptTokens + day.completionTokens
+  const height = Math.round((total / max) * 100)
+  return (
+    <div className="usage-bar-wrap" title={`${day.day}：${formatTokens(total)} token`}>
+      <div className="usage-bar-track">
+        <div className="usage-bar-fill" style={{ height: `${Math.max(total > 0 ? 4 : 0, height)}%` }} />
+      </div>
+      <div className="usage-bar-label">{day.day.slice(5)}</div>
+      <div className="usage-bar-value">{total > 0 ? formatTokens(total) : ''}</div>
+    </div>
   )
 }

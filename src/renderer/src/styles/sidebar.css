@@ -618,3 +618,37 @@
   margin: 4px 6px;
   background: var(--border);
 }
+
+/*
+ * 归档按钮。
+ *
+ * 与删除按钮共用 .nav-item-x 的尺寸与「悬停才出现」行为，
+ * 但颜色语义完全不同：删除是危险操作（红），归档是中性操作（蓝），
+ * 而且已归档状态需要**常驻可见** —— 否则用户看不出这条会话到底归档没有。
+ */
+.nav-item-archive.is-archived {
+  opacity: 1;
+  color: var(--accent);
+}
+
+/*
+ * 已归档的行标题也做个弱化标记。
+ *
+ * 用左边框而不是改文字颜色：颜色变淡会让标题更难读，
+ * 而「这条已经归档了」是个状态，不是「这条不重要」。
+ */
+.nav-item-row:has(.nav-item-archive.is-archived) .nav-item-name {
+  border-left: 2px solid var(--accent);
+  padding-left: 6px;
+}
+
+/* 侧栏里的一行反馈文字（归档结果）。4 秒后由组件清掉 */
+.nav-note {
+  margin: 6px 9px 0;
+  padding: 5px 8px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-2);
+  background: var(--accent-soft);
+  border-radius: 5px;
+}

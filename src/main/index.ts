@@ -11,6 +11,9 @@ import { getRuntimeInfo, registerDiagnosticsIpc, setCompatState } from './ipc/di
 import { closePreviewServer, registerWorkspaceIpc, restoreLastWorkspace } from './ipc/workspace'
 import { registerSessionIpc } from './ipc/sessions'
 import { registerAiIpc } from './ipc/ai'
+import { registerProfileIpc, flushProfile, scheduleArchiveCatchUp } from './ipc/profile'
+import { invalidateSystemPrompt } from './system-doc'
+import { drainWrites } from './atomic-file'
 import { killAllJobs } from './tools/jobs'
 import { setFileChangeEmitter, stopWatching, watchWorkspace } from './watcher'
 
@@ -36,6 +39,15 @@ function parseArgs(argv: string[]): CliOptions {
 const cli = parseArgs(process.argv.slice(1))
 
 let mainWindow: BrowserWindow | null = null
+
+/**
+ * 退出流程是否已经等过「排队中的写」。
+ *
+ * before-quit 里推迟退出、等 drainWrites 完成后调 app.quit()，
+ * 而 app.quit() **会再次触发 before-quit**。没有这个标记就是无限循环：
+ * 每次退出都被推迟，应用永远关不掉 —— 这比丢一次写糟糕得多。
+ */
+let writesDrained = false
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -120,7 +132,26 @@ function sendMenu(action: string): void {
 
 function registerConfigIpc(): void {
   ipcMain.handle(IPC.configGet, () => getConfig())
-  ipcMain.handle(IPC.configSet, (_e, patch: Parameters<typeof setConfig>[0]) => setConfig(patch))
+  ipcMain.handle(IPC.configSet, (_e, patch: Parameters<typeof setConfig>[0]) => {
+    const next = setConfig(patch)
+    /*
+     * AI 设定改了就把 system prompt 快照丢掉。
+     *
+     * 只丢快照、**不在这里重新生成 系统.md**：生成要读运行时探测结果、
+     * 要落盘，让设置页的「保存」按钮等它转圈是不必要的。
+     *
+     * 那「改了设置之后文件什么时候更新」？两个时机：
+     *   - 设置页保存后自己要显示全文时，会显式 await 一次重新生成
+     *   - 下一次对话开始前，ensureSystemDoc 会按内容比对并重写
+     * 两处都不依赖这个 handler，所以这里 fire-and-forget 反而曾经
+     * 制造过一个竞态：设置页点「查看全文」时生成可能还没落盘，
+     * 于是显示的是**改之前**的内容，用户以为设置没生效。
+     */
+    if (patch && typeof patch === 'object' && 'ai' in patch) {
+      invalidateSystemPrompt()
+    }
+    return next
+  })
   // 每次调用都重新与设置求交，所以设置改完立即生效，不用重启
   ipcMain.handle(IPC.appCapabilities, () => getCapabilityInfo())
 }
@@ -360,8 +391,11 @@ function main(): void {
       registerWorkspaceIpc()
       registerSessionIpc()
       registerAiIpc()
+      registerProfileIpc()
       restoreLastWorkspace()
       buildMenu()
+      // 补做上次没做完的归档总结（延迟执行，不抢启动资源）
+      scheduleArchiveCatchUp()
 
       mainWindow = createWindow()
       setLogSink((line) => {
@@ -424,12 +458,39 @@ function main(): void {
 
   // 预览用的临时 HTTP 服务必须显式关掉：它只绑回环地址，但进程不退的话
   // 端口会一直挂着，下次预览拿到的就是旧服务（工作区已经换过了）
-  app.on('before-quit', () => {
+  app.on('before-quit', (event) => {
     closePreviewServer()
     stopWatching()
     // 后台任务（npm run dev / python -m http.server 之类）不杀的话会变成孤儿进程，
     // 继续占着端口与 CPU，下次启动就变成「端口被占用」这种查不到原因的故障
     killAllJobs()
+    /*
+     * 用量统计是防抖写盘的（合并 2 秒内的多次记录）。
+     * 用户「聊完立刻关窗口」时最后那一次还在防抖窗口里，
+     * 不在这里冲一次就会丢掉 —— 表现为统计页上的数字偶尔少一截。
+     */
+    flushProfile()
+
+    /*
+     * 等还在排队的原子写落地，再真的退出。
+     *
+     * 归档索引与会话正文的写是「排队 + 异步」的：用户点了归档、
+     * 或者刚发完一句话就关窗口，写入可能还在队列里。
+     * 不等它就跑完 before-quit，那次改动就永远丢了 ——
+     * 而用户看到的是「界面上说归档成功了」。
+     *
+     * 这里**推迟一次退出**（event.preventDefault + 完成后 app.quit()），
+     * 而不是同步阻塞：队列里可能有几百毫秒的 I/O，
+     * 阻塞主进程会让窗口在那段时间完全没响应。
+     * 用一个标记防止 app.quit() 再次触发本回调造成死循环。
+     */
+    if (!writesDrained) {
+      event.preventDefault()
+      void drainWrites().finally(() => {
+        writesDrained = true
+        app.quit()
+      })
+    }
   })
 
   process.on('exit', () => {

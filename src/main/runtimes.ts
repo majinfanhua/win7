@@ -117,21 +117,14 @@ export async function detectRuntimes(): Promise<DetectedRuntime[]> {
 }
 
 /**
- * 拼一段给模型看的运行时清单。
+ * 运行时清单的**格式化逻辑**已经搬到 `shared/system-doc.ts` 的 `formatRuntimes`。
  *
- * 写进 system prompt，让 AI 一次选对解释器，而不是靠试错。
- * 没探测到任何东西时返回空串 —— 不要写「本机没有任何运行时」，
- * 那句话会让模型以为连 python 都不能装，反而限制了它的建议。
+ * 搬家的理由：这段文字现在是被组装进 `userData/系统.md` 的一段，
+ * 而组装规则是纯函数、放在 shared 下才能单测（见 scripts/check-profile.mjs）。
+ * 它在**每次请求末尾追加**的老用法已经取消 —— 现在全文一次性生成，
+ * 用户能在设置里看到 AI 到底收到了什么。
+ *
+ * 这里只保留 `detectRuntimes`（探测本身要起进程，只能在主进程做）。
+ * 刻意不在这里留一个「顺手格式化一下」的包装函数：两个地方各写一份，
+ * 迟早会出现「设置里看到的环境说明和实际发出去的不一样」。
  */
-export function describeRuntimesForModel(runtimes: DetectedRuntime[]): string {
-  if (runtimes.length === 0) return ''
-  const lines = runtimes.map((item) => {
-    const version = item.version ? `（${item.version}）` : ''
-    return `- ${item.name}${version}：${item.note}`
-  })
-  return (
-    '本机可用的开发环境（已探测，直接用它，不要靠试错）：\n' +
-    lines.join('\n') +
-    '\n跑命令时请从上面这些里选，并且命令用英文。'
-  )
-}

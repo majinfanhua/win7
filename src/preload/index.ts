@@ -53,13 +53,25 @@ const api: AppApi = {
   loadSession: (id: string) => ipcRenderer.invoke(IPC.sessionLoad, id),
   saveSession: (session: StoredSession) => ipcRenderer.invoke(IPC.sessionSave, session),
 
+  archiveSession: (id: string) => ipcRenderer.invoke(IPC.sessionArchive, id),
+  unarchiveSession: (id: string) => ipcRenderer.invoke(IPC.sessionUnarchive, id),
+  listArchive: () => ipcRenderer.invoke(IPC.sessionArchiveList),
+
+  getSystemDoc: () => ipcRenderer.invoke(IPC.systemDocGet),
+  regenerateSystemDoc: () => ipcRenderer.invoke(IPC.systemDocRegenerate),
+  openSystemDoc: () => ipcRenderer.invoke(IPC.systemDocOpen),
+
+  getUsageStats: () => ipcRenderer.invoke(IPC.usageStats),
+  resetUsageStats: () => ipcRenderer.invoke(IPC.usageReset),
+
   getEditorSession: () => ipcRenderer.invoke(IPC.editorSessionGet),
   setEditorSession: (session: EditorSession) => ipcRenderer.invoke(IPC.editorSessionSet, session),
 
   undoChange: (target?: string) => ipcRenderer.invoke(IPC.editorUndo, target),
   listSnapshots: () => ipcRenderer.invoke(IPC.editorListSnapshots),
 
-  aiChat: (requestId: string, messages: ChatMessage[]) => ipcRenderer.invoke(IPC.aiChat, requestId, messages),
+  aiChat: (requestId: string, messages: ChatMessage[], sessionId?: string) =>
+    ipcRenderer.invoke(IPC.aiChat, requestId, messages, sessionId),
   aiAbort: (requestId: string) => ipcRenderer.invoke(IPC.aiAbort, requestId),
   aiTest: () => ipcRenderer.invoke(IPC.aiTest),
   aiListModels: () => ipcRenderer.invoke(IPC.aiListModels),

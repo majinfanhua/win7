@@ -20,6 +20,7 @@
 
 import type { AppApi } from '@shared/api'
 import { languageFromPath } from '@shared/language'
+import { buildSystemDoc } from '@shared/system-doc'
 import { textOf } from '@shared/types'
 import {
   DEFAULT_CONFIG,
@@ -41,7 +42,9 @@ import {
   type SnapshotSummary,
   type StoredSession,
   type ToolName,
-  type WorkspaceEntry
+  type UsageStats,
+  type WorkspaceEntry,
+  type ArchivedSession
 } from '@shared/types'
 import {
   DEMO_ROOT,
@@ -58,6 +61,43 @@ import {
 /** 桩里的最近工作区 / 最近会话：初始为空，用着用着就长出来 */
 let stubWorkspaces: WorkspaceEntry[] = []
 let stubSessions: SessionEntry[] = []
+
+/** 浏览器桩里的归档索引与用量统计，都只在内存里 */
+let stubArchive: ArchivedSession[] = []
+
+function emptyStubUsage(): UsageStats {
+  const bucket = {
+    requests: 0,
+    estimatedRequests: 0,
+    promptTokens: 0,
+    completionTokens: 0,
+    cachedTokens: 0
+  }
+  return { today: { ...bucket }, week: { ...bucket }, total: { ...bucket }, days: [], models: [], since: '' }
+}
+
+/**
+ * 桩里的 `系统.md` 内容。
+ *
+ * 直接复用真实的组装规则（buildSystemDoc）而不是手写一段假文本 ——
+ * 这样在浏览器里看到的排版、分段、说明文字与真机完全一致，
+ * 改组装规则时桩也跟着变，不会出现「桩里好看、真机不一样」。
+ */
+function stubSystemDoc(): string {
+  return buildSystemDoc({
+    aiName: stubConfig.ai.aiName,
+    userName: stubConfig.ai.userName,
+    systemPrompt: stubConfig.ai.systemPrompt,
+    habits: stubConfig.ai.habits,
+    runtimes: [
+      { name: 'python', version: '3.11.4', note: '可以跑 .py 脚本' },
+      { name: 'node', version: 'v18.17.0', note: '可以跑 .js 脚本与 npm' }
+    ],
+    environmentNote: '用户的操作系统：Windows 10 22H2，64 位。（浏览器桩示例）'
+  })
+}
+
+let stubUsage: UsageStats = emptyStubUsage()
 /** 会话正文（索引里没有，单独存，和真机的 sessions/*.json 对应） */
 const stubBodies = new Map<string, StoredSession>()
 /** 编辑器状态：打开过哪些文件。桩里也放内存，和真机落 config.json 对应 */
@@ -346,8 +386,17 @@ const STUB_FILE_TOOLS: ToolName[] = [
 /** 需要命令执行能力的工具。浏览器里没有系统探测，因此永远拿不到这些能力 */
 const STUB_COMMAND_TOOLS: ToolName[] = ['runCommand', 'jobRun', 'jobPoll', 'jobKill']
 
+/**
+ * 记忆与会话检索工具。
+ *
+ * 浏览器桩里**照常提供**（不像命令类那样永远拿不到）：
+ * 它们不需要任何外部程序，真机与桩机的差别只在数据从哪来。
+ * 打开它们能让「设置 → 工具能力」这一页在预览时也能完整演示。
+ */
+const STUB_MEMORY_TOOLS: ToolName[] = ['listSessions', 'readSession', 'memoryGet', 'memoryWrite']
+
 /** 全部工具，与主进程的 ALL_TOOLS 一致 */
-const STUB_ALL_TOOLS: ToolName[] = [...STUB_FILE_TOOLS, ...STUB_COMMAND_TOOLS]
+const STUB_ALL_TOOLS: ToolName[] = [...STUB_FILE_TOOLS, ...STUB_COMMAND_TOOLS, ...STUB_MEMORY_TOOLS]
 
 const STUB_TOOL_LABELS: Record<ToolName, string> = {
   readFile: '读取文件',
@@ -361,7 +410,11 @@ const STUB_TOOL_LABELS: Record<ToolName, string> = {
   runCommand: '执行命令',
   jobRun: '后台任务',
   jobPoll: '查询任务',
-  jobKill: '终止任务'
+  jobKill: '终止任务',
+  listSessions: '翻归档会话',
+  readSession: '读会话记录',
+  memoryGet: '读记忆',
+  memoryWrite: '记一笔'
 }
 
 /**
@@ -638,6 +691,69 @@ ${target}
       return true
     },
 
+    /*
+     * 归档相关：桩里只维护内存里的一份索引与一段假梗概。
+     *
+     * 假梗概是**故意**的：真机上的梗概要发一次模型请求才拿到，
+     * 而浏览器桩没有主进程、也没有密钥。写一句假的能让设置页
+     * 与 AI 工具的界面在 `npm run dev:web` 下也能完整走一遍。
+     */
+    archiveSession: async (id: string) => {
+      const entry = stubSessions.find((item) => item.id === id)
+      if (!entry) throw new Error('找不到这条会话')
+      entry.archived = true
+      if (!stubArchive.some((item) => item.id === id)) {
+        stubArchive = [
+          {
+            id,
+            title: entry.title,
+            summary: '（浏览器桩生成的示例梗概，真机会由模型总结。）',
+            archivedAt: new Date().toISOString(),
+            workspace: entry.workspace,
+            messageCount: entry.messageCount
+          },
+          ...stubArchive
+        ]
+      }
+      emitLog('session', `归档会话：${id}`)
+      return { message: '已归档（浏览器桩）', entries: stubArchive }
+    },
+
+    unarchiveSession: async (id: string) => {
+      const entry = stubSessions.find((item) => item.id === id)
+      if (entry) entry.archived = false
+      stubArchive = stubArchive.filter((item) => item.id !== id)
+      return { message: '已取消归档（浏览器桩）', entries: stubArchive }
+    },
+
+    listArchive: async () => stubArchive,
+
+    // ---- 系统设定与用量：桩里给一份能看的静态内容 ----
+    getSystemDoc: async () => ({
+      path: '(浏览器桩没有真实文件)',
+      content: stubSystemDoc(),
+      inSync: true,
+      exists: true
+    }),
+
+    regenerateSystemDoc: async () => ({
+      path: '(浏览器桩没有真实文件)',
+      content: stubSystemDoc(),
+      inSync: true,
+      exists: true
+    }),
+
+    openSystemDoc: async () => {
+      emitLog('session', '浏览器桩不支持打开文件')
+      return false
+    },
+
+    getUsageStats: async () => stubUsage,
+    resetUsageStats: async () => {
+      stubUsage = emptyStubUsage()
+      return stubUsage
+    },
+
     // ---- 编辑器会话与撤销：桩里都放内存，刷新即失 ----
     getEditorSession: async () => stubEditorSession,
 
@@ -660,7 +776,9 @@ ${target}
       return { ok: true, message: `已把 ${item.path} 恢复到修改前`, path: item.path }
     },
 
-    aiChat: async (requestId: string, messages: ChatMessage[]) => streamReply(requestId, messages),
+    // sessionId 在桩里用不到（没有真实的 system prompt 组装），收下即可
+    aiChat: async (requestId: string, messages: ChatMessage[], _sessionId?: string) =>
+      streamReply(requestId, messages),
 
     aiAbort: async (requestId: string) => {
       const item = pending.get(requestId)

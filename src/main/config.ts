@@ -18,6 +18,7 @@ import {
   type SessionEntry,
   type WorkspaceEntry
 } from '../shared/types'
+import { AI_NAME_MAX, HABITS_MAX, USER_NAME_MAX } from '../shared/system-doc'
 import { logger } from './logger'
 
 let cached: AppConfig | null = null
@@ -55,6 +56,40 @@ function normalizeExplorer(raw: unknown): AppConfig['explorer'] {
 }
 
 /**
+ * ai 段的收敛。
+ *
+ * 除了补齐默认值，还夹住三个「会进 prompt」的字段的长度。
+ * 界面已经限了 maxLength，但界面不是安全边界 —— 手改 config.json
+ * 或者从 devtools 调 setConfig 都能绕过去。夹紧的成本是零。
+ *
+ * 这里**不做 trim 之外的加工**：用户在设置里看到什么，就该进 prompt 什么。
+ * 尤其是 habits，换行和缩进是用户表达「分几条」的方式，压平了反而难读。
+ */
+function normalizeAi(raw: unknown): AppConfig['ai'] {
+  const input = (raw && typeof raw === 'object' ? raw : {}) as Partial<AppConfig['ai']>
+  const str = (value: unknown, fallback: string): string => (typeof value === 'string' ? value : fallback)
+  return {
+    ...DEFAULT_CONFIG.ai,
+    ...input,
+    baseUrl: str(input.baseUrl, DEFAULT_CONFIG.ai.baseUrl),
+    apiKey: str(input.apiKey, DEFAULT_CONFIG.ai.apiKey),
+    model: str(input.model, DEFAULT_CONFIG.ai.model),
+    temperature: Number.isFinite(Number(input.temperature))
+      ? Number(input.temperature)
+      : DEFAULT_CONFIG.ai.temperature,
+    systemPrompt: str(input.systemPrompt, DEFAULT_CONFIG.ai.systemPrompt),
+    aiName: str(input.aiName, '').trim().slice(0, AI_NAME_MAX),
+    userName: str(input.userName, '').trim().slice(0, USER_NAME_MAX),
+    habits: str(input.habits, '').slice(0, HABITS_MAX),
+    extraHeaders:
+      input.extraHeaders && typeof input.extraHeaders === 'object' ? input.extraHeaders : {},
+    supportsVision: Boolean(input.supportsVision),
+    contextWindow: Math.max(0, Number(input.contextWindow) || 0),
+    maxOutputTokens: Math.max(0, Number(input.maxOutputTokens) || 0)
+  }
+}
+
+/**
  * 配置标准化。
  *
  * ⚠️ 这里是**白名单式**的：只合并下面列出的 section。
@@ -75,7 +110,7 @@ function normalize(raw: unknown): AppConfig {
     : DEFAULT_CONFIG.capability.disabled
 
   return {
-    ai: { ...DEFAULT_CONFIG.ai, ...(input.ai || {}) },
+    ai: normalizeAi(input.ai),
     editor: { ...DEFAULT_CONFIG.editor, ...(input.editor || {}) },
     legacyGraphics: { ...DEFAULT_CONFIG.legacyGraphics, ...(input.legacyGraphics || {}) },
     capability: { mode, disabled },
@@ -163,7 +198,10 @@ function normalizeSessions(raw: unknown): SessionEntry[] {
       title: title || '（未命名会话）',
       workspace: typeof entry.workspace === 'string' ? entry.workspace : '',
       updatedAt: typeof entry.updatedAt === 'string' ? entry.updatedAt : '',
-      messageCount: typeof entry.messageCount === 'number' && entry.messageCount > 0 ? entry.messageCount : 0
+      messageCount: typeof entry.messageCount === 'number' && entry.messageCount > 0 ? entry.messageCount : 0,
+      // archived 只在为 true 时才带上：老配置里没有这个字段，
+      // 写成 archived: false 会让 config.json 每次保存都多出一堆无用字段
+      ...(entry.archived ? { archived: true } : {})
     })
     if (out.length >= RECENT_SESSIONS_MAX) break
   }
@@ -175,18 +213,27 @@ function baseName(target: string): string {
   return parts[parts.length - 1] || target
 }
 
-/** 把一条会话插到列表最前面（已存在则更新），并截到上限 */
+/**
+ * 把一条会话插到列表最前面（已存在则更新），并截到上限。
+ *
+ * `archived` 要**从旧条目上继承**：归档过的会话如果用户又回去接着聊，
+ * touch 一次就把它变回「未归档」的话，它已经生成的总结就变成了孤儿
+ * （索引里有、列表里说不归档），界面上会显示成「归档了但没有总结」。
+ * 所以这里只更新标题/时间/条数，归档状态原样带过来。
+ */
 export function upsertSession(
   list: SessionEntry[],
   input: { id: string; title: string; workspace: string; messageCount: number }
 ): SessionEntry[] {
   const title = input.title.trim().slice(0, SESSION_TITLE_MAX) || '（未命名会话）'
+  const previous = list.find((item) => item.id === input.id)
   const next: SessionEntry = {
     id: input.id,
     title,
     workspace: input.workspace,
     updatedAt: new Date().toISOString(),
-    messageCount: input.messageCount
+    messageCount: input.messageCount,
+    ...(previous?.archived ? { archived: true } : {})
   }
   return [next, ...list.filter((item) => item.id !== input.id)].slice(0, RECENT_SESSIONS_MAX)
 }

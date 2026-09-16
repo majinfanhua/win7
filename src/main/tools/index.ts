@@ -3,6 +3,7 @@ import { getCapabilityInfo } from '../capabilities'
 import { logger } from '../logger'
 import { COMMAND_TOOL_HANDLERS } from './command-tools'
 import { FILE_TOOL_HANDLERS } from './file-tools'
+import { SESSION_TOOL_HANDLERS } from './session-tools'
 import { IMPLEMENTED_TOOLS, TOOL_LABELS, TOOL_SCHEMAS, type ToolSchema } from './meta'
 
 /**
@@ -44,7 +45,8 @@ export function toolSchemasForModel(): ToolSchema[] {
  */
 const HANDLERS: Record<string, (args: never) => Promise<string>> = {
   ...FILE_TOOL_HANDLERS,
-  ...COMMAND_TOOL_HANDLERS
+  ...COMMAND_TOOL_HANDLERS,
+  ...SESSION_TOOL_HANDLERS
 }
 
 /** 摘要里一个参数值最多显示多少字，多了会把对话面板那一行挤爆 */
@@ -72,6 +74,20 @@ function describeCall(name: string, args: Record<string, unknown>): string {
   // 后台任务：显示任务号
   const id = typeof args.id === 'string' ? args.id.trim() : ''
   if (id) return `${label} ${clip(id, SUMMARY_VALUE_CHARS)}`
+
+  // 检索类：显示关键词。没有关键词时只显示工具名（「翻归档会话」）
+  const keyword = typeof args.keyword === 'string' ? args.keyword.trim() : ''
+  if (keyword) return `${label} ${clip(keyword, SUMMARY_VALUE_CHARS)}`
+
+  /*
+   * 记忆类：显示记的内容开头。
+   *
+   * 这一条对用户很重要 —— 「记一笔」是唯一会**长期留存**内容的工具，
+   * 用户需要在对话面板上直接看到「它到底记了什么」，
+   * 而不是只有一个「记一笔」然后去翻文件。
+   */
+  const content = typeof args.content === 'string' ? args.content.trim() : ''
+  if (content) return `${label} ${clip(content.replace(/\s+/g, ' '), SUMMARY_VALUE_CHARS)}`
 
   return label
 }

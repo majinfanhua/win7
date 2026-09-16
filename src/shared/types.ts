@@ -27,7 +27,27 @@ export interface AIConfig {
   apiKey: string
   model: string
   temperature: number
+  /**
+   * 「告诉 AI 它是什么」的那段提示词。
+   *
+   * 名字保持 systemPrompt 是为了兼容老配置（改字段名会让所有已装用户
+   * 的设置被 normalize 吞掉，表现为「我的提示词没了」）。
+   * 它在界面上叫「默认提示词」，最终会和下面的身份 / 习惯 / 环境
+   * 一起组装进 userData/系统.md —— 组装规则见 shared/system-doc.ts。
+   */
   systemPrompt: string
+  /**
+   * AI 给自己起的名字（≤5 字）。
+   *
+   * 为什么需要：教学场景里学生要反复指代这个助手，
+   * 「你」「AI」这类称呼在长对话里会让模型分不清是在说它还是说别人。
+   * 给个名字是最省事的消歧手段。
+   */
+  aiName: string
+  /** 用户希望 AI 怎么称呼自己（≤5 字）。留空则不做要求 */
+  userName: string
+  /** 用户的使用习惯，自由文本。会作为「补充要求」附在提示词之后 */
+  habits: string
   /** 部分中转站需要额外的鉴权头或自定义头 */
   extraHeaders: Record<string, string>
   /**
@@ -90,7 +110,54 @@ export interface SessionEntry {
   updatedAt: string
   /** 消息条数，列表右侧显示 */
   messageCount: number
+  /**
+   * 是否已归档。
+   *
+   * 归档的语义是「这段对话结束了，可以总结了」——
+   * 只有归档过的会话才会被总结、才会进入 AI 可检索的范围。
+   * 没归档的会话属于「正在进行中」，总结它既浪费 token 又可能打断用户。
+   */
+  archived?: boolean
 }
+
+/**
+ * 一条已归档会话的索引。
+ *
+ * 为什么不复用 SessionEntry：那个列表（recentSessions）**上限 20 条**，
+ * 而归档是「长期资料」—— 第 21 条归档进来时，最早的会被挤掉，
+ * 它的总结也就跟着消失了，而总结正是归档唯一的价值所在。
+ * 所以归档单独存一份不设条数上限（每条只有标题 + 梗概，几十字节）。
+ */
+export interface ArchivedSession {
+  id: string
+  /** 会话标题（取自首条提问），用于列表显示与 AI 检索 */
+  title: string
+  /** AI 生成的梗概。为空表示还没总结（排队中或总结失败） */
+  summary: string
+  /** 归档时间（ISO 字符串） */
+  archivedAt: string
+  /** 原会话所在的工作区，便于 AI 判断「这是哪个项目的讨论」 */
+  workspace: string
+  /** 消息条数 */
+  messageCount: number
+  /**
+   * 总结尝试次数。
+   *
+   * 有它才能区分「还没轮到」与「试过了但一直失败」——
+   * 没有这个计数的话，一个必然失败的会话（比如内容全被敏感信息扫描拦下）
+   * 会被无限重试，每次启动都白烧一次请求。
+   */
+  attempts?: number
+}
+
+/** 总结失败超过这个次数就不再自动重试，只在界面上显示「总结失败」 */
+export const ARCHIVE_MAX_ATTEMPTS = 3
+
+/** 梗概长度上限。够说清「这段对话解决了什么」，又不至于变成第二份记录 */
+export const ARCHIVE_SUMMARY_MAX = 400
+
+/** 归档索引的文件名（放在 userData/sessions/ 下） */
+export const ARCHIVE_INDEX_FILE = 'archive.json'
 
 /** 落盘的一条消息。只保留对话必需字段，不含 tools/usage 这类展示态 */
 export interface StoredMessage {
@@ -107,6 +174,20 @@ export interface StoredSession {
   workspace: string
   updatedAt: string
   messages: StoredMessage[]
+  /**
+   * 归档时间（ISO 字符串）。空 / 缺失表示未归档。
+   *
+   * 归档状态同时存在于三处：这里（正文文件）、config.json 的索引、
+   * 以及 archive.json。**这不是冗余，是三层各有各的用处**：
+   *   - 正文里这份：换台机器拷走 sessions/ 目录时状态跟着走；
+   *     也是「这条会话到底归档没有」的最终依据
+   *   - 索引里那份：左侧列表每次启动整份读，不能为它去逐个读正文文件
+   *   - archive.json：AI 检索用，且不设条数上限
+   * 三者不一致时的取舍见 archive.ts 的注释。
+   */
+  archivedAt?: string
+  /** AI 生成的梗概。由归档流程写入，与 archive.json 里的同一份 */
+  summary?: string
 }
 
 /** 单个会话文件的大小上限，超过就不再往 messages 里追加（只保留最近 N 条） */
@@ -406,6 +487,10 @@ export type ToolName =
   | 'jobRun'
   | 'jobPoll'
   | 'jobKill'
+  | 'listSessions'
+  | 'readSession'
+  | 'memoryGet'
+  | 'memoryWrite'
 
 /** 工具执行过程，推给界面展示「AI 正在做什么」 */
 export interface ToolProgress {
@@ -435,8 +520,75 @@ export interface CapabilityInfo {
   overridden: boolean
 }
 
-export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
+/**
+ * `系统.md` 的当前状态，供设置页展示。
+ *
+ * 把 `inSync` 单独返回而不是让界面自己比对内容：
+ * 「按当前设置应该得到什么」这件事只有主进程算得出来
+ * （它要探测运行时、读平台信息），界面拿不到这个基准。
+ */
+export interface SystemDocState {
+  /** 文件绝对路径。界面用它做「打开文件」「复制路径」 */
+  path: string
+  /** 文件当前内容（可能包含用户的手改） */
+  content: string
+  /** 与「按当前设置应得的内容」是否一致。false 表示下次对话前会被覆盖 */
+  inSync: boolean
+  /** 文件是否存在 */
+  exists: boolean
+}
 
+/* ------------------------------------------------------------------ *
+ * token 用量统计
+ * ------------------------------------------------------------------ */
+/**
+ * 一个统计口径下的累计值。
+ *
+ * `estimatedRequests` 单独记而不是混进 requests：估算值（中转站不回 usage 时
+ * 按字数估的）与实际值混在一起会让总数看起来精确、其实一半是猜的。
+ * 分开记，用户能一眼看出「有多少是真的从接口来的」。
+ */
+export interface UsageBucket {
+  requests: number
+  /** 其中用估算值的请求数 */
+  estimatedRequests: number
+  promptTokens: number
+  completionTokens: number
+  /** 命中缓存的 prompt token。缓存命中的部分通常便宜得多 */
+  cachedTokens: number
+}
+
+/** 按模型分组的累计值 */
+export interface UsageByModel extends UsageBucket {
+  model: string
+}
+
+/** 一天的累计值 */
+export interface UsageByDay extends UsageBucket {
+  /** YYYY-MM-DD（本地时区） */
+  day: string
+}
+
+export interface UsageStats {
+  today: UsageBucket
+  /** 最近 7 天（含今天） */
+  week: UsageBucket
+  /** 全部历史（受保留天数限制） */
+  total: UsageBucket
+  /** 最近 N 天的逐日数据，用于画趋势 */
+  days: UsageByDay[]
+  /** 按模型分组（全部历史），按 token 总量降序 */
+  models: UsageByModel[]
+  /** 统计覆盖的最早一天。为空表示还没有任何记录 */
+  since: string
+}
+
+/** 逐日明细保留天数。超过就丢掉 —— 这个功能是「看趋势」，不是账本 */
+export const USAGE_KEEP_DAYS = 90
+/** 按模型分组最多保留几个（超出并入「其他」不单列，避免设置页被撑爆） */
+export const USAGE_MODELS_MAX = 12
+
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
 export interface LogLine {
   time: string
   level: LogLevel
@@ -476,6 +628,23 @@ export const IPC = {
   sessionRemove: 'session:remove',
   sessionLoad: 'session:load',
   sessionSave: 'session:save',
+  /** 归档一条会话（触发后台总结），归档后才会进入 AI 可检索的范围 */
+  sessionArchive: 'session:archive',
+  /** 取消归档，并撤掉它的总结 */
+  sessionUnarchive: 'session:unarchive',
+  /** 已归档会话的索引（含标题与梗概），设置页与 AI 工具共用 */
+  sessionArchiveList: 'session:archive-list',
+
+  /** `系统.md` 的当前状态（内容 + 是否与设置一致） */
+  systemDocGet: 'system-doc:get',
+  /** 按当前设置重新生成 `系统.md` */
+  systemDocRegenerate: 'system-doc:regenerate',
+  /** 用系统默认程序打开 `系统.md` */
+  systemDocOpen: 'system-doc:open',
+
+  /** token 用量统计 */
+  usageStats: 'usage:stats',
+  usageReset: 'usage:reset',
 
   aiChat: 'ai:chat',
   aiAbort: 'ai:abort',
@@ -519,6 +688,11 @@ export const DEFAULT_CONFIG: AppConfig = {
     model: '',
     temperature: 0.3,
     systemPrompt: DEFAULT_SYSTEM_PROMPT,
+    // 身份与习惯默认留空：没有名字时模型用「我」自称，
+    // 比塞一个它没同意过的名字更自然
+    aiName: '',
+    userName: '',
+    habits: '',
     extraHeaders: {},
     // 默认关：见 AIConfig.supportsVision 的注释（猜错的代价不对称）
     supportsVision: false,

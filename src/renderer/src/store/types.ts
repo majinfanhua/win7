@@ -94,6 +94,16 @@ export interface SessionSlice {
   startNewSession: () => void
   recordSession: (title: string, messageCount: number) => Promise<void>
   removeSession: (id: string) => Promise<void>
+  /**
+   * 归档一条会话。
+   *
+   * 归档 = 宣布这段对话结束了。主进程会立刻在后台生成梗概，
+   * 并把这条会话放进 AI 可检索的范围。
+   * 返回一句给用户看的话（成功或失败）。
+   */
+  archiveSession: (id: string) => Promise<string>
+  /** 取消归档（撤掉梗概） */
+  unarchiveSession: (id: string) => Promise<string>
   openSession: (id: string) => Promise<void>
   /** 把当前 messages 落盘。消息变化后调，内部自己防抖 */
   persistSession: () => void

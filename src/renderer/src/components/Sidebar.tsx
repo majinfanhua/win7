@@ -66,6 +66,8 @@ export default function Sidebar({
   const openWorkspaceAt = useAppStore((s) => s.openWorkspaceAt)
   const removeWorkspace = useAppStore((s) => s.removeWorkspace)
   const removeSession = useAppStore((s) => s.removeSession)
+  const archiveSession = useAppStore((s) => s.archiveSession)
+  const unarchiveSession = useAppStore((s) => s.unarchiveSession)
   const openSession = useAppStore((s) => s.openSession)
   const sessionLoading = useAppStore((s) => s.sessionLoading)
   const treeOpen = useAppStore((s) => s.treeOpen)
@@ -74,6 +76,27 @@ export default function Sidebar({
   const [showSkills, setShowSkills] = useState(false)
   const [showMcp, setShowMcp] = useState(false)
   const [wsMenu, setWsMenu] = useState(false)
+  /**
+   * 一行反馈文字。
+   *
+   * 侧栏没有状态栏，但不给反馈用户就不知道「归档」到底成没成
+   * （它不像删除那样列表项立刻消失）。所以在这条列表下面显一行，
+   * 3 秒后自己消失。
+   */
+  const [status, setStatus] = useState('')
+
+  /**
+   * 状态文字 4 秒后自动消失。
+   *
+   * 不消失的话它会一直挂在那里，用户过一会儿再看到会以为
+   * 「刚才那次操作还没结束」。依赖 status，所以连续两次归档
+   * 会重新计时（前一个定时器被清掉）。
+   */
+  useEffect(() => {
+    if (!status) return
+    const timer = setTimeout(() => setStatus(''), 4_000)
+    return () => clearTimeout(timer)
+  }, [status])
   const rootRef = useRef<HTMLDivElement | null>(null)
 
   /*
@@ -302,6 +325,30 @@ export default function Sidebar({
                   <span className="nav-item-name">{item.title}</span>
                   <span className="nav-time">{relTime(item.updatedAt)}</span>
                 </button>
+                {/*
+                  归档按钮。
+                  归档（而不只是删除）的意义是让 AI 以后还能查到这段讨论，
+                  所以它和「删除」是两个不同的动作，不能合并成一个。
+                  平时只是一个淡淡的图标，鼠标移到这一行才明显 —— 列表窄，
+                  两个按钮常驻会把标题挤没。
+                */}
+                <button
+                  className={`nav-item-x nav-item-archive${item.archived ? ' is-archived' : ''}`}
+                  aria-label={item.archived ? `取消归档 ${item.title}` : `归档 ${item.title}`}
+                  title={
+                    item.archived
+                      ? '已归档（AI 可以检索到它）。点一下取消归档'
+                      : '归档：宣布这段对话结束，让 AI 总结并存档，以后可以检索'
+                  }
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    void (item.archived ? unarchiveSession(item.id) : archiveSession(item.id)).then(
+                      setStatus
+                    )
+                  }}
+                >
+                  {item.archived ? '↺' : '⌸'}
+                </button>
                 <button
                   className="nav-item-x"
                   aria-label={`删除会话 ${item.title}`}
@@ -320,6 +367,7 @@ export default function Sidebar({
                 {shortPath(workspace)}
               </div>
             )}
+            {status && <div className="nav-note">{status}</div>}
           </div>
         )}
         </div>

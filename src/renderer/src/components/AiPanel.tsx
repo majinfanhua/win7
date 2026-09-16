@@ -575,12 +575,27 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
         content: withImages(withImageNote, sentImages) as ChatContentBlock[]
       }
     }
-    const messages: ChatMessage[] = [
-      { role: 'system', content: config?.ai.systemPrompt || '' },
-      ...historyMessages
-    ]
+    /*
+     * 这里的 system 消息只是一个**占位**，内容由主进程覆盖。
+     *
+     * 真正的 system prompt 是 userData/系统.md —— 由主进程按当前设置组装
+     * （身份 + 默认提示词 + 习惯 + 本机环境探测结果）。渲染层拿不到环境
+     * 探测结果，也不该知道 系统.md 的存在，所以这里发一个空壳，
+     * 让主进程有个位置可放。
+     *
+     * 不再是 config.ai.systemPrompt：那只是 系统.md 里的一段，
+     * 发过来只会被丢掉，留着反而容易让人误以为「这里改了就生效」。
+     */
+    const messages: ChatMessage[] = [{ role: 'system', content: '' }, ...historyMessages]
 
-    await window.api.aiChat(requestId, messages)
+    /*
+     * 带上会话 id。
+     *
+     * 主进程用它判断「是不是一次新会话」—— 新会话才重新校验
+     * userData/系统.md（覆盖手改、让设置改动生效），同一会话内复用快照
+     * 以保证前后一致。上面的 recordSession 已经跑过，所以这里必然有值。
+     */
+    await window.api.aiChat(requestId, messages, useAppStore.getState().sessionId)
     setBusy(false)
     // 回答结束，把带完整回答的 items 一次性写回 store。
     // 带上还在缓冲区里的尾段：那有可能是整段回答的最后一句

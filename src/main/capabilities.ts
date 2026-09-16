@@ -7,6 +7,7 @@ import {
   ALL_TOOLS,
   CROSS_OS_TOOLS,
   IMPLEMENTED_TOOLS,
+  MEMORY_TOOLS,
   REQUIREMENT_LABELS,
   TOOL_LABELS,
   TOOL_REQUIREMENTS
@@ -112,7 +113,11 @@ export function getCapabilityInfo(): CapabilityInfo {
   const { mode, disabled } = getConfig().capability
 
   const allowed =
-    mode === 'conservative' ? new Set<ToolName>(CROSS_OS_TOOLS) : new Set<ToolName>(ALL_TOOLS)
+    mode === 'conservative'
+      ? // 保守模式限制的是「能对我的代码做什么」。记忆与会话检索碰不到工作区，
+        // 把它们也关掉只会让「保守模式」变成「阉割模式」，与它的本意无关。
+        new Set<ToolName>([...CROSS_OS_TOOLS, ...MEMORY_TOOLS])
+      : new Set<ToolName>(ALL_TOOLS)
 
   const effective: ToolName[] = []
   const filtered: Array<{ name: ToolName; reason: string }> = []

@@ -420,3 +420,155 @@ kbd {
   font-weight: 600;
   margin-bottom: 2px;
 }
+
+/* ------------------------------------------------------------------ *
+ * 「AI 设定」里的系统.md 预览
+ * ------------------------------------------------------------------ */
+
+/*
+ * 全文预览用等宽字体。这不是为了好看 —— system prompt 里的缩进、
+ * 换行、Markdown 标记都会影响模型的理解，用比例字体看会看不出
+ * 「这里少了一个空行」这类问题，而那正是排查提示词不生效时要看的。
+ * 只读但不禁用：用户可以选中复制。
+ */
+.doc-preview {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 10px;
+  padding: 10px 12px;
+  font-family: Consolas, 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text);
+  background: var(--bubble-ai);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  resize: vertical;
+  white-space: pre;
+  overflow: auto;
+}
+
+/* ------------------------------------------------------------------ *
+ * 用量统计
+ * ------------------------------------------------------------------ */
+
+/* 三个汇总格子：等宽排一行，窄屏自动换行 */
+.usage-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.usage-cell {
+  flex: 1 1 150px;
+  padding: 10px 12px;
+  background: var(--bubble-ai);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.usage-cell-label {
+  font-size: 12px;
+  color: var(--text-3);
+  margin-bottom: 4px;
+}
+
+/* 数字要比标签显眼：用户来看的就是这个 */
+.usage-cell-value {
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.2;
+  margin-bottom: 6px;
+}
+
+.usage-cell-note {
+  font-size: 11px;
+  color: var(--text-3);
+  line-height: 1.5;
+}
+
+.usage-sub {
+  margin: 16px 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-3);
+}
+
+/* 7 天柱状图：固定高度，柱子按百分比撑满 */
+.usage-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  height: 110px;
+  padding: 0 2px;
+}
+
+.usage-bar-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+}
+
+/*
+ * 柱子容器用 flex:1 占满剩余高度，柱子从底部往上长。
+ * 用「轨道 + 填充」两层而不是直接给柱子设高度：轨道的高度是固定的，
+ * 柱子才能按百分比算；只给一层的话 flex 会把高度压掉，柱子全变成一个高度。
+ */
+.usage-bar-track {
+  flex: 1;
+  width: 100%;
+  display: flex;
+  align-items: flex-end;
+  background: var(--bubble-ai);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.usage-bar-fill {
+  width: 100%;
+  background: var(--accent, #4a8cff);
+  border-radius: 3px;
+  /* 高度变化加个过渡，切到这一页时不会「啪」地跳出来 */
+  transition: height 0.2s ease;
+}
+
+.usage-bar-label {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.usage-bar-value {
+  font-size: 10px;
+  color: var(--text-3);
+  height: 14px;
+}
+
+.usage-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.usage-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px;
+  background: var(--bubble-ai);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font-size: 12px;
+}
+
+/* 模型名可能很长（带版本号、中转站前缀），允许收缩但不能把右边挤掉 */
+.usage-model {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 40%;
+}

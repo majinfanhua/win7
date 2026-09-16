@@ -10,6 +10,7 @@ import {
   type StoredSession
 } from '../../shared/types'
 import { getConfig, setConfig, upsertSession } from '../config'
+import { atomicWriteFile } from '../atomic-file'
 import { logger } from '../logger'
 
 /**
@@ -58,6 +59,20 @@ function trimMessages(messages: StoredMessage[]): StoredMessage[] {
       at: typeof m.at === 'string' ? m.at : new Date().toISOString()
     }))
   return cleaned.length > SESSION_MESSAGES_MAX ? cleaned.slice(cleaned.length - SESSION_MESSAGES_MAX) : cleaned
+}
+
+/**
+ * 读磁盘上的旧正文，只用于继承归档状态。
+ * 与 sessionLoad 的区别：这个不 trim 消息（我们只要那两个字段），
+ * 而且读失败安静返回 null —— 它只是个「有没有」的查询。
+ */
+async function readStored(id: string): Promise<StoredSession | null> {
+  try {
+    const parsed = JSON.parse(await fsp.readFile(fileFor(id), 'utf8')) as StoredSession
+    return parsed && typeof parsed === 'object' ? parsed : null
+  } catch {
+    return null
+  }
 }
 
 export function registerSessionIpc(): void {
@@ -123,24 +138,33 @@ export function registerSessionIpc(): void {
     const id = typeof session?.id === 'string' ? session.id.trim() : ''
     if (!id) throw new Error('会话 id 不能为空')
 
+    /*
+     * 归档状态必须**从磁盘上的旧文件继承**，不接受渲染层传进来的值。
+     *
+     * 界面每次落盘都送一份完整 StoredSession，而它关心的是 messages，
+     * 不关心归档。如果这里只重建上面几个字段，用户在归档之后随便说一句话，
+     * 落盘就会把归档标记抹掉 —— 现象是「归档的会话自己变回未归档」，
+     * 而梗概还在 archive.json 里，两边从此对不上。
+     *
+     * 顺序：先读旧文件，再拼 payload。读不到（新会话）就是没有归档状态。
+     */
+    const previous = await readStored(id)
+
     const payload: StoredSession = {
       id,
       title: typeof session.title === 'string' ? session.title : '',
       workspace: typeof session.workspace === 'string' ? session.workspace : '',
       updatedAt: new Date().toISOString(),
-      messages: trimMessages(Array.isArray(session.messages) ? session.messages : [])
+      messages: trimMessages(Array.isArray(session.messages) ? session.messages : []),
+      ...(previous?.archivedAt ? { archivedAt: previous.archivedAt } : {}),
+      ...(previous?.summary ? { summary: previous.summary } : {})
     }
 
     const target = fileFor(id)
-    const tmp = `${target}.tmp`
     try {
-      await fsp.mkdir(sessionsDir(), { recursive: true })
-      await fsp.writeFile(tmp, JSON.stringify(payload), 'utf8')
-      await fsp.rename(tmp, target)
+      await atomicWriteFile(target, JSON.stringify(payload))
       return true
     } catch (err) {
-      // 失败时清掉半截临时文件，否则会一直留在 sessions/ 里
-      await fsp.rm(tmp, { force: true }).catch(() => undefined)
       logger.error('session', `保存会话正文失败 ${id}: ${String(err)}`)
       throw err
     }

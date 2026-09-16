@@ -62,6 +62,47 @@ export const createSessionSlice: StateCreator<AppState, [], [], SessionSlice> = 
   },
 
   /**
+   * 归档当前会话。
+   *
+   * 先 persistSession() 并**等它落盘**再调归档 —— 归档总结读的是磁盘上的
+   * sessions/<id>.json，而落盘是防抖 400ms 的。不等的话，用户刚问完最后
+   * 一句话就点归档，总结读到的正文会缺最后几条（甚至读到空文件）。
+   *
+   * 所以这里不用 persistSession（它是防抖的，没法等），直接同步落一次。
+   */
+  async archiveSession(id) {
+    try {
+      const current = get()
+      if (current.sessionId === id && current.messages.length > 0) {
+        const title = titleFrom(current.messages.find((m) => m.role === 'user')?.text || id)
+        await window.api.saveSession({
+          id,
+          title,
+          workspace: current.workspace,
+          updatedAt: new Date().toISOString(),
+          messages: current.messages
+        })
+      }
+      const result = await window.api.archiveSession(id)
+      // 索引里的 archived 标记由主进程改，这里重新拉一次拿到最新列表
+      set({ sessions: await window.api.listSessions() })
+      return result.message
+    } catch (err) {
+      return `归档失败：${err instanceof Error ? err.message : String(err)}`
+    }
+  },
+
+  async unarchiveSession(id) {
+    try {
+      const result = await window.api.unarchiveSession(id)
+      set({ sessions: await window.api.listSessions() })
+      return result.message
+    } catch (err) {
+      return `取消归档失败：${err instanceof Error ? err.message : String(err)}`
+    }
+  },
+
+  /**
    * 点开左侧历史会话。
    *
    * 先把当前会话存盘再切 —— 否则「问了半句 → 点另一条会话 → 点回来」

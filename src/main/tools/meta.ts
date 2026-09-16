@@ -29,8 +29,21 @@ export const CROSS_OS_TOOLS: ToolName[] = [
  */
 export const COMMAND_TOOLS: ToolName[] = ['runCommand', 'jobRun', 'jobPoll', 'jobKill']
 
+/**
+ * 记忆与会话检索工具。
+ *
+ * 与文件类工具的区别：它们操作的不是工作区，而是**应用自己的数据**
+ * （归档会话索引、记忆文件）。所以它们不能走 assertInsideRoot ——
+ * 那条检查会把它们全挡掉（userData 在工作区之外）。
+ *
+ * 单独一组而不是并进 CROSS_OS_TOOLS，是为了让「AI 能碰什么」
+ * 在设置界面里仍然分得清层次：文件是学生的代码，
+ * 这一组是 AI 自己的笔记本，出问题时该关哪个一目了然。
+ */
+export const MEMORY_TOOLS: ToolName[] = ['listSessions', 'readSession', 'memoryGet', 'memoryWrite']
+
 /** 全部工具，用于设置界面展示与门控计算 */
-export const ALL_TOOLS: ToolName[] = [...CROSS_OS_TOOLS, ...COMMAND_TOOLS]
+export const ALL_TOOLS: ToolName[] = [...CROSS_OS_TOOLS, ...COMMAND_TOOLS, ...MEMORY_TOOLS]
 
 /**
  * 已经实现、可以真正交给模型的工具。
@@ -39,7 +52,7 @@ export const ALL_TOOLS: ToolName[] = [...CROSS_OS_TOOLS, ...COMMAND_TOOLS]
  * 命令类四个已经实现（command-tools.ts），但能不能进工具表还要看门控：
  * 只有 Windows 10/11 且真的找到 powershell.exe 才会出现。
  */
-export const IMPLEMENTED_TOOLS: ToolName[] = [...CROSS_OS_TOOLS, ...COMMAND_TOOLS]
+export const IMPLEMENTED_TOOLS: ToolName[] = [...CROSS_OS_TOOLS, ...COMMAND_TOOLS, ...MEMORY_TOOLS]
 
 export const TOOL_REQUIREMENTS: Record<ToolName, ToolRequirement> = {
   readFile: 'none',
@@ -53,7 +66,12 @@ export const TOOL_REQUIREMENTS: Record<ToolName, ToolRequirement> = {
   runCommand: 'commandExec',
   jobRun: 'backgroundJobs',
   jobPoll: 'backgroundJobs',
-  jobKill: 'backgroundJobs'
+  jobKill: 'backgroundJobs',
+  // 记忆与会话检索不需要任何外部程序，也不碰工作区，所以是 none
+  listSessions: 'none',
+  readSession: 'none',
+  memoryGet: 'none',
+  memoryWrite: 'none'
 }
 
 export const TOOL_LABELS: Record<ToolName, string> = {
@@ -68,7 +86,11 @@ export const TOOL_LABELS: Record<ToolName, string> = {
   runCommand: '执行命令',
   jobRun: '后台任务',
   jobPoll: '查询任务',
-  jobKill: '终止任务'
+  jobKill: '终止任务',
+  listSessions: '翻归档会话',
+  readSession: '读会话记录',
+  memoryGet: '读记忆',
+  memoryWrite: '记一笔'
 }
 
 /** 要求对应的人类说法，用于「本机不支持」的原因文案 */
@@ -328,6 +350,94 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
           id: { type: 'string', description: '要终止的任务号，如 job-1' }
         },
         required: ['id']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'listSessions',
+      description:
+        '列出以前归档过的对话（每条只有标题 + 一段梗概，不含正文）。' +
+        '当用户提到「我们上次聊的那个」「之前说过的问题」而当前对话里没有相关背景时，用它找。' +
+        '**不要**为了解当前对话而调它 —— 当前对话的内容本来就在你眼前。' +
+        '只有用户主动归档的会话才会出现在这里。想看某条的完整内容，用 readSession 传它的 id。',
+      parameters: {
+        type: 'object',
+        properties: {
+          keyword: {
+            type: 'string',
+            description: '可选。只在标题、梗概、项目名里包含这个词的会话中查找'
+          },
+          limit: { type: 'integer', description: '最多返回几条，默认 50' }
+        },
+        required: []
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'readSession',
+      description:
+        '读一条**已归档**会话的完整对话内容，按行返回。' +
+        '必须先用 listSessions 拿到 id。一个会话可能很长，所以按行分页：' +
+        '先不传 offset 读开头，不够再带 offset 往后读 —— 不要把整个会话一次拉进来。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'listSessions 给出的会话 id' },
+          offset: { type: 'integer', description: '从第几行开始，默认 1' },
+          limit: { type: 'integer', description: '最多读多少行，默认 120，上限 400' }
+        },
+        required: ['id']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'memoryGet',
+      description:
+        '读你自己记下来的长期记忆（MEMORY.md 与当天的流水）。' +
+        '在开始一件新事情之前、或者用户提到「我上次说过」时，先读一遍能避免重复问同样的问题。' +
+        '不要每次回答都读 —— 记忆不会在对话中间自己变化，一次对话里读一次就够。',
+      parameters: {
+        type: 'object',
+        properties: {
+          target: {
+            type: 'string',
+            enum: ['all', 'long', 'daily'],
+            description: 'all=长期记忆+今天的流水（默认），long=只要长期记忆，daily=只要某天的流水'
+          },
+          day: { type: 'string', description: 'target=daily 时指定日期，格式 YYYY-MM-DD，默认今天' }
+        },
+        required: []
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'memoryWrite',
+      description:
+        '记一件事，以后还能想起来。**只在真正值得长期记住时才用**：用户的稳定偏好、' +
+        '项目的关键约定、他反复强调的要求。不要记「刚才读了什么文件」「这次改了什么」' +
+        '这类在当前对话里本来就有的东西，也不要记一次性的临时信息。\n' +
+        '默认写进当天流水（target=daily）；已经沉淀下来、确定长期成立的才写进长期记忆（target=long）。\n' +
+        '**绝对不要写入 API Key、密码、私钥这类凭证** —— 长期存储里的内容以后每次对话都可能被发出去，' +
+        '写了就等于泄露。要记就记「用户配置了某个服务的密钥」这件事本身。',
+      parameters: {
+        type: 'object',
+        properties: {
+          content: { type: 'string', description: '要记的内容，一句话说清。写「用户偏好用 VS Code 风格的快捷键」这类事实' },
+          target: {
+            type: 'string',
+            enum: ['daily', 'long'],
+            description: 'daily=当天流水（默认），long=长期记忆（精选过的、跨会话仍成立的）'
+          }
+        },
+        required: ['content']
       }
     }
   }

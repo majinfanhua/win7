@@ -18,7 +18,9 @@ import {
   resolveThreshold
 } from '../compaction-policy'
 import { getCapabilityInfo } from '../capabilities'
-import { describeRuntimesForModel, detectRuntimes } from '../runtimes'
+import { sessionSystemPrompt } from '../system-doc'
+import { buildHeaders, configError } from '../llm'
+import { recordUsage } from '../usage'
 import { executeTool, summarizeCall, toolSchemasForModel } from '../tools'
 import {
   describeTruncatedCall,
@@ -39,33 +41,6 @@ const aborted = new Set<string>()
 
 const CHAT_TIMEOUT_MS = 120_000
 const SHORT_TIMEOUT_MS = 30_000
-
-/**
- * 拼请求头。extraHeaders 用于兼容各类中转站的自定义鉴权要求。
- * 注意：Electron 22 主进程的 Node 是 16.x，没有全局 fetch，
- * 因此统一使用 Electron 的 net 模块（走 Chromium 网络栈，自动继承系统代理）。
- */
-function buildHeaders(accept: string): Record<string, string> {
-  const { apiKey, extraHeaders } = getConfig().ai
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    Accept: accept,
-    Authorization: `Bearer ${apiKey}`
-  }
-  for (const [key, value] of Object.entries(extraHeaders || {})) {
-    if (key.trim()) headers[key.trim()] = value
-  }
-  return headers
-}
-
-/** 配置不完整时给出能直接照做的提示 */
-function configError(): string | null {
-  const { baseUrl, apiKey, model } = getConfig().ai
-  if (!baseUrl.trim()) return '尚未配置接口地址，请在「设置 → AI 模型」中填写中转站地址。'
-  if (!apiKey.trim()) return '尚未配置 API Key，请在「设置 → AI 模型」中填写。'
-  if (!model.trim()) return '尚未选择模型，请在「设置 → AI 模型」中点“拉取模型列表”后选择。'
-  return null
-}
 
 export function abortAi(requestId: string): boolean {
   aborted.add(requestId)
@@ -413,7 +388,8 @@ function streamRound(
 async function runStream(
   requestId: string,
   messages: ChatMessage[],
-  emit: (chunk: AiStreamChunk) => void
+  emit: (chunk: AiStreamChunk) => void,
+  sessionId = ''
 ): Promise<void> {
   const invalid = configError()
   if (invalid) {
@@ -424,30 +400,28 @@ async function runStream(
   aborted.delete(requestId)
 
   /*
-   * 把本机装了哪些运行时补进 system prompt。
+   * system prompt 由主进程组装，**不用渲染层发过来的那份**。
    *
-   * 在主进程做而不是渲染层：探测逻辑（detectRuntimes）在这里，
-   * 而且结果要跟着**请求**走 —— 学生换了机器上的 python 版本，
-   * 重开应用就生效，不需要去改设置里的 system prompt 文本。
+   * 渲描层发过来的 `system` 消息里只有设置里的「默认提示词」一段，
+   * 而实际要发出去的还有身份（叫什么、怎么称呼用户）、习惯，
+   * 以及自动探测出来的本机环境。这些拼在一起才是完整的 system prompt，
+   * 全文写在 userData/系统.md 里（用户可以打开看）。
    *
-   * 拼接而不是替换：用户自己写的 system prompt 一个字都不动，
-   * 只在末尾补一段事实。这样「设置里能看到我写了什么」仍然成立。
+   * 为什么组装放在主进程而不是渲染层：
+   *   1. 环境探测（detectRuntimes）在主进程，结果本来就在这里
+   *   2. 渲染层拼的话，「用户手改了 系统.md」这件事它不知道，
+   *      而覆盖手改是明确要求的
+   *   组装规则见 shared/system-doc.ts。
    */
   const wire: WireMessage[] = messages.map((m) => ({ role: m.role, content: m.content }))
-  const systemIndex = wire.findIndex((m) => m.role === 'system')
-  if (systemIndex >= 0) {
-    try {
-      const runtimes = await detectRuntimes()
-      const extra = describeRuntimesForModel(runtimes)
-      if (extra) {
-        const current = wire[systemIndex].content
-        const text = typeof current === 'string' ? current : textOf(current ?? '')
-        wire[systemIndex] = { role: 'system', content: `${text}\n\n${extra}` }
-      }
-    } catch (err) {
-      // 探测失败不该让对话发不出去 —— 退化成「没有这段提示」而已
-      logger.warn('ai', `运行时探测失败，本次对话不带环境提示: ${String(err)}`)
-    }
+  const systemText = await sessionSystemPrompt(sessionId)
+  if (systemText) {
+    const systemIndex = wire.findIndex((m) => m.role === 'system')
+    if (systemIndex >= 0) wire[systemIndex] = { role: 'system', content: systemText }
+    else wire.unshift({ role: 'system', content: systemText })
+  } else if (wire.every((m) => m.role !== 'system')) {
+    // 组装失败（极端情况）时退回渲染层发来的那份，而不是发一个没有 system 的请求
+    logger.warn('ai', '系统提示词组装失败，本次对话不带 system prompt')
   }
 
   // 先记下本次 prompt，估算缓存命中要拿它当下一轮请求的对比基准。
@@ -479,6 +453,21 @@ async function runStream(
     total.completionTokens += usage.completionTokens
     total.cachedTokens += usage.cachedTokens
     if (usage.source === 'api') total.fromApi = true
+    /*
+     * 顺手记进统计。
+     *
+     * 在这里而不是在 HTTP 层：一轮工具循环有好几次往返，
+     * 而用户关心的「这次提问花了多少」是它们的总和 ——
+     * 但统计页要的是「每一次往返算一次请求」（缓存命中率按单次算才有意义）。
+     * 两者口径不同，所以这里逐次记，界面上的总数由 usage.ts 累加得出。
+     */
+    recordUsage({
+      model: getConfig().ai.model,
+      promptTokens: usage.promptTokens,
+      completionTokens: usage.completionTokens,
+      cachedTokens: usage.cachedTokens,
+      estimated: usage.source === 'estimate'
+    })
   }
   const finalUsage = (): AiUsage => ({
     promptTokens: total.promptTokens,
@@ -814,10 +803,15 @@ export function registerAiIpc(): void {
   ipcMain.handle(IPC.aiAbort, (_e, requestId: string) => abortAi(requestId))
   ipcMain.handle(IPC.aiTest, () => testConnection())
   ipcMain.handle(IPC.aiListModels, () => listModels())
-  ipcMain.handle(IPC.aiChat, async (event, requestId: string, messages: ChatMessage[]) => {
+  ipcMain.handle(IPC.aiChat, async (event, requestId: string, messages: ChatMessage[], sessionId?: string) => {
     const sender = event.sender
-    await runStream(requestId, messages, (chunk) => {
-      if (!sender.isDestroyed()) sender.send(IPC.evtAiStream, chunk)
-    })
+    await runStream(
+      requestId,
+      messages,
+      (chunk) => {
+        if (!sender.isDestroyed()) sender.send(IPC.evtAiStream, chunk)
+      },
+      typeof sessionId === 'string' ? sessionId : ''
+    )
   })
 }
