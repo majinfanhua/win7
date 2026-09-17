@@ -145,3 +145,47 @@
   inset: 0;
   cursor: col-resize;
 }
+
+/* ==========================================================================
+ * 顶栏按钮上的计数角标（历史会话条目数）
+ * ========================================================================== */
+
+.bar-btn-badge {
+  flex: none;
+  min-width: 16px;
+  padding: 0 4px;
+  font-size: 10.5px;
+  line-height: 15px;
+  text-align: center;
+  color: var(--text-2);
+  background: var(--bubble-ai);
+  border-radius: 8px;
+}
+
+.bar-btn.active .bar-btn-badge {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* ==========================================================================
+ * 顶栏的会话历史下拉
+ *
+ * 用 position: fixed（由 JS 按按钮 rect 定位），不用 absolute ——
+ * 顶栏在窄窗口下会横向挤压，absolute 会被 overflow 裁掉。
+ * 与自绘下拉 components/ui/Select.tsx 同一个理由、同一套做法。
+ *
+ * 内部的 .chat-pop-* 行样式复用 chat.css 那一套，不重复定义。
+ * ========================================================================== */
+
+.session-pop {
+  position: fixed;
+  z-index: 60;
+  width: 340px;
+  max-height: 360px;
+  overflow-y: auto;
+  padding: 6px;
+  background: var(--surface-solid);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+}

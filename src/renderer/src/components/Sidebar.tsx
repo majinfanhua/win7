@@ -25,17 +25,14 @@ import { useFileTreeController } from './file-tree/useFileTreeController'
 type Props = {
   collapsed: boolean
   onToggleCollapse: () => void
-}
-
-/** 路径太长时只留末尾两段，列表里不会撑破 */
-function shortPath(target: string): string {
-  const parts = target.split(/[\\/]/).filter(Boolean)
-  return parts.length <= 2 ? target : `…/${parts.slice(-2).join('/')}`
+  /** 在内容区打开「资源管理器」整页视图（文件树的放大形态） */
+  onOpenExplorer: () => void
 }
 
 export default function Sidebar({
   collapsed,
-  onToggleCollapse
+  onToggleCollapse,
+  onOpenExplorer
 }: Props): JSX.Element {
   const workspace = useAppStore((s) => s.workspace)
   const workspaces = useAppStore((s) => s.workspaces)
@@ -330,10 +327,46 @@ export default function Sidebar({
               <span className="spacer" />
               {workspace && (
                 <span className="nav-count" title={workspace}>
-                  {shortPath(workspace).split('/').pop()}
+                  {/*
+                    ⚠️ 这里要取**最后一段路径**，不能对 shortPath 的结果再 split('/')。
+                    shortPath 对 ≤2 段的路径原样返回（如 `C:\proj`），
+                    那句 split('/') 拿不到东西，角标会显示整条 `C:\proj`
+                    而不是 `proj`。深路径恰好被它自己的 `…/a/b` 形式掩盖了，
+                    所以一直没暴露。直接按两种分隔符取最后一段最稳。
+                  */}
+                  {workspace.split(/[\\/]/).filter(Boolean).pop()}
                 </span>
               )}
             </button>
+
+            {/*
+              「展开到整页」：资源管理器视图的入口。
+              原先在顶栏，已移到这里 —— 它就是文件树的放大形态
+              （更宽、带已打开文件列表），与文件树放在一处最自然。
+            */}
+            {treeOpen && workspace && (
+              <button
+                className="nav-group-sub"
+                title="在内容区展开文件树（Ctrl+Shift+E）"
+                onClick={onOpenExplorer}
+              >
+                <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">
+                  <g
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.7"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M14 4h6v6" />
+                    <path d="M20 4 13 11" />
+                    <path d="M10 20H4v-6" />
+                    <path d="M4 20l7-7" />
+                  </g>
+                </svg>
+                <span>展开到整页</span>
+              </button>
+            )}
 
             {/* 用 display 控制而不是条件渲染：树展开时保留滚动位置与展开的目录 */}
             {treeOpen && <FileTree embedded />}

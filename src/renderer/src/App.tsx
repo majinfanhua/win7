@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { SPLIT_MAX, SPLIT_MIN } from '@shared/types'
 import AiPanel, { type AiPanelHandle } from './components/AiPanel'
 import DoctorDialog from './components/DoctorDialog'
+import SessionHistory from './components/SessionHistory'
 import ConfirmHost from './components/ConfirmHost'
 import SettingsPage from './components/SettingsPage'
 import Sidebar from './components/Sidebar'
@@ -378,6 +379,7 @@ export default function App(): JSX.Element {
         <Sidebar
           collapsed={navCollapsed}
           onToggleCollapse={() => setNavCollapsed((v) => !v)}
+          onOpenExplorer={toggleExplorer}
         />
 
         <div className="main">
@@ -419,19 +421,13 @@ export default function App(): JSX.Element {
             <span className="spacer" />
 
             {/*
-              资源管理器（整页视图）。
-              左栏里那份文件树窄到看不全长文件名，这里给一个占满内容区的形态，
-              两边共用同一份数据与同一套菜单，不会出现「这边能建、那边不能」。
+              历史会话。
+              以前这个位置是「资源管理器」—— 那个整页视图已移到侧栏的
+              「文件树」分组头里（它本质是文件树的放大形态，与文件树放一起
+              更合理，也不该占顶栏这个「全局动作」的位置）。
+              这个位置让给历史会话：切会话是高频导航，比看文件树更常点。
             */}
-            <button
-              className={`bar-btn${view === 'explorer' ? ' active' : ''}`}
-              aria-label="资源管理器"
-              aria-current={view === 'explorer' ? 'page' : undefined}
-              title="资源管理器（Ctrl+Shift+E）"
-              onClick={toggleExplorer}
-            >
-              <ExplorerIcon />
-            </button>
+            <SessionHistory />
 
             {/*
               用默认浏览器打开当前 HTML。
@@ -570,7 +566,7 @@ export default function App(): JSX.Element {
               className={`view${inSettings || inExplorer ? '' : ' is-active'}`}
               data-chat-closed={chatOpen ? undefined : '1'}
             >
-              <AiPanel ref={aiRef} onOpenSettings={openSettings} />
+              <AiPanel ref={aiRef} onOpenSettings={openSettings} onNewSession={onNewSession} />
             </div>
 
             {/* 内嵌预览面板已去掉：HTML 改用系统默认浏览器打开（见顶栏按钮） */}
@@ -678,17 +674,6 @@ function OpenFolderIcon(): JSX.Element {
   )
 }
 
-function ExplorerIcon(): JSX.Element {
-  return (
-    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
-      <g fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round">
-        <path d="M3.5 6.5A1.5 1.5 0 0 1 5 5h4l1.6 2h8.4A1.5 1.5 0 0 1 20.5 8.5v9A1.5 1.5 0 0 1 19 19H5a1.5 1.5 0 0 1-1.5-1.5v-11Z" />
-        <path d="M3.8 11h16.4" strokeLinecap="round" opacity=".6" />
-        <path d="M8 14.5h8M8 17h5" strokeLinecap="round" opacity=".6" />
-      </g>
-    </svg>
-  )
-}
 
 function PanelIcon(): JSX.Element {
   return (

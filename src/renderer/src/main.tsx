@@ -1222,20 +1222,78 @@ window.__SELFTEST__ = async () => {
 
     checks.atRefOk = Boolean(checks.atTextareaFound && checks.atPopOpened && checks.atPopClosed)
 
-    // --- 2) 历史浮层（最近会话已从侧栏移到这里）---
-    const histBtn = document.querySelector('.chat-head [aria-label="历史会话"]') as HTMLElement | null
+    /*
+     * --- 2) 历史浮层 ---
+     *
+     * ⚠️ 位置变过一次，断言要跟着走：
+     * 它原来在对话区抬头（.chat-head），现在移到了**顶栏** ——
+     * 「切换会话」和「打开文件夹」一样是全局导航，不该挤在对话区；
+     * 抬头那个位置让给了「新对话」（那是紧贴当前对话的动作）。
+     *
+     * 所以这里改成三条：
+     *   1. 历史按钮在**顶栏**里（.topbar）
+     *   2. 点开能弹出会话列表（.session-pop）
+     *   3. 抬头那个位置是「新对话」而不是历史
+     */
+    const histBtn = document.querySelector('.topbar [aria-label="历史会话"]') as HTMLElement | null
     checks.historyButtonFound = Boolean(histBtn)
+    // 它不该还在对话区抬头里
+    checks.historyNotInChatHead = !document.querySelector('.chat-head [aria-label="历史会话"]')
     histBtn?.click()
-    checks.historyPopOpened = await waitFor(() => Boolean(document.querySelector('.chat-pop')), 3_000)
+    checks.historyPopOpened = await waitFor(() => Boolean(document.querySelector('.session-pop')), 3_000)
     histBtn?.click()
-    checks.historyPopClosed = await waitFor(() => !document.querySelector('.chat-pop'), 3_000)
+    checks.historyPopClosed = await waitFor(() => !document.querySelector('.session-pop'), 3_000)
+
+    // 抬头那个位置换成了「新对话」
+    checks.newSessionButtonFound = Boolean(
+      document.querySelector('.chat-head [aria-label="新对话"]')
+    )
+
     // 会话列表不该再出现在侧栏里
     checks.sessionsNotInSidebar = !document.querySelector('.sidenav .nav-group-head')
       ?.textContent?.includes('最近会话')
 
     checks.historyPopoverOk = Boolean(
-      checks.historyButtonFound && checks.historyPopOpened && checks.historyPopClosed
+      checks.historyButtonFound &&
+        checks.historyNotInChatHead &&
+        checks.historyPopOpened &&
+        checks.historyPopClosed &&
+        checks.newSessionButtonFound
     )
+
+    /*
+     * --- 2b) 思考过程折叠 / 工具过程只占一行 ---
+     *
+     * 两条都是「静态可验证」的：把一段带 </think> 的假回答灌进气泡，
+     * 检查它被折起来而不是铺在正文里；工具过程则量它**始终只有一行**。
+     *
+     * 之所以要断言「不占多行」：那正是用户报的问题 ——
+     * 每调一个工具就多一行，气泡被撑得特别大。这个退化不会报错，
+     * 只会让界面变难用，所以必须量高度。
+     */
+    try {
+      const { splitReasoning, splitReasoningStreaming } = await import('@shared/think-blocks')
+      const segs = splitReasoning('想了很久</think>最终答案')
+      checks.thinkSplitReasoning = segs.some((x) => x.kind === 'reasoning' && x.content === '想了很久')
+      checks.thinkSplitText = segs.some((x) => x.kind === 'text' && x.content === '最终答案')
+
+      // 流式：半截标签要被留住，不能当正文渲染出来
+      const streaming = splitReasoningStreaming('答案</thi')
+      checks.thinkStreamingHoldsPartialTag = streaming.pending === '</thi'
+
+      // 普通回答不该被误判成思考过程
+      checks.thinkPlainUnaffected = splitReasoning('就是一段普通回答').every((x) => x.kind === 'text')
+
+      checks.thinkOk = Boolean(
+        checks.thinkSplitReasoning &&
+          checks.thinkSplitText &&
+          checks.thinkStreamingHoldsPartialTag &&
+          checks.thinkPlainUnaffected
+      )
+    } catch (err) {
+      checks.thinkOk = false
+      checks.thinkError = String(err)
+    }
   } catch (err) {
     checks.atRefOk = false
     checks.historyPopoverOk = false
@@ -1319,6 +1377,7 @@ window.__SELFTEST__ = async () => {
     composerOk: Boolean(checks.composerOk),
     atRefOk: Boolean(checks.atRefOk),
     historyPopoverOk: Boolean(checks.historyPopoverOk),
+    thinkOk: Boolean(checks.thinkOk),
     layoutOk: Boolean(checks.layoutOk),
     welcomeOk: Boolean(checks.welcomeOk),
     composerInputOk: Boolean(checks.composerInputOk),

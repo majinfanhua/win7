@@ -369,13 +369,42 @@ function streamRound(
           }
           try {
             const json = JSON.parse(payload) as {
-              choices?: Array<{ delta?: { content?: string; tool_calls?: RawToolCallDelta[] } }>
+              choices?: Array<{
+                delta?: {
+                  content?: string
+                  /** DeepSeek 等把思维链放在这个**独立字段**里，与 content 同级 */
+                  reasoning_content?: string
+                  /** 部分中转站用这个别名 */
+                  reasoning?: string
+                  tool_calls?: RawToolCallDelta[]
+                }
+              }>
               usage?: RawUsage
             }
             // usage 是单独一块送来的，那时 choices 是空数组
             if (json.usage) rawUsage = json.usage
             const delta = json.choices && json.choices[0] && json.choices[0].delta
             if (!delta) continue
+
+            /*
+             * 思维链归一化。
+             *
+             * 两条来源都要认：
+             *   1. 独立字段 reasoning_content / reasoning（DeepSeek 官方的形态）
+             *   2. content 里带  thinking… 标签（中转站把两者拼在一起的形态）
+             *
+             * 这里只处理第 1 种并打上 reasoning 标记；第 2 种交给渲染层
+             * 用同一套解析器切（因为标签可能被分片切断，在主进程切会更麻烦，
+             * 而渲染层本来就要处理流式拼接）。
+             *
+             * 思维链**不进 completionText**：它不是最终回答，
+             * 混进去会让「落盘的对话正文」变成一大段自言自语。
+             */
+            const reasoningText = delta.reasoning_content || delta.reasoning
+            if (reasoningText) {
+              emit({ requestId, kind: 'delta', text: reasoningText, reasoning: true })
+            }
+
             if (delta.content) {
               completionText += delta.content
               emit({ requestId, kind: 'delta', text: delta.content })

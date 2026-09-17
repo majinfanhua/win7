@@ -942,3 +942,70 @@
 .model-picker.is-static:hover {
   color: var(--text);
 }
+
+/* ==========================================================================
+ * 思考过程（模型的思维链）
+ *
+ * 与「工具过程」是两件事，但视觉上位同一族：都是一行可展开的次要信息。
+ * 刻意比工具那行更淡 —— 思维链是模型的内部推理，学生绝大多数时候
+ * 只想知道结论，折起来、且不抢注意力才是对的。
+ * ========================================================================== */
+
+.think-block {
+  margin: 0 2px 4px;
+}
+
+.think-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  padding: 2px 6px;
+  font-size: 11px;
+  color: var(--text-3);
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.think-toggle:hover {
+  color: var(--text-2);
+  background: var(--bubble-ai);
+}
+
+/* 展开后的思维链正文：左边一条竖线 + 淡色，与正式回答明显区分 */
+.think-body {
+  margin: 2px 0 0 6px;
+  padding: 4px 0 4px 9px;
+  max-height: 260px;
+  overflow-y: auto;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--text-3);
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-left: 2px solid var(--border);
+}
+
+/* ==========================================================================
+ * 工具过程的单行摘要
+ *
+ * 永远只占一行：正在跑时显示「当前这一步在干什么」，
+ * 跑完显示「执行了 N 步」。工具个数不影响高度 ——
+ * 一次回答调七八个工具，每个占一行会把答案挤出视野。
+ * ========================================================================== */
+
+.tool-summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 正在跑时用强调色，让「它在动」这件事一眼可见 */
+.tool-toggle.is-running {
+  color: var(--accent);
+}

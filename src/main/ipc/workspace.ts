@@ -397,21 +397,45 @@ export function registerWorkspaceIpc(): void {
   })
 
   /**
-   * 「预览文件」：交系统默认程序打开。
+   * 「打开所在目录」：在系统文件管理器里打开**它所在的文件夹**并选中它。
    *
-   * 不用 shell.openPath 的返回值判成败 —— 它在 Windows 上几乎总是返回空串，
-   * 哪怕系统根本没有能打开 .py 的程序。所以这里只负责把请求发出去，
-   * 失败在系统侧弹窗，比在这里静默返回 false 更好排查。
+   * ⚠️ 这里原来用的是 `shell.openPath(file)` —— 那是「用默认程序打开这个文件」，
+   * 不是「打开它所在的目录」。两者的区别正是用户报的问题：
+   * 右键一个 .py 点「打开所在目录」，结果拿 Python 把脚本跑起来了。
+   *
+   * `showItemInFolder` 才是这个语义：打开父目录并把该文件高亮选中，
+   * 用户接着就能拖拽、复制、或换个程序打开。它没有返回值（也就是没有
+   * 可判的失败信号），所以这里不设返回值判断 —— 真正的失败
+   * （路径都不存在）在上面就抛了，那时给出的信息更有用。
+   *
+   * 目录本身被右键时语义不同：那时的「打开所在目录」显然是指
+   * **打开这个目录**，所以走 openPath。
    */
   ipcMain.handle(IPC.wsReveal, async (_e, target: string): Promise<boolean> => {
-    const file = assertInsideRoot(target)
-    if (!fs.existsSync(file)) throw new Error(`文件不存在: ${file}`)
-    const message = await shell.openPath(file)
-    if (message) {
-      logger.warn('workspace', `系统无法打开 ${file}: ${message}`)
-      throw new Error(message)
+    const resolved = assertInsideRoot(target)
+    if (!fs.existsSync(resolved)) throw new Error(`路径不存在: ${resolved}`)
+
+    let stat: fs.Stats
+    try {
+      stat = await fsp.stat(resolved)
+    } catch (err) {
+      throw new Error(`无法读取 ${resolved}：${String(err)}`)
     }
-    logger.info('workspace', `已交系统打开: ${file}`)
+
+    if (stat.isDirectory()) {
+      // 目录：直接打开它自己
+      const message = await shell.openPath(resolved)
+      if (message) {
+        logger.warn('workspace', `系统无法打开目录 ${resolved}: ${message}`)
+        throw new Error(message)
+      }
+      logger.info('workspace', `已打开目录: ${resolved}`)
+      return true
+    }
+
+    // 文件：打开父目录并选中它
+    shell.showItemInFolder(resolved)
+    logger.info('workspace', `已在文件管理器中定位: ${resolved}`)
     return true
   })
 

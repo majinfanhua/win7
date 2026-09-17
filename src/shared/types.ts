@@ -582,6 +582,16 @@ export interface AiStreamChunk {
   requestId: string
   kind: 'delta' | 'done' | 'error' | 'tool'
   text?: string
+  /**
+   * 这段文本是**思考过程**（模型的思维链），不是最终回答。
+   *
+   * 带推理的模型把思维链与正文分开送：DeepSeek 官方走
+   * `delta.reasoning_content` 这个独立字段，而不少中转站把它并进
+   * `delta.content` 并用 `</think>` 之类的标签包起来。
+   * 两条路都在主进程归一化成这个标记，渲染层据此折叠显示 ——
+   * 不折叠的话，学生要翻过几千字自言自语才看得到答案。
+   */
+  reasoning?: boolean
   message?: string
   /** 只在 kind === 'done' 时给出 */
   usage?: AiUsage

@@ -731,3 +731,29 @@
   height: 2px;
   background: var(--accent);
 }
+
+/* ==========================================================================
+ * 「文件树」分组下的次级动作（展开到整页）
+ *
+ * 比 .nav-group-head 矮、比它淡：它是个附属于文件树的动作，
+ * 不该和分组标题抢视觉重量。
+ * ========================================================================== */
+
+.nav-group-sub {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  padding: 3px 8px 3px 18px;
+  font-size: 11.5px;
+  color: var(--text-3);
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+}
+
+.nav-group-sub:hover {
+  color: var(--text);
+  background: var(--bubble-ai);
+}

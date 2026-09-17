@@ -6,6 +6,7 @@ import type {
   ChatMessage,
   PermissionMode
 } from '@shared/types'
+import { splitReasoning, splitReasoningStreaming } from '@shared/think-blocks'
 import { compressImage, humanBytes, withImages } from '../image-input'
 import { useAppStore } from '../store/useAppStore'
 import Select from './ui/Select'
@@ -36,6 +37,14 @@ interface ChatItem {
   usage?: AiUsage
   /** AI 对文件做过什么，按发生顺序排 */
   tools?: ToolStep[]
+  /**
+   * 模型的思考过程（思维链）。
+   *
+   * 与 text 分开存：正文进气泡，思考过程折叠在「思考过程」里。
+   * 上游有两条来源（独立字段 / 正文里的 think 标签），
+   * 都在渲染前归一化到这里，见 shared/think-blocks.ts。
+   */
+  reasoning?: string
   /**
    * 这条消息是否**正在**接收流式内容。
    *
@@ -136,24 +145,13 @@ function greeting(): string {
   return '晚上好'
 }
 
-/** 会话列表里的相对时间。放在这里而不是复用侧栏那份 —— 侧栏已经不显示会话了 */
-function relTime(iso: string): string {
-  if (!iso) return ''
-  const at = new Date(iso).getTime()
-  if (!Number.isFinite(at)) return ''
-  const diff = Date.now() - at
-  if (diff < 60_000) return '刚刚'
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`
-  if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)} 天前`
-  return new Date(at).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
-}
-
-const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(function AiPanel(
-  { onOpenSettings },
-  ref
-): JSX.Element {
+const AiPanel = forwardRef<
+  AiPanelHandle,
+  { onOpenSettings: () => void; onNewSession: () => void }
+>(function AiPanel({ onOpenSettings, onNewSession }, ref): JSX.Element {
   const config = useAppStore((s) => s.config)
+  /** 只用来显示当前会话标题（历史列表已移到顶栏，见 SessionHistory.tsx） */
+  const sessions = useAppStore((s) => s.sessions)
   const openFile = useAppStore((s) => s.openFile)
   const sessionId = useAppStore((s) => s.sessionId)
   const sessionLoading = useAppStore((s) => s.sessionLoading)
@@ -166,14 +164,6 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
    * 的一部分 —— 聊到一半想切，眼睛不必从右栏跑到左栏。
    * 做成按钮 + 浮层而不是常驻列表：常驻会把消息区挤矮，而切会话是间歇动作。
    */
-  const sessions = useAppStore((s) => s.sessions)
-  const openSession = useAppStore((s) => s.openSession)
-  const removeSession = useAppStore((s) => s.removeSession)
-  const archiveSession = useAppStore((s) => s.archiveSession)
-  const unarchiveSession = useAppStore((s) => s.unarchiveSession)
-  const [histOpen, setHistOpen] = useState(false)
-  const [histStatus, setHistStatus] = useState('')
-  const histRef = useRef<HTMLDivElement | null>(null)
 
   /**
    * 越界访问的授权请求。
@@ -346,23 +336,6 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
     setAtOpen(false)
   }, [workspace])
 
-  // 状态文字自动消失，避免一直挂着让人以为操作还没结束
-  useEffect(() => {
-    if (!histStatus) return
-    const timer = window.setTimeout(() => setHistStatus(''), 4_000)
-    return () => window.clearTimeout(timer)
-  }, [histStatus])
-
-  // 点浮层外收起。用 mousedown 而不是 click —— click 会先于按钮 onClick 冒泡上来
-  useEffect(() => {
-    if (!histOpen) return
-    const onDown = (e: MouseEvent): void => {
-      if (!histRef.current?.contains(e.target as Node)) setHistOpen(false)
-    }
-    document.addEventListener('mousedown', onDown)
-    return () => document.removeEventListener('mousedown', onDown)
-  }, [histOpen])
-
   const [items, setItems] = useState<ChatItem[]>([])
   /**
    * items 的镜像。
@@ -413,6 +386,13 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
   /** 攒着还没写进 items 的流式片段（合并节流用，见 onAiStream） */
   const deltaBufRef = useRef('')
+  /**
+   * 思考过程的缓冲。
+   *
+   * 与 deltaBufRef 分开：两者是**同一轮里交替到达的两条流**，
+   * 共用一个缓冲会把它们按到达顺序粘成一串，正文里就会混进思维链。
+   */
+  const reasoningBufRef = useRef('')
   /** 待执行的合并定时器。null 表示当前没有排队的刷新 */
   const deltaTimerRef = useRef<number | null>(null)
 
@@ -469,6 +449,7 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
       deltaTimerRef.current = null
     }
     deltaBufRef.current = ''
+    reasoningBufRef.current = ''
     setBusy(false)
   }, [sessionSwitchAt])
 
@@ -532,12 +513,19 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
       deltaTimerRef.current = null
     }
     const buffered = deltaBufRef.current
+    const bufferedReasoning = reasoningBufRef.current
     deltaBufRef.current = ''
-    if (!buffered) return ''
+    reasoningBufRef.current = ''
+    if (!buffered && !bufferedReasoning) return ''
     updateItems((prev) =>
-      prev.map((it) =>
-        it.id === requestRef.current ? { ...it, text: it.text + buffered } : it
-      )
+      prev.map((it) => {
+        if (it.id !== requestRef.current) return it
+        return {
+          ...it,
+          text: it.text + buffered,
+          ...(bufferedReasoning ? { reasoning: (it.reasoning || '') + bufferedReasoning } : {})
+        }
+      })
     )
     return buffered
   }
@@ -554,17 +542,35 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
          * 把这段时间内到达的片段攒起来一次写入，React 只渲染一次。
          * 30ms 约等于两帧，肉眼看不出延迟，但渲染次数能降一个量级。
          */
-        deltaBufRef.current += chunk.text || ''
+        /*
+         * 思考过程与正文分两条缓冲。
+         *
+         * 上游会在同一轮里交替送这两类内容（先想一段、再答一段、
+         * 调工具后再想一段）。合用一个缓冲会按到达顺序粘成一条，
+         * 于是思维链混进正文 —— 而那正是要避免的。
+         */
+        if (chunk.reasoning) reasoningBufRef.current += chunk.text || ''
+        else deltaBufRef.current += chunk.text || ''
+
         if (deltaTimerRef.current === null) {
           deltaTimerRef.current = window.setTimeout(() => {
             deltaTimerRef.current = null
             const buffered = deltaBufRef.current
+            const bufferedReasoning = reasoningBufRef.current
             deltaBufRef.current = ''
-            if (!buffered) return
+            reasoningBufRef.current = ''
+            if (!buffered && !bufferedReasoning) return
             updateItems((prev) =>
-              prev.map((it) =>
-                it.id === chunk.requestId ? { ...it, text: it.text + buffered } : it
-              )
+              prev.map((it) => {
+                if (it.id !== chunk.requestId) return it
+                return {
+                  ...it,
+                  text: it.text + buffered,
+                  ...(bufferedReasoning
+                    ? { reasoning: (it.reasoning || '') + bufferedReasoning }
+                    : {})
+                }
+              })
             )
           }, STREAM_FLUSH_MS)
         }
@@ -872,6 +878,19 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
       // 回答结束（或异常结束），把带已生成内容的 items 一次性写回 store。
       // 带上还在缓冲区里的尾段：那有可能是整段回答的最后一句
       syncStore(flushDelta())
+      /*
+       * ⚠️ 必须清掉 requestRef，否则「删除当前会话」不会清空气泡。
+       *
+       * 下面那个 `[sessionId]` 的 effect 是靠 requestRef 判断
+       * 「有没有在飞的请求」的：有就直接 return（避免把正在生成的回答
+       * 用磁盘上的旧版本覆盖掉）。而这一轮结束后如果不清，
+       * requestRef 会一直留着上次的 id —— 于是那个 effect **永远早退**，
+       * 切会话/删会话都不会重建 items。
+       *
+       * 用户报的「在历史里删除当前会话，内容没清空」就是这个：
+       * store 里 messages 已经清了，但界面上那堆气泡还在。
+       */
+      requestRef.current = ''
     }
   }
 
@@ -1083,82 +1102,27 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
     <>
     <section className="chat">
       {/*
-        面板抬头：左侧「历史」按钮（浮层列最近会话），右侧当前会话标题。
-        会话列表原先在左侧栏，移到这里是因为它属于「对话」这件事。
+        面板抬头：左侧「新对话」按钮，中间当前会话标题。
+
+        会话历史（那个带条数的下拉）**已移到顶栏**：它和「打开文件夹 /
+        资源管理器」一样是「换一个地方干活」，属于全局导航；
+        而「新对话」是紧贴当前这轮对话的动作，留在对话区更顺手。
       */}
-      <div className="chat-head" ref={histRef}>
+      <div className="chat-head">
         <button
-          className={`chat-head-btn${histOpen ? ' active' : ''}`}
-          aria-label="历史会话"
-          aria-expanded={histOpen}
-          title="最近会话"
-          onClick={() => setHistOpen((v) => !v)}
+          className="chat-head-btn"
+          aria-label="新对话"
+          title="开始一段新对话（Ctrl+N）"
+          onClick={onNewSession}
         >
-          <HistoryIcon />
-          <span>历史</span>
-          {sessions.length > 0 && <span className="chat-head-count">{sessions.length}</span>}
+          <PlusIcon />
+          <span>新对话</span>
         </button>
 
         <span className="chat-head-title" title={workspace || '未打开项目'}>
           {sessions.find((s) => s.id === sessionId)?.title || '新对话'}
         </span>
 
-        {histOpen && (
-          <div className="chat-pop">
-            {sessions.length === 0 ? (
-              <div className="chat-pop-empty">还没有会话记录，发一条消息就会出现在这里</div>
-            ) : (
-              <div className="chat-pop-list">
-                {sessions.map((item) => (
-                  <div key={item.id} className="chat-pop-row">
-                    <button
-                      className={`chat-pop-item${sessionId === item.id ? ' active' : ''}`}
-                      title={`${item.title}\n${relTime(item.updatedAt)} · ${item.messageCount} 条消息`}
-                      disabled={sessionLoading}
-                      onClick={() => {
-                        void openSession(item.id)
-                        setHistOpen(false)
-                      }}
-                    >
-                      <span className="chat-pop-name">{item.title}</span>
-                      <span className="chat-pop-time">{relTime(item.updatedAt)}</span>
-                    </button>
-                    <button
-                      className={`chat-pop-x${item.archived ? ' is-archived' : ''}`}
-                      aria-label={item.archived ? `取消归档 ${item.title}` : `归档 ${item.title}`}
-                      title={
-                        item.archived
-                          ? '已归档（AI 可以检索到它）。点一下取消归档'
-                          : '归档：宣布这段对话结束，让 AI 总结并存档，以后可以检索'
-                      }
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        void (item.archived
-                          ? unarchiveSession(item.id)
-                          : archiveSession(item.id)
-                        ).then(setHistStatus)
-                      }}
-                    >
-                      {item.archived ? '↺' : '⌸'}
-                    </button>
-                    <button
-                      className="chat-pop-x"
-                      aria-label={`删除会话 ${item.title}`}
-                      title="删除这条记录"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        void removeSession(item.id)
-                      }}
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-            {histStatus && <div className="chat-pop-note">{histStatus}</div>}
-          </div>
-        )}
       </div>
 
       <div className="chat-scroll" ref={scrollRef}>
@@ -1599,32 +1563,86 @@ const MessageBubble = memo(function MessageBubble({
    * （还没有答案），折起来会让人以为卡死了。
    */
   const running = item.tools?.some((step) => step.phase === 'start') ?? false
-  const [showTools, setShowTools] = useState(running)
+  const [showTools, setShowTools] = useState(false)
   // 从「正在跑」变成「跑完了」时自动收起，把屏幕让给答案
   useEffect(() => {
     if (!running) setShowTools(false)
   }, [running])
 
+  /*
+   * 思考过程。
+   *
+   * 两个来源都归一到这里：
+   *   - item.reasoning：上游用独立字段送的（reasoning_content）
+   *   - item.text 里带 `thinking` / 孤立 `</think>` 标签的（中转站拼进正文的）
+   * 流式期间正文的标签可能还没闭合，splitReasoningStreaming 会把
+   * 「末尾半截标签」先扣着不渲染，避免 `</thi` 一闪而过。
+   */
+  const streamedReasoning = item.reasoning || ''
+  const split = item.streaming
+    ? splitReasoningStreaming(item.text)
+    : { segments: splitReasoning(item.text), pending: '' }
+  const inlineReasoning = split.segments
+    .filter((seg) => seg.kind === 'reasoning')
+    .map((seg) => seg.content)
+    .join('')
+  const visibleText =
+    split.segments
+      .filter((seg) => seg.kind === 'text')
+      .map((seg) => seg.content)
+      .join('') + split.pending
+  const reasoningText = streamedReasoning + inlineReasoning
+  const [showReasoning, setShowReasoning] = useState(false)
+
   const toolCount = item.tools?.length ?? 0
   const failed = item.tools?.some((step) => step.phase === 'done' && step.ok === false) ?? false
   const canAct = item.role === 'user' || item.role === 'assistant'
 
+  /*
+   * 工具过程的**一行**摘要。
+   *
+   * 工具调用不该占气泡的地方：一次回答常调七八个工具，
+   * 每个占一行会把消息撑得很长，把真正的答案挤出视野。
+   * 所以这里永远只显示一行 —— 正在跑时显示「当前这一步在干什么」，
+   * 跑完了显示「执行了 N 步」。要看细节自己点开。
+   */
+  const lastStep = item.tools?.[toolCount - 1]
+  const toolSummary = running
+    ? lastStep?.summary || `正在执行第 ${toolCount} 步…`
+    : `执行了 ${toolCount} 步`
+
   return (
     <div className={`msg-row ${item.role}`}>
       <div className="msg-col">
+        {reasoningText && (
+          <div className="think-block">
+            <button
+              className="think-toggle"
+              aria-expanded={showReasoning}
+              title={showReasoning ? '收起思考过程' : '展开模型的思考过程'}
+              onClick={() => setShowReasoning((v) => !v)}
+            >
+              <span className={`tool-caret${showReasoning ? ' is-open' : ''}`} aria-hidden="true">
+                ▸
+              </span>
+              <span>{item.streaming && !item.text ? '思考中…' : '思考过程'}</span>
+            </button>
+            {showReasoning && <div className="think-body">{reasoningText}</div>}
+          </div>
+        )}
         {toolCount > 0 && (
           <div className="tool-trace">
             <button
-              className="tool-toggle"
+              className={`tool-toggle${running ? ' is-running' : ''}`}
               aria-expanded={showTools}
+              title={showTools ? '收起执行细节' : '展开执行细节'}
               onClick={() => setShowTools((v) => !v)}
             >
               <span className={`tool-caret${showTools ? ' is-open' : ''}`} aria-hidden="true">
                 ▸
               </span>
-              <span>
-                {running ? `正在执行 ${toolCount} 步…` : `执行了 ${toolCount} 步`}
-              </span>
+              {/* 单行摘要：不随工具个数变高 */}
+              <span className="tool-summary">{toolSummary}</span>
               {failed && <span className="tool-flag">有失败</span>}
             </button>
             {showTools && (
@@ -1645,29 +1663,34 @@ const MessageBubble = memo(function MessageBubble({
             )}
           </div>
         )}
-        <div className="bubble">
-          {item.text ? (
-            item.text
-          ) : item.streaming ? (
-            // 还在流里但一个字没来：三种点的等待动画
-            toolCount > 0 ? (
-              <span className="muted">正在处理…</span>
-            ) : (
+
+        {/*
+          气泡只承载**正文**。
+          思考过程与工具过程都在上面的折叠块里 —— 它们不该把气泡撑大，
+          也不该和答案混在一起（学生要的是结论）。
+          正文为空时干脆不渲染气泡，避免留一个空气泡占位。
+        */}
+        {(visibleText || (!toolCount && !reasoningText)) && (
+          <div className="bubble">
+            {visibleText ? (
+              visibleText
+            ) : item.streaming ? (
+              // 还在流里但一个字没来：三种点的等待动画
               <span className="dots">
                 <i />
                 <i />
                 <i />
               </span>
-            )
-          ) : (
-            /*
-             * 已经不在流里、又没有正文 —— 只可能是用户中途停了、
-             * 而这一轮还没吐出任何文字。明确写出来，不要留一个空气泡
-             * 或一直转的省略号：那会让人以为还在加载。
-             */
-            <span className="muted">已停止</span>
-          )}
-        </div>
+            ) : (
+              /*
+               * 已经不在流里、又没有正文 —— 只可能是用户中途停了、
+               * 而这一轮还没吐出任何文字。明确写出来，不要留一个空气泡
+               * 或一直转的省略号：那会让人以为还在加载。
+               */
+              <span className="muted">已停止</span>
+            )}
+          </div>
+        )}
         {item.usage && <div className="usage">{formatUsage(item.usage)}</div>}
 
         {/*
@@ -1738,6 +1761,21 @@ function RefRow({
   )
 }
 
+/** 加号：新对话 */
+function PlusIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+      <path
+        d="M12 5v14M5 12h14"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+
 /** 越界授权：一面盾牌，表示「这里需要你确认」 */
 function ShieldIcon(): JSX.Element {
   return (
@@ -1750,18 +1788,6 @@ function ShieldIcon(): JSX.Element {
   )
 }
 
-/** 历史会话：一个带指针的钟面 */
-function HistoryIcon(): JSX.Element {
-  return (
-    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
-      <g fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M3.8 12a8.2 8.2 0 1 0 2.6-6" />
-        <path d="M3.5 4.5V9H8" />
-        <path d="M12 8v4.4l3 1.8" />
-      </g>
-    </svg>
-  )
-}
 
 /** 展开/收起输入框：双向箭头 */
 function ExpandIcon({ expanded }: { expanded: boolean }): JSX.Element {
