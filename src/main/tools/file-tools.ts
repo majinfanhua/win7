@@ -1,9 +1,11 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
+import { StringDecoder } from 'node:string_decoder'
 import path from 'node:path'
 import { logger } from '../logger'
 import { markToolWrite } from '../watcher'
+import { atomicWrite } from '../atomic-write'
 import {
   applyEditReplacements,
   buildEditMatchStrategyNote,
@@ -130,51 +132,6 @@ async function rememberWritten(target: string, content: string): Promise<void> {
   }
 }
 
-/**
- * 临时文件 + rename，避免写一半掉电把源码写坏。
- *
- * ⚠️ Windows 上不能直接 `rename(tmp, target)` 覆盖已存在的文件：
- * 目标被占用（杀毒软件、编辑器、同步盘都会短暂占住）时，这一步可能
- * 既失败、又已经把原文件弄没了，结果两份内容一起丢。
- * 所以先 `rename(target → backup)` 把原件挪开，再 `rename(tmp → target)`；
- * 第二步失败就把 backup 挪回去。这样任何时刻磁盘上都至少有一份完整内容。
- */
-async function atomicWrite(target: string, content: string): Promise<void> {
-  await fsp.mkdir(path.dirname(target), { recursive: true })
-  const tmp = `${target}.tmp-${process.pid}`
-  await fsp.writeFile(tmp, content, 'utf8')
-
-  const exists = fs.existsSync(target)
-  if (!exists) {
-    await fsp.rename(tmp, target)
-    return
-  }
-
-  const backup = `${target}.bak-${process.pid}`
-  await fsp.rename(target, backup)
-  try {
-    await fsp.rename(tmp, target)
-  } catch (err) {
-    // 尽力还原：还原失败也不能把 tmp 删掉，那会变成「一份都不剩」
-    try {
-      await fsp.rename(backup, target)
-    } catch (restoreErr) {
-      logger.error(
-        'tool',
-        `写入失败且原件还原失败：${target}（备份留在 ${backup}）：${String(restoreErr)}`
-      )
-      throw new Error(`写入 ${base(target)} 失败，原文件已备份到 ${backup}。原始错误：${String(err)}`)
-    }
-    throw err
-  }
-  // 成功后才清理备份；清不掉也无所谓（下次写入会覆盖同名备份）
-  try {
-    await fsp.unlink(backup)
-  } catch {
-    /* 备份残留不影响正确性 */
-  }
-}
-
 /* ------------------------------------------------------------------ *
  * 按行窗口读取
  * ------------------------------------------------------------------ */
@@ -185,6 +142,14 @@ interface LineWindow {
   reachedEof: boolean
   /** 是否因为扫描上限提前停下 */
   hitScanCap: boolean
+  /**
+   * 文件是否以换行符结尾。
+   *
+   * 需要它才能把 lines 精确还原成原文：`['a','b']` 既可能是 "a\nb"
+   * 也可能是 "a\nb\n"。少一个换行就会让读态哈希与磁盘内容对不上，
+   * 于是 assertFreshRead 永远误判「被外部改动过」（见读态哈希那一段注释）。
+   */
+  endsWithNewline: boolean
 }
 
 /**
@@ -197,10 +162,30 @@ async function readLineWindow(file: string, offset: number, limit: number): Prom
   const handle = await fsp.open(file, 'r')
   const out: string[] = []
   let carry = ''
+  /*
+   * ⚠️ 必须用 StringDecoder，不能对定长块直接 toString('utf8')。
+   *
+   * 我们按 64KB 定长读，块边界会**切断 UTF-8 多字节字符**（一个汉字 3 字节）。
+   * 直接 toString 的话，被切断的两半各自解出一个 U+FFFD（�）——
+   * 实测 12 万字节的纯中文文件读出来必定带乱码。
+   *
+   * 后果不只是显示难看：AI 读到乱码之后会**照着乱码写回去**，
+   * 把学生源码里的中文永久改坏。中文教学场景下这是最高频的路径。
+   *
+   * StringDecoder 会把「末尾不完整的字节序列」留到下一次 write 一起解，
+   * 所以跨块的字符能正确还原。exec.ts 早就这么做了，这里补齐。
+   */
+  const decoder = new StringDecoder('utf8')
   let lineNo = 0
   let scanned = 0
   let reachedEof = false
   let hitScanCap = false
+  /**
+   * 是否以换行结尾。
+   * 判据：读到 EOF 时 carry 为空 —— 说明最后一个字节就是分隔符。
+   * 空文件（0 字节）也算「不以换行结尾」，此时 lines 为空、不参与哈希比对。
+   */
+  let endsWithNewline = false
 
   try {
     const buf = Buffer.alloc(64 * 1024)
@@ -215,18 +200,30 @@ async function readLineWindow(file: string, offset: number, limit: number): Prom
         throw new Error(`${base(file)} 看起来是二进制文件，不支持作为文本读取`)
       }
       scanned += bytesRead
-      const parts = (carry + buf.subarray(0, bytesRead).toString('utf8')).split('\n')
+      const parts = (carry + decoder.write(buf.subarray(0, bytesRead))).split('\n')
       carry = parts.pop() ?? ''
       for (const part of parts) {
         lineNo++
         if (lineNo >= offset && out.length < limit) out.push(part)
       }
+      // 这一块以换行结尾（carry 空）时先记下；后面若又读到内容会被覆盖
+      endsWithNewline = carry === ''
       if (out.length >= limit) break
       if (scanned >= MAX_SCAN_BYTES) {
         hitScanCap = true
         break
       }
     }
+    /*
+     * 收尾：把解码器里可能压着的最后几个字节吐出来。
+     * 文件在字符中间结束时（截断的文件）会得到 U+FFFD，那是真实情况的反映。
+     */
+    if (reachedEof) {
+      carry += decoder.end()
+      // 收尾后重新判定：解码器可能吐出压着的字节，让 carry 由空变非空
+      endsWithNewline = carry === ''
+    }
+
     // 最后一行没有换行符结尾的情况
     if (reachedEof && carry && lineNo + 1 >= offset && out.length < limit) {
       lineNo++
@@ -236,7 +233,7 @@ async function readLineWindow(file: string, offset: number, limit: number): Prom
     await handle.close()
   }
 
-  return { lines: out, reachedEof, hitScanCap }
+  return { lines: out, reachedEof, hitScanCap, endsWithNewline }
 }
 
 /* ------------------------------------------------------------------ *
@@ -260,12 +257,26 @@ async function readFileTool(args: ReadFileArgs, ctx: ToolContext = {}): Promise<
   const offset = Math.max(1, Math.floor(Number(args.offset) || 1))
   const limit = Math.max(1, Math.min(MAX_LIMIT, Math.floor(Number(args.limit) || DEFAULT_LIMIT)))
 
-  const { lines, reachedEof, hitScanCap } = await readLineWindow(target, offset, limit)
+  const { lines, reachedEof, hitScanCap, endsWithNewline } = await readLineWindow(target, offset, limit)
   const whole = offset === 1 && reachedEof
 
-  // 记录「读到的版本」，供写之前做读陈旧检测。
-  // 哈希用读到的行重新拼（而不是重读整个文件），大文件上不会多一次 IO。
-  const seen = lines.join('\n')
+  /*
+   * 记录「读到的版本」，供写之前做读陈旧检测。
+   *
+   * ⚠️ 哈希必须与 assertFreshRead 那边（`hashContent(await readFile(...))`）
+   * 用**同一种拼法**，否则永远比不相等。
+   *
+   * 原来这里是 `lines.join('\n')` —— 它丢掉了文件末尾的换行符，
+   * 而磁盘上的内容带着它。于是凡是「以换行结尾」的文件（绝大多数源码），
+   * 只要 mtime 一变（编辑器空保存、同步盘 touch），assertFreshRead
+   * 就会误判成「被其他程序改动过」，把 editFile / multiEdit 硬拒掉，
+   * 模型被迫反复重读。
+   *
+   * 补回末尾换行：只有「读到了全文」且「原文确实有末尾换行」时才补 ——
+   * 分片读取时 lines 里没有结尾信息，此时 whole 为 false，
+   * 而 assertFreshRead 对非 whole 的读取本来就跳过校验。
+   */
+  const seen = lines.join('\n') + (offset === 1 && reachedEof && endsWithNewline ? '\n' : '')
   readState.set(target, {
     whole,
     mtimeMs: stat.mtimeMs,
@@ -297,7 +308,17 @@ async function writeFileTool(args: WriteFileArgs, ctx: ToolContext = {}): Promis
     write: true,
     action: `写入 ${args.path}`
   })
-  const content = typeof args.content === 'string' ? args.content : ''
+  /*
+   * content 缺失要**报错**，不能退化成空串。
+   *
+   * 模型漏发这个字段（或中转站把字段丢了）时，原来的 `: ''`
+   * 会把一个已经读过的文件**截成 0 字节**，还回一句
+   * 「已写入 x（0 字符，原 1234 字符）」—— 看起来像正常完成。
+   */
+  if (typeof args.content !== 'string') {
+    throw new Error('writeFile 需要 content 参数（要写入的完整文本），本次没有收到，已拒绝以免清空文件。')
+  }
+  const content = args.content
   const exists = fs.existsSync(target)
 
   if (exists) {
@@ -312,6 +333,15 @@ async function writeFileTool(args: WriteFileArgs, ctx: ToolContext = {}): Promis
         `拒绝整篇覆盖：之前只读了 ${base(target)} 的一部分，整篇写回会丢掉没看到的内容。请用 editFile 做局部替换。`
       )
     }
+    /*
+     * 还要确认「读过之后没被别人改过」。
+     *
+     * editFile / multiEdit 一直有这一步，writeFile 却漏了 ——
+     * 于是「AI 读了 a.ts → 学生在记事本里改了它 → AI 凭记忆整篇写回」
+     * 会把用户的修改**静默冲掉**，工具还回一句「已写入」。
+     * 整篇覆盖比局部替换危险得多，这一步不能少。
+     */
+    await assertFreshRead(target)
   }
 
   const before = exists ? await fsp.readFile(target, 'utf8') : ''
@@ -321,8 +351,12 @@ async function writeFileTool(args: WriteFileArgs, ctx: ToolContext = {}): Promis
   // 标记成「工具在写」，让文件监视把随之而来的事件标成 origin='ai'，
   // 编辑器据此显示「AI 改过」而不是当成外部改动弹提示
   markToolWrite(target, true)
+  try {
   await atomicWrite(target, content)
-  markToolWrite(target, false)
+  } finally {
+    // 见 ipc/workspace.ts 的说明：漏了这步会让文件永久被标成 AI 改的
+    markToolWrite(target, false)
+  }
   await rememberWritten(target, content)
   logger.info('tool', `writeFile: ${target}（${content.length} 字符）`)
   return `已写入 ${base(target)}（${content.length} 字符${exists ? `，原 ${before.length} 字符` : '，新建文件'}）`
@@ -423,8 +457,12 @@ async function editFileTool(args: EditFileArgs, ctx: ToolContext = {}): Promise<
 
   recordSnapshot(target, before, resolved.after, 'editFile')
   markToolWrite(target, true)
+  try {
   await atomicWrite(target, resolved.after)
-  markToolWrite(target, false)
+  } finally {
+    // 见 ipc/workspace.ts 的说明：漏了这步会让文件永久被标成 AI 改的
+    markToolWrite(target, false)
+  }
   const stat = await fsp.stat(target)
   readState.set(target, {
     whole: true,
@@ -463,8 +501,12 @@ async function multiEditTool(args: MultiEditArgs, ctx: ToolContext = {}): Promis
 
   recordSnapshot(target, before, resolved.after, 'multiEdit')
   markToolWrite(target, true)
+  try {
   await atomicWrite(target, resolved.after)
-  markToolWrite(target, false)
+  } finally {
+    // 见 ipc/workspace.ts 的说明：漏了这步会让文件永久被标成 AI 改的
+    markToolWrite(target, false)
+  }
   const stat = await fsp.stat(target)
   readState.set(target, {
     whole: true,

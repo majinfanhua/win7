@@ -1,4 +1,5 @@
 import { net } from 'electron'
+import { StringDecoder } from 'node:string_decoder'
 import { chatEndpoint, describeHttpError } from '../shared/ai-endpoint'
 import { textOf, type ChatContent, type AiUsage } from '../shared/types'
 import { getConfig } from './config'
@@ -181,8 +182,10 @@ export function callModelOnce(opts: CallOptions): Promise<LlmResult> {
     request.on('response', (response) => {
       const status = response.statusCode || 0
       let raw = ''
+      // 同上：网络分块会切断多字节字符，必须用 StringDecoder
+      const decoder = new StringDecoder('utf8')
       response.on('data', (chunk) => {
-        raw += chunk.toString('utf8')
+        raw += decoder.write(chunk)
       })
       response.on('end', () => {
         if (status !== 200) {

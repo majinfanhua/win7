@@ -5,6 +5,7 @@ import type { FileTemplate } from '../../file-templates'
 import type { NewEntryTarget } from '../NewEntryDialog'
 import { baseName, existingNamesOf, parentDirOf } from './shared'
 import { buildTreeMenu, canPreview, type TreeMenuItem, type TreeMenuTarget } from './tree-menu'
+import { askConfirm } from '../../store/confirm'
 
 /**
  * 文件树的全部交互逻辑。
@@ -320,9 +321,41 @@ export function useFileTreeController(): FileTreeController {
         onDelete: () => {
           if (!target.path) return
           const name = baseName(target.path)
-          // confirm 在 Electron 里是可用的（只有 prompt 被移除）
-          if (!window.confirm(`确定删除「${name}」？\n\n会先移入回收目录，不会立刻永久删除。`)) return
-          void removeEntry(target.path)
+          /*
+           * ⚠️ 这里**不能**用 window.confirm。
+           *
+           * Electron 里原生模态框会阻塞渲染进程，并吞掉 mouseup ——
+           * 渲染层以为鼠标一直按着，之后点什么都点不中（输入框也进不去），
+           * 只能重启。用户报的「删掉一个文件后输入框选不中」正是这个。
+           * 详见 store/confirm.ts 的文件头。
+           *
+           * 走应用内弹层：它是异步的，不阻塞渲染，也不会吞事件。
+           */
+          void (async () => {
+            const ok = await askConfirm({
+              title: `删除「${name}」？`,
+              lines: ['会先移入系统回收站，不会立刻永久删除。', '需要的话可以从回收站还原。'],
+              tone: 'danger',
+              actions: [
+                // 取消放第一个 = 默认焦点，回车不会误删
+                { id: 'cancel', label: '取消', kind: 'ghost' },
+                { id: 'yes', label: '删除', kind: 'danger' }
+              ]
+            })
+            if (ok !== 'yes') return
+            /*
+             * 失败必须在这里吃掉。removeEntry 出错时会先 pushLog 再把错误抛出来
+             * （store 里已经记了一条可读的日志），但我们是在 async IIFE 里
+             * await 它的 —— 不 catch 就变成**未处理的 Promise rejection**，
+             * 在渲染进程里表现为控制台一条 Uncaught (in promise)，
+             * 而用户那边已经能看到日志了，再抛一次没有意义。
+             */
+            try {
+              await removeEntry(target.path)
+            } catch {
+              /* 已由 store 记录，这里只需保证不产生未处理 rejection */
+            }
+          })()
         },
         onToggleHidden: () => void setShowHidden(!showHidden),
         onCopyPath: doCopyPath,

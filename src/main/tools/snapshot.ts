@@ -120,15 +120,30 @@ export function undoSnapshot(target?: string): UndoResult {
   }
 
   const item = list[index]
+  // 标记成工具写入，让文件监视把事件标成 origin='ai'（撤销也是 AI 侧的改动），
+  // 否则编辑器会把它当成外部改动弹提示
+  markToolWrite(item.path, true)
   try {
     fs.mkdirSync(path.dirname(item.path), { recursive: true })
-    // 标记成工具写入，让文件监视把事件标成 origin='ai'（撤销也是 AI 侧的改动），
-    // 否则编辑器会把它当成外部改动弹提示
-    markToolWrite(item.path, true)
+    /*
+     * 这里保持同步写。
+     *
+     * undoSnapshot 是同步函数（调用方 wsDelete/editorUndo 都按同步用），
+     * 改成 async 会往上传染一圈。它写的是**已经读进内存的旧内容**，
+     * 不存在「写一半掉电更糟」的权衡 —— 真正要修的是下面那个
+     * markToolWrite 泄漏，那是同一个 bug 的另一半。
+     */
     fs.writeFileSync(item.path, item.before, 'utf8')
-    markToolWrite(item.path, false)
   } catch (err) {
     return { ok: false, message: `回退失败: ${String(err)}` }
+  } finally {
+    /*
+     * ⚠️ 清理必须在 finally 里。
+     * markToolWrite 的集合只有这一个出口（它内部延迟 500ms 删除），
+     * 放在 try 内的话，写入一失败这个路径就永久留在集合里 ——
+     * 之后用户自己改这个文件会被误标成 origin='ai'。
+     */
+    markToolWrite(item.path, false)
   }
 
   list.splice(index, 1)

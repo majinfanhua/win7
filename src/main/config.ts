@@ -360,13 +360,36 @@ export function upsertWorkspace(list: WorkspaceEntry[], dir: string): WorkspaceE
  */
 export function initConfig(): AppConfig {
   const file = resolveConfigPath()
+  let existed = true
   try {
     cached = normalize(JSON.parse(fs.readFileSync(file, 'utf8')))
     logger.info('config', `已加载配置: ${file}`)
   } catch (err) {
+    existed = false
     cached = normalize({})
     const code = (err as NodeJS.ErrnoException)?.code
     if (code && code !== 'ENOENT') logger.warn('config', `配置解析失败，已回退默认值: ${String(err)}`)
+  }
+
+  /*
+   * 首次运行就把默认配置写出来。
+   *
+   * 以前只在用户改设置时才写盘，于是刚解压的程序目录里看不到 config.json，
+   * 「便携」这件事就不完整：用户想把自己配好的那份发给别人，
+   * 得先猜配置文件名与位置。
+   *
+   * 现在首次启动立刻生成一份带注释性字段的完整默认配置，
+   * `data/config.json` 一眼就能找到、直接改、整个文件夹拷走即可。
+   * 写失败不影响启动（可能是只读介质）。
+   */
+  if (!existed) {
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true })
+      fs.writeFileSync(file, JSON.stringify(cached, null, 2), 'utf8')
+      logger.info('config', `首次运行，已生成默认配置: ${file}`)
+    } catch (err) {
+      logger.warn('config', `默认配置写盘失败（不影响启动）: ${String(err)}`)
+    }
   }
   // 把落盘的权限模式灌进权限层 —— 那才是判定边界时真正读的地方
   setPermissionMode(cached.permission.mode)

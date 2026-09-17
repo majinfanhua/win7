@@ -22,6 +22,7 @@ import { logger } from '../logger'
 import { isInside, setWorkspaceRootValue, getWorkspaceRoot as pathsGetWorkspaceRoot } from '../paths'
 import { listSnapshots, recordSnapshot, undoSnapshot } from '../tools/snapshot'
 import { markToolWrite, watchWorkspace } from '../watcher'
+import { atomicWrite } from '../atomic-write'
 
 /** 单文件读取上限，防止误开大文件把编辑器卡死 */
 const MAX_FILE_BYTES = 4 * 1024 * 1024
@@ -282,12 +283,33 @@ export function registerWorkspaceIpc(): void {
     const before = fs.existsSync(target) ? await fsp.readFile(target, 'utf8') : ''
     if (before !== content) recordSnapshot(target, before, content, 'manual')
 
-    // 先写临时文件再改名，避免写一半掉电导致源码损坏
-    const tmp = `${target}.tmp-${process.pid}`
+    /*
+     * 走共用的原子写。
+     *
+     * 这里曾经是「写 tmp → 直接 rename 覆盖」，而**同一项目的工具层**
+     * 早就换成了三步法（先挪开原件 → 放新件 → 失败就还原），
+     * 注释里还明确写了 Windows 上直接 rename 覆盖的风险：
+     * 目标被占用（杀毒软件、同步盘）时可能既失败又把原文件弄没，
+     * 两份内容一起丢。
+     *
+     * 结果是「AI 改代码有保护、用户按 Ctrl+S 反而没有」。
+     * 现在共用 atomic-write.ts 那一份，策略只有一处定义。
+     */
     markToolWrite(target, true)
-    await fsp.writeFile(tmp, content, 'utf8')
-    await fsp.rename(tmp, target)
-    markToolWrite(target, false)
+    try {
+      await atomicWrite(target, content)
+    } finally {
+      /*
+       * ⚠️ 必须放 finally。
+       *
+       * markToolWrite(false) 是那个集合**唯一**的清理入口
+       * （它内部延迟 500ms 删除）。写在 try 里的话，写入一抛错
+       * 这个路径就永久留在 toolWriting 集合里 ——
+       * 之后用户自己在 VS Code / 记事本里改这个文件，
+       * 事件仍会被标成 origin='ai'，界面显示「AI 修改了 xxx」（假的）。
+       */
+      markToolWrite(target, false)
+    }
     logger.debug('workspace', `已保存: ${target}`)
     return true
   })

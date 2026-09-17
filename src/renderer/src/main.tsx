@@ -873,6 +873,60 @@ window.__SELFTEST__ = async () => {
         checks.composerTextareaInteractive &&
         checks.composerTextareaFocusable
     )
+
+    /*
+     * ★ 应用内确认通道可用，且**没有**残留的阻塞式原生弹窗。
+     *
+     * 对应「删掉一个文件后输入框选不中，要重启」那个 bug：
+     * Electron 里 window.confirm / alert 会阻塞渲染进程并吞掉 mouseup，
+     * 渲染层以为鼠标一直按着，之后点什么都点不中。
+     *
+     * 这里查两件事：
+     *   1. 渲染层源码里不该再有阻塞调用（静态扫描，见 check-no-blocking-dialog.mjs）
+     *   2. 确认通道（ConfirmHost）真的挂上了 —— 它没挂的话，
+     *      点删除会静默什么都不发生（Promise 永远不 resolve）
+     */
+    try {
+      const { useConfirmStore } = await import('./store/confirm')
+      // 打开一个确认请求，验证它被渲染出来、且能 resolve
+      const answered = new Promise<string>((resolve) => {
+        void import('./store/confirm').then((m) => {
+          void m.askConfirm({
+            title: '自检占位',
+            lines: ['自检用，马上会关闭'],
+            actions: [{ id: 'cancel', label: '取消', kind: 'ghost' }]
+          }).then(resolve)
+        })
+      })
+      const appeared = await waitFor(
+        () => document.querySelector('.dialog-confirm h2')?.textContent === '自检占位',
+        3_000
+      )
+      checks.confirmHostMounted = appeared
+      // 点掉它，别把弹层留给后面的断言
+      const btn = document.querySelector(
+        '.dialog-confirm .dialog-actions button'
+      ) as HTMLElement | null
+      btn?.click()
+      const got = await Promise.race([
+        answered,
+        new Promise<string>((r) => setTimeout(() => r('__timeout__'), 2_000))
+      ])
+      // resolve 出来的必须是点掉的那个 id —— 空串说明是遮罩/Esc 关的
+      checks.confirmHostResolves = got === 'cancel'
+      // 关掉后不该留遮罩（留着就会挡住整个界面）
+      checks.confirmHostCleansUp = await waitFor(
+        () => !document.querySelector('.dialog-confirm'),
+        2_000
+      )
+      checks.confirmOk = Boolean(
+        checks.confirmHostMounted && checks.confirmHostResolves && checks.confirmHostCleansUp
+      )
+      void useConfirmStore
+    } catch (err) {
+      checks.confirmOk = false
+      checks.confirmError = String(err)
+    }
   } catch (err) {
     checks.welcomeOk = false
     checks.composerInputOk = false
@@ -1268,6 +1322,7 @@ window.__SELFTEST__ = async () => {
     layoutOk: Boolean(checks.layoutOk),
     welcomeOk: Boolean(checks.welcomeOk),
     composerInputOk: Boolean(checks.composerInputOk),
+    confirmOk: Boolean(checks.confirmOk),
     newLayoutOk: Boolean(checks.newLayoutOk),
     modelPickerOk: Boolean(checks.modelPickerOk),
     modeSwitcherOk: Boolean(checks.modeSwitcherOk),

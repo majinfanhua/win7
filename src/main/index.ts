@@ -356,6 +356,98 @@ const BASE_USER_DATA_DIR = app.isPackaged ? 'hangkeIDE' : 'hangkeIDE-dev'
 const USER_DATA_DIR = cli.selfTest ? `${BASE_USER_DATA_DIR}-selftest` : BASE_USER_DATA_DIR
 
 /**
+ * 便携模式：把数据放在**程序自己所在的目录**旁边，而不是 %APPDATA%。
+ *
+ * ## 为什么要这样
+ *
+ * 原来数据固定写在 %APPDATA%\hangkeIDE。后果是：
+ *   - 用户「删掉解压目录、重新下一份」之后配置还在 —— 像是没清干净
+ *   - 想把自己配好的一份（模型地址、key、技能、习惯）打包给别人用，
+ *     没有可行的办法：配置根本不在那个文件夹里
+ *
+ * 现在打包版默认把 `data/` 建在 exe 旁边（`<exe目录>/data`）。
+ * 于是「配好一份 → 整个文件夹拷给别人」就能直接用，
+ * 老师发给学生的包也可以预先带好配置。
+ *
+ * ## 为什么要探测可写性
+ *
+ * 程序可能被放在**写不进去**的地方：Program Files、只读 U 盘、
+ * 光盘、网络盘。那时如果硬写会启动即崩（连日志都写不出来）。
+ * 所以先真的建一次目录并写一个探针文件，失败就回退到 %APPDATA%。
+ * 用「实际写一次」而不是只看权限位：Windows 上的权限位、
+ * 只读属性、UAC 虚拟化都会骗人。
+ *
+ * ## 为什么开发态不用便携
+ *
+ * 开发时 exe 在 node_modules 里，数据落在项目目录会污染仓库，
+ * 而且 `npm run smoke` 与用户实际在跑的版本会互相踩。
+ * 所以开发态仍然走 %APPDATA%，这也是既有行为。
+ */
+/**
+ * 从旧的 %APPDATA% 目录搬一次配置过来。
+ *
+ * ## 为什么需要
+ *
+ * 改成便携模式后，老用户的数据还在 %APPDATA%\hangkeIDE —— 不搬的话
+ * 他们打开新版本会发现「模型地址、API Key、技能全没了」，而实际上
+ * 什么都没丢，只是程序换了个地方找。
+ *
+ * ## 只在目标为空时搬
+ *
+ * 「便携目录里已经有 config.json」就一律不动：那说明这份数据
+ * 是用户自己配好的（甚至是准备分发给别人的），绝不能被旧数据覆盖。
+ *
+ * 这也让「分发」这件事保持正确：收到包的人没有旧目录，不会触发搬运；
+ * 而在自己机器上首次运行，配置会自然接续上。
+ *
+ * 搬家失败不阻断启动 —— 大不了是重新填一次 key，比启动不了好。
+ */
+function migrateFromLegacyDir(portableDir: string): void {
+  try {
+    // 已经有配置了就别动
+    if (fs.existsSync(path.join(portableDir, 'config.json'))) return
+    const legacy = path.join(app.getPath('appData'), BASE_USER_DATA_DIR)
+    if (!fs.existsSync(path.join(legacy, 'config.json'))) return
+
+    fs.cpSync(legacy, portableDir, { recursive: true, force: false, errorOnExist: false })
+    logger.info('app', `已从旧目录搬运配置: ${legacy} → ${portableDir}`)
+  } catch (err) {
+    logger.warn('app', `搬运旧配置失败（不影响启动，可重新配置）: ${String(err)}`)
+  }
+}
+
+function resolveUserDataDir(): { dir: string; portable: boolean } {
+  // 自检始终走临时目录：CI 里跑完就丢，不该留下任何东西
+  if (cli.selfTest) return { dir: path.join(app.getPath('appData'), USER_DATA_DIR), portable: false }
+  if (!app.isPackaged) return { dir: path.join(app.getPath('appData'), USER_DATA_DIR), portable: false }
+
+  /*
+   * 打包后 exe 的位置：app.getPath('exe') 是 <目录>/hangkeIDE.exe。
+   * 用 dirname 取到解压出来的那个文件夹。
+   */
+  const exeDir = path.dirname(app.getPath('exe'))
+  const portableDir = path.join(exeDir, 'data')
+  try {
+    fs.mkdirSync(portableDir, { recursive: true })
+    // 真的写一次：探测文件用固定名字，覆盖写，不留垃圾
+    const probe = path.join(portableDir, '.write-probe')
+    fs.writeFileSync(probe, String(Date.now()), 'utf8')
+    fs.unlinkSync(probe)
+    /*
+     * 探测成功才搬运。放在这里而不是更早：搬运本身要写磁盘，
+     * 而能不能写正是上面那一步在确认的事。
+     * 此时 logger 还没初始化（它依赖 userData），所以搬运的日志
+     * 要等 initLogger 之后才能看见 —— 所以把结果记在闭包外。
+     */
+    migrateFromLegacyDir(portableDir)
+    return { dir: portableDir, portable: true }
+  } catch {
+    // 写不进去（Program Files / 只读介质）→ 回退，保证还能启动
+    return { dir: path.join(app.getPath('appData'), USER_DATA_DIR), portable: false }
+  }
+}
+
+/**
  * 窗口图标。由 scripts/make-icon.py 生成。
  *
  * 只有开发态需要显式指定：打包后 Windows 窗口会直接继承 exe 自带图标
@@ -374,7 +466,14 @@ function main(): void {
   // 不是 productName —— 上一轮 CI 实际落在 %APPDATA%\win7-ai-editor\logs，
   // 而使用说明和 CI 里写的都是 hangkeIDE，文档会指向一个不存在的目录。
   app.setName(USER_DATA_DIR)
-  app.setPath('userData', path.join(app.getPath('appData'), USER_DATA_DIR))
+
+  /*
+   * 目录要在**任何 getPath('userData') 之前**定好，而且 resolveUserDataDir
+   * 内部会碰一次磁盘（探测可写性）—— 那必须在 initLogger 之前完成，
+   * 因为日志目录也是从 userData 推出来的。
+   */
+  const userData = resolveUserDataDir()
+  app.setPath('userData', userData.dir)
 
   initLogger()
   installCrashHandlers()
@@ -392,7 +491,13 @@ function main(): void {
   logger.info(
     'app',
     `用户数据目录: ${app.getPath('userData')}${
-      cli.selfTest ? '（自检专用）' : app.isPackaged ? '' : '（开发态，与打包版分开）'
+      cli.selfTest
+        ? '（自检专用）'
+        : userData.portable
+          ? '（便携模式，随程序目录一起拷走）'
+          : app.isPackaged
+            ? '（程序目录不可写，已回退到系统用户目录）'
+            : '（开发态，与打包版分开）'
     }`
   )
 

@@ -1,3 +1,4 @@
+import { StringDecoder } from 'node:string_decoder'
 import { ipcMain, net } from 'electron'
 import {
   IPC,
@@ -64,11 +65,21 @@ export function abortAi(requestId: string): boolean {
 /** 读干响应体，用于错误分支和短请求 */
 function readBody(stream: Electron.IncomingMessage, done: (body: string) => void): void {
   let raw = ''
+  /*
+   * ⚠️ 必须用 StringDecoder。
+   *
+   * 响应体是一段段到达的，TCP 会在**任意字节位置**切开 ——
+   * 包括切在一个 UTF-8 多字节字符中间（汉字 3 字节）。
+   * 对每块直接 toString('utf8') 的话，被切断的两半各自解出 U+FFFD（�），
+   * 中文错误信息与中文回答都会出现乱码。
+   * 实测：按 100 字节切一段中文回答，直接 toString 出现 15 处乱码。
+   */
+  const decoder = new StringDecoder('utf8')
   stream.on('data', (chunk) => {
-    raw += chunk.toString('utf8')
+    raw += decoder.write(chunk)
   })
-  stream.on('end', () => done(raw))
-  stream.on('error', () => done(raw))
+  stream.on('end', () => done(raw + decoder.end()))
+  stream.on('error', () => done(raw + decoder.end()))
 }
 
 /* ------------------------------------------------------------------ *
@@ -339,8 +350,13 @@ function streamRound(
       }
 
       let buffer = ''
+      /*
+       * 同上：SSE 也是按块到达的，必须用 StringDecoder，
+       * 否则 AI 的中文回答会随机出现乱码，而且会**存进对话记录**。
+       */
+      const decoder = new StringDecoder('utf8')
       response.on('data', (chunk) => {
-        buffer += chunk.toString('utf8')
+        buffer += decoder.write(chunk)
         const lines = buffer.split('\n')
         buffer = lines.pop() || ''
         for (const rawLine of lines) {

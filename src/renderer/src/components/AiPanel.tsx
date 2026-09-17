@@ -364,6 +364,34 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
   }, [histOpen])
 
   const [items, setItems] = useState<ChatItem[]>([])
+  /**
+   * items 的镜像。
+   *
+   * 为什么需要它：`syncStore` 原来靠「调 setItems 的 updater 同步把权威值
+   * 写进局部变量」来拿到最新列表。那个写法依赖 React 的一个内部行为 ——
+   * **只有当队列里没有其它待处理更新时，updater 才会被同步求值**。
+   * 它确实常常成立，但一旦不成立（同一 tick 里前面已有别的 setItems，
+   * 比如 flushDelta 有缓冲时必然发生），`authoritative` 会停在初始的 `[]`，
+   * 于是 `setSessionMessages([])` 把整轮对话**清空**；而
+   * session-slice 见到空数组又直接 return，连磁盘都不写。
+   *
+   * 这类 bug 不报错、只是数据没了，极难排查。改成显式镜像：
+   * 所有改 items 的地方同步更新这个 ref，读的时候读 ref ——
+   * 不依赖任何 React 内部行为。
+   */
+  const itemsRef = useRef<ChatItem[]>([])
+
+  /**
+   * 统一的 items 更新入口：同时维护 ref 镜像。
+   *
+   * 直接把 setItems 换掉而不是在每个调用点手动同步 —— 后者一定会漏。
+   * 支持函数式更新（与 React 的 setState 同签名）。
+   */
+  const updateItems = (next: ChatItem[] | ((prev: ChatItem[]) => ChatItem[])): void => {
+    const value = typeof next === 'function' ? (next as (p: ChatItem[]) => ChatItem[])(itemsRef.current) : next
+    itemsRef.current = value
+    setItems(value)
+  }
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   /** 待插入输入框的引用文件（来自文件树右键「插入引用」） */
@@ -398,7 +426,7 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
    */
   const rebuildFromStore = (): void => {
     const stored = useAppStore.getState().messages
-    setItems(
+    updateItems(
       stored.map((m, i) => ({
         id: `h-${i}`,
         role: m.role,
@@ -461,7 +489,7 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
         deltaTimerRef.current = null
       }
       deltaBufRef.current = ''
-      setItems([])
+      updateItems([])
       setInput('')
       setRefs([])
       setBusy(false)
@@ -506,7 +534,7 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
     const buffered = deltaBufRef.current
     deltaBufRef.current = ''
     if (!buffered) return ''
-    setItems((prev) =>
+    updateItems((prev) =>
       prev.map((it) =>
         it.id === requestRef.current ? { ...it, text: it.text + buffered } : it
       )
@@ -533,7 +561,7 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
             const buffered = deltaBufRef.current
             deltaBufRef.current = ''
             if (!buffered) return
-            setItems((prev) =>
+            updateItems((prev) =>
               prev.map((it) =>
                 it.id === chunk.requestId ? { ...it, text: it.text + buffered } : it
               )
@@ -545,7 +573,7 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
         flushDelta()
         const step = chunk.tool
         if (!step) return
-        setItems((prev) =>
+        updateItems((prev) =>
           prev.map((it) => {
             if (it.id !== chunk.requestId) return it
             const tools = [...(it.tools || [])]
@@ -576,7 +604,7 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
       } else if (chunk.kind === 'error') {
         // 报错也要先把攒着的文本落下去，否则学生看到的是「回答到一半就没了」
         flushDelta()
-        setItems((prev) =>
+        updateItems((prev) =>
           prev.map((it) =>
             it.id === chunk.requestId
               ? {
@@ -598,7 +626,7 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
          */
         flushDelta()
         setBusy(false)
-        setItems((prev) =>
+        updateItems((prev) =>
           prev.map((it) => {
             if (it.id !== chunk.requestId) return it
             return { ...it, streaming: false, ...(chunk.usage ? { usage: chunk.usage } : {}) }
@@ -637,24 +665,23 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
    * error 角色的气泡不入库：那是网络层的失败提示，不是对话内容，
    * 存下来下次打开会看到一堆「连接超时」。
    *
-   * 为什么用函数式 setItems 的返回值算 payload，而不是直接读 items：
-   * items 是 React state，从上层闭包里读到的那份可能是旧的。
-   * 这里借用 setItems 的 updater 同步拿到「合并了溢出文本之后」的权威列表，
-   * 算完再把同一个列表写回去。比另开一个 ref 镜像 items 更难写错。
+   * 数据来源是 itemsRef（items 的同步镜像），不是 React state ——
+   * 闭包里的 items 可能是旧的，而 ref 永远是最新的一份。
    *
    * @param pending 还没进 items 的流式尾段（合并节流攒下来的），必须先并进去
    */
   const syncStore = (pending = ''): void => {
     const at = new Date().toISOString()
-    let authoritative: ChatItem[] = []
-    setItems((prev) => {
-      authoritative = pending
-        ? prev.map((it) =>
-            it.id === requestRef.current ? { ...it, text: it.text + pending } : it
-          )
-        : prev
-      return authoritative
-    })
+    /*
+     * 从 ref 读权威列表（而不是靠 updater 的同步求值，见 itemsRef 的说明）。
+     * 有 pending 时先把尾段并进正在流的那条，再落库 —— 否则停止时最后几个字会丢。
+     */
+    const authoritative = pending
+      ? itemsRef.current.map((it) =>
+          it.id === requestRef.current ? { ...it, text: it.text + pending } : it
+        )
+      : itemsRef.current
+    if (pending) updateItems(authoritative)
     const payload = authoritative
       .filter((it) => it.role === 'user' || it.role === 'assistant')
       .map((it) => ({ role: it.role as 'user' | 'assistant', text: it.text, at }))
@@ -674,7 +701,17 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
     const picked = files.filter((file) => file.type.startsWith('image/'))
     if (picked.length === 0) return
     if (!visionOn) {
-      window.alert('当前模型没有开启图片支持。\n\n如果这个模型确实能看图，请到「设置 → AI 模型」里勾选「支持图片输入」。')
+      /*
+       * 不用 window.alert：它会阻塞渲染进程（详见 store/confirm.ts）。
+       * 这只是「告诉你为什么没反应」的通知，不是要用户做决定，
+       * 所以走日志通道 —— 与 App.tsx 里 openInBrowser 失败的处理一致。
+       */
+      useAppStore.getState().pushLog({
+        time: '',
+        level: 'warn',
+        scope: 'ai',
+        text: '当前模型没有开启图片支持。如果这个模型确实能看图，请到「设置 → AI 模型」里勾选「支持图片输入」。'
+      })
       return
     }
     setImageBusy(true)
@@ -750,7 +787,7 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
     const aiItem: ChatItem = { id: requestId, role: 'assistant', text: '', streaming: true }
 
     const history = [...items, userItem].filter((it) => it.role === 'user' || it.role === 'assistant')
-    setItems((prev) => [...prev, userItem, aiItem])
+    updateItems((prev) => [...prev, userItem, aiItem])
     setInput('')
     setRefs([])
     setImages([])
@@ -825,7 +862,7 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
    * 那个是不可逆的，这个只是聊天记录。
    */
   const deleteMessage = (target: ChatItem): void => {
-    setItems((prev) => {
+    updateItems((prev) => {
       const next = prev.filter((it) => it.id !== target.id)
       syncFromItems(next)
       return next
@@ -841,7 +878,7 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
    */
   const editMessage = (target: ChatItem): void => {
     if (busy) return
-    setItems((prev) => {
+    updateItems((prev) => {
       const idx = prev.findIndex((it) => it.id === target.id)
       if (idx < 0) return prev
       const next = prev.slice(0, idx)
@@ -875,7 +912,7 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
     if (askIndex < 0) return
     const question = list[askIndex].text
 
-    setItems((prev) => {
+    updateItems((prev) => {
       const next = prev.slice(0, askIndex)
       syncFromItems(next)
       return next
@@ -896,7 +933,7 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
      * 那时界面就会一直转圈 —— 而这个兜底是本地同步生效的，
      * 用户按了停止就一定看得到停下来。
      */
-    setItems((prev) => prev.map((it) => (it.streaming ? { ...it, streaming: false } : it)))
+    updateItems((prev) => prev.map((it) => (it.streaming ? { ...it, streaming: false } : it)))
     // 主动停止时也要存一次：学生按停止往往正是因为回答已经够用了。
     // 同样要把缓冲区的尾段带上，否则停止时最后几个字会丢
     syncStore(flushDelta())
@@ -925,7 +962,13 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
       // 文件树里没选中任何东西。这里不弹文件选择框 ——
       // 主进程的 openWorkspace 是给「选文件夹」用的，选单个文件得另开一个通道，
       // 而右侧文件树本来就能完成这件事，引导学生去那里点更省事。
-      window.alert('请先在右侧文件树里点选一个文件，再点这里引用。\n也可以直接在文件上右键「插入引用」。')
+      // 同上：通知类信息走日志，不用会阻塞渲染进程的原生弹窗
+      useAppStore.getState().pushLog({
+        time: '',
+        level: 'info',
+        scope: 'ai',
+        text: '请先在右侧文件树里点选一个文件，再点这里引用。也可以直接在文件上右键「插入引用」。'
+      })
       return
     }
     useAppStore.getState().insertReference(selected)

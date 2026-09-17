@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { SPLIT_MAX, SPLIT_MIN } from '@shared/types'
 import AiPanel, { type AiPanelHandle } from './components/AiPanel'
 import DoctorDialog from './components/DoctorDialog'
+import ConfirmHost from './components/ConfirmHost'
 import SettingsPage from './components/SettingsPage'
 import Sidebar from './components/Sidebar'
 import EditorPane from './components/EditorPane'
@@ -575,6 +576,15 @@ export default function App(): JSX.Element {
         overflow / transform 改变定位基准
       */}
       {doctorOpen && <DoctorDialog onClose={() => setDoctorOpen(false)} />}
+
+      {/*
+        应用内确认框（Promise 版）。
+        挂在这里而不是某个面板里：它是全局的「问一句」通道，
+        store 里的异步流程（删文件、关标签、换项目）都要用它。
+        .overlay 是 fixed，但祖先若有 backdrop-filter/transform 会给
+        fixed 创建包含块（踩过），所以放在最外层、不嵌进任何面板。
+      */}
+      <ConfirmHost />
     </div>
   )
 }

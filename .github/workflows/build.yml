@@ -109,6 +109,35 @@ jobs:
             exit 1
           }
 
+      - name: 护栏 - UTF-8 分块解码
+        # 分块读文件时对每块直接 toString('utf8') 会切断多字节字符，
+        # 中文出现乱码，而 AI 会照着乱码写回去。开发机上不容易发现
+        # （要恰好跨在字符边界），所以静态扫一遍。
+        shell: pwsh
+        run: |
+          $out = & npm run check:utf8 2>&1 | Out-String
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) {
+            $tail = (($out -split "`r?`n") | Where-Object { $_ -ne '' } | Select-Object -Last 25) -join '%0A'
+            $tail = $tail -replace '%', '%25' -replace "`r", '%0D'
+            Write-Host "::error title=check:utf8 失败::$tail"
+            exit 1
+          }
+
+      - name: 护栏 - 不用阻塞式弹窗
+        # Electron 里 window.confirm/alert 会阻塞渲染进程并吞掉 mouseup，
+        # 之后整个界面点不中（含输入框），只能重启。
+        shell: pwsh
+        run: |
+          $out = & npm run check:dialog 2>&1 | Out-String
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) {
+            $tail = (($out -split "`r?`n") | Where-Object { $_ -ne '' } | Select-Object -Last 25) -join '%0A'
+            $tail = $tail -replace '%', '%25' -replace "`r", '%0D'
+            Write-Host "::error title=check:dialog 失败::$tail"
+            exit 1
+          }
+
       - name: 护栏 - 平台契约
         # 契约是发给模型的行为约定，失效方式是静默的（少一段、混入时间戳、
         # 被用户文本伪造）。所以单独扫一遍，失败原因走 ::error 注解。

@@ -1,5 +1,6 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from 'node:child_process'
 import { logger } from '../logger'
+import { buildCommandLine, resolveSystemProgram } from '../command-safety'
 
 /**
  * MCP（Model Context Protocol）客户端：stdio 传输。
@@ -113,16 +114,7 @@ export class McpConnection {
     this.buffer = ''
 
     try {
-      /*
-       * shell: false —— 不要让命令经 shell 解析。
-       * 用户填的 args 里若有空格或引号，走 shell 会被二次解释，
-       * 表现为「命令行里能跑、这里报奇怪的错」。直接 exec 更可预期。
-       */
-      const child = spawn(this.config.command, this.config.args, {
-        env: { ...process.env, ...(this.config.env || {}) },
-        stdio: ['pipe', 'pipe', 'pipe'],
-        windowsHide: true
-      })
+      const child = this.spawnServer()
       this.child = child
 
       child.stdout.setEncoding('utf8')
@@ -155,6 +147,45 @@ export class McpConnection {
       this.kill()
       throw err instanceof Error ? err : new Error(String(err))
     }
+  }
+
+  /**
+   * 启动 MCP 服务器进程。
+   *
+   * ## ⚠️ Windows 上必须走 cmd.exe /c
+   *
+   * `npx` / `uvx` 这类命令在 Windows 上实际是 **`.cmd` 包装脚本**。
+   * Node 官方文档写得很明确：`.bat` / `.cmd` **不能**用 `execFile`
+   * 或 `spawn` 的 `shell: false` 启动 —— 会直接 ENOENT / EINVAL。
+   *
+   * 而设置页恰好引导用户填 `npx -y <包名>`，于是 Windows 上
+   * 「按提示配好却永远连不上」，状态停在 error「启动失败」——
+   * 这正是这个功能在最主要的平台上不可用的原因。
+   *
+   * 修法：Windows 上用 `cmd.exe /c "命令行"`。命令行由
+   * `buildCommandLine` 拼（它按 Windows 的引号规则转义，
+   * 与工具执行走的是同一份实现，不另写一套引号逻辑）。
+   *
+   * 非 Windows 保持 `shell: false`：不需要 shell，
+   * 而且能避免参数被二次解释。
+   */
+  private spawnServer(): ChildProcessWithoutNullStreams {
+    const env = { ...process.env, ...(this.config.env || {}) }
+    const base: SpawnOptionsWithoutStdio = { env, windowsHide: true }
+
+    if (process.platform === 'win32') {
+      /*
+       * ComSpec 缺失时退回 'cmd.exe'：这是 Windows 的固定系统路径，
+       * 环境变量被清掉的极端情况下也能work。
+       */
+      const comspec = process.env.ComSpec || process.env.COMSPEC || 'cmd.exe'
+      return spawn(
+        comspec,
+        ['/d', '/s', '/c', buildCommandLine(this.config.command, this.config.args)],
+        { ...base, stdio: ['pipe', 'pipe', 'pipe'] }
+      )
+    }
+    return spawn(this.config.command, this.config.args, { ...base, stdio: ['pipe', 'pipe', 'pipe'] })
   }
 
   /**
@@ -193,12 +224,16 @@ export class McpConnection {
   private fail(reason: string): void {
     this.setState('error', reason, [])
     logger.warn('mcp', `[${this.config.id}] ${reason}`)
-    for (const [, p] of this.pending) {
-      clearTimeout(p.timer)
-      p.reject(new Error(reason))
-    }
-    this.pending.clear()
-    this.child = null
+    /*
+     * ⚠️ 必须真的把进程停掉，不能只把 this.child 置空。
+     *
+     * 这里原来是 `this.child = null` 就完事 —— 于是进程还活着，
+     * 而 stopAllMcp() 遍历时看到 child 已是 null，kill() 直接 return，
+     * **永远杀不掉它**。退出应用后就是一批孤儿 npx/node 进程。
+     *
+     * kill() 内部会自己把 this.child 置空并清 pending，所以直接调它。
+     */
+    this.kill()
   }
 
   /**
@@ -303,11 +338,67 @@ export class McpConnection {
     const child = this.child
     this.child = null
     if (!child) return
-    try {
-      child.kill()
-    } catch {
-      /* 已经退出了 */
+
+    /*
+     * ⚠️ Windows 上必须杀掉**整棵进程树**，不能只 kill 直接子进程。
+     *
+     * 因为 spawnServer 在 Windows 上是 `cmd.exe /d /s /c "npx ..."`，
+     * 直接子进程是 cmd.exe，而真正的 MCP 服务（npx 拉起的 node）是它的孩子。
+     * 只 kill cmd.exe 的话，node 进程会活下来变成孤儿 ——
+     * 占着端口与内存，用户下次启动又拉一个，越积越多。
+     *
+     * exec.ts 早就踩过这个坑（那里的注释写着「比不杀还难查」），
+     * 这里是引入 cmd.exe 包装后必须同步补上的一半。
+     */
+    if (process.platform === 'win32' && child.pid) {
+      const taskkill = resolveSystemProgram('taskkill')
+      if (taskkill) {
+        try {
+          spawn(taskkill, ['/PID', String(child.pid), '/T', '/F'], {
+            windowsHide: true,
+            stdio: 'ignore'
+          }).on('error', () => {
+            /*
+             * taskkill 拉不起来（被删、权限不足）时不能让 error 事件悬空 ——
+             * 未处理的 'error' 会走 uncaughtException，每次都记一条崩溃日志。
+             * 兜底直接杀直接子进程，宁可少杀一层。
+             */
+            try {
+              child.kill()
+            } catch {
+              /* 已经退出了 */
+            }
+          })
+          // 兜底：taskkill 万一没生效（权限、杀软拦截），至少别让 cmd.exe 挂着
+          setTimeout(() => {
+            try {
+              child.kill()
+            } catch {
+              /* ignore */
+            }
+          }, 1500).unref?.()
+        } catch {
+          try {
+            child.kill()
+          } catch {
+            /* ignore */
+          }
+        }
+      } else {
+        try {
+          child.kill()
+        } catch {
+          /* ignore */
+        }
+      }
+    } else {
+      try {
+        child.kill()
+      } catch {
+        /* 已经退出了 */
+      }
     }
+
     for (const [, p] of this.pending) {
       clearTimeout(p.timer)
       p.reject(new Error('连接已关闭'))

@@ -3,7 +3,7 @@ import type { EditorSession, OpenTab } from '@shared/types'
 import { EDITOR_TABS_MAX } from '@shared/types'
 import { languageFromPath } from '@shared/language'
 import { baseName, parentDirOf } from './explorer-helpers'
-import { askUnsaved } from './dialogs'
+import { askUnsaved } from './confirm'
 import type { AppState, EditorSlice, EditorTab } from './types'
 
 /**
@@ -32,6 +32,8 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
         content: loaded.content,
         language: loaded.language || languageFromPath(loaded.path),
         dirty: false,
+        // 主进程会为超大文件返回占位说明，这个标记决定它能不能被保存
+        truncated: Boolean(loaded.truncated),
         line,
         column,
         aiTouchedAt: ''
@@ -68,6 +70,25 @@ export const createEditorSlice: StateCreator<AppState, [], [], EditorSlice> = (s
   async saveActive() {
     const tab = get().tabs.find((t) => t.path === get().activePath)
     if (!tab) return
+    /*
+     * ★ 内容不完整的标签一律不许保存。
+     *
+     * 超大文件打开时，主进程给的是「// 文件过大…已跳过加载。」这段**占位文本**。
+     * 不拦的话，用户按一下 Ctrl+S 就会用这句注释覆盖掉原文件 ——
+     * 不可逆，而且他完全不知道发生了什么（界面看起来就是「保存成功」）。
+     *
+     * 这里必须拦住，而不是指望用户自己注意：界面上的内容与真实文件
+     * 长得一样，没有任何视觉线索提示「这不是真内容」。
+     */
+    if (tab.truncated) {
+      get().pushLog({
+        time: '',
+        level: 'warn',
+        scope: 'file',
+        text: `${baseName(tab.path)} 太大，只加载了说明文字，不能保存（保存会覆盖原文件）。请用别的编辑器打开。`
+      })
+      return
+    }
     try {
       await window.api.writeFile(tab.path, tab.content)
       set({
