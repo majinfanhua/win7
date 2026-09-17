@@ -51,6 +51,23 @@ export interface AIConfig {
    */
   supportsVision: boolean
   /**
+   * 是否校验中转站的 HTTPS 证书。**默认 true**。
+   *
+   * 为什么要留这个开关：中转站里有一批是用**自签名证书**跑的
+   * （学校/公司内网自建、或图省事没买证书的小站）。此时 Chromium 会在
+   * 建连阶段直接拒掉请求，报 `net::ERR_CERT_AUTHORITY_INVALID` ——
+   * 而那条错误以前只在界面上显示成「网络错误」，
+   * 学生既看不懂、也没有任何地方能把它改通。
+   *
+   * 默认开：**关掉校验等于对中间人攻击完全不设防**，密钥与对话内容
+   * 都可能被截获。所以这是一个「知道自己在做什么才去关」的开关，
+   * 界面上的文案必须把代价说清楚，而不是让它看起来像个普通优化项。
+   *
+   * 只影响 AI 请求（net.request 走的 defaultSession），
+   * 不影响工作区文件、也不影响浏览器预览那条路。
+   */
+  verifyTls: boolean
+  /**
    * 上下文窗口上限（token）。留 0 表示按内置的模型名表自动判断。
    *
    * 为什么需要：中转站的 /models 只给模型名、不给窗口大小，
@@ -872,6 +889,12 @@ export const DEFAULT_CONFIG: AppConfig = {
     extraHeaders: {},
     // 默认关：见 AIConfig.supportsVision 的注释（猜错的代价不对称）
     supportsVision: false,
+    /*
+     * 默认开：证书校验是 HTTPS 的全部意义所在，关掉它等于把密钥
+     * 与对话内容暴露给任何能插进链路的人。只有中转站用自签名证书
+     * 且用户明确知道自己在做什么时，才该去设置里关掉它。
+     */
+    verifyTls: true,
     // 0 = 交给内置模型表判断。填了就以填的为准
     contextWindow: 0,
     maxOutputTokens: 0

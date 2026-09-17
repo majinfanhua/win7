@@ -1,4 +1,3 @@
-import type { FileNode } from '@shared/types'
 import { useAppStore } from '../../store/useAppStore'
 
 /**
@@ -80,15 +79,6 @@ export function fileBadge(name: string): { text: string; tone: string } {
     default:
       return { text: '·', tone: 'plain' }
   }
-}
-
-/** 人类可读的大小。用于节点右侧的次要信息（只在独立面板里显示） */
-export function humanSize(node: FileNode): string {
-  if (node.kind === 'dir') return ''
-  const size = node.size || 0
-  if (size < 1024) return `${size} B`
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
-  return `${(size / 1024 / 1024).toFixed(1)} MB`
 }
 
 /**

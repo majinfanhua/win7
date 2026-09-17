@@ -423,7 +423,20 @@ const { scanSecrets, hasSecret, redactSecrets, describeSecretBlock } = secret
       if (
         entry.name === 'node_modules' ||
         entry.name === '.git' ||
-        entry.name.startsWith('参考项目')
+        /*
+         * 构建产物与参考资料跳过。
+         *
+         * `out/` 是 electron-vite 的产物、`release/` 是打包结果 ——
+         * 两者都在 `.gitignore` 里，扫描它们毫无意义，却会在「刚构建完
+         * 就跑这个护栏」时因为产物里的字符串报假失败。
+         *
+         * `参考*` 与 `ref` 对应 `.gitignore` 里那两条兜底规则：
+         * 那些是**别人的仓库**，本地阅读用，不进历史，也不该被扫。
+         */
+        entry.name === 'out' ||
+        entry.name === 'release' ||
+        entry.name.startsWith('参考') ||
+        entry.name === 'ref'
       ) {
         continue
       }

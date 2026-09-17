@@ -23,12 +23,6 @@
   padding: 2px 0;
 }
 
-/* 独立面板里按钮可以松一点，也给排序下拉留出显示文字的空间 */
-.tree-tools.is-expanded {
-  gap: 3px;
-  flex-wrap: wrap;
-}
-
 .tree-tool {
   display: grid;
   place-items: center;
@@ -107,19 +101,6 @@
 
 .tree-sort-select:hover {
   background: var(--bubble-ai);
-}
-
-.tree-tools.is-expanded .tree-sort-select {
-  max-width: 120px;
-}
-
-/* 节点右侧的次要信息（大小）。只在独立面板里渲染 */
-.tree-meta {
-  flex: none;
-  margin-left: auto;
-  padding-left: 10px;
-  font-size: 11px;
-  color: var(--text-3);
 }
 
 /* 空态里的两个主按钮 */

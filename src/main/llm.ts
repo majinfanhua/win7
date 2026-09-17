@@ -4,6 +4,7 @@ import { chatEndpoint, describeHttpError } from '../shared/ai-endpoint'
 import { textOf, type ChatContent, type AiUsage } from '../shared/types'
 import { getConfig } from './config'
 import { logger } from './logger'
+import { describeNetworkError } from './tls'
 
 /**
  * 一次性的模型调用（非流式）。
@@ -223,11 +224,11 @@ export function callModelOnce(opts: CallOptions): Promise<LlmResult> {
         }
       })
       response.on('error', (err: Error) => {
-        done({ ok: false, text: '', usage: emptyUsage(), error: `网络错误: ${err.message}` })
+        done({ ok: false, text: '', usage: emptyUsage(), error: describeNetworkError(err.message) })
       })
     })
     request.on('error', (err: Error) => {
-      done({ ok: false, text: '', usage: emptyUsage(), error: `网络错误: ${err.message}` })
+      done({ ok: false, text: '', usage: emptyUsage(), error: describeNetworkError(err.message) })
     })
 
     logger.debug('llm', `非流式请求：${opts.messages.length} 条消息，模型 ${cfg.model}`)

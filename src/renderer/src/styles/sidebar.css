@@ -385,31 +385,23 @@
  * ========================================================================== */
 
 /*
- * 独立成栏时的尺寸。
- * 嵌进侧栏后由 .filetree.is-embedded 覆盖掉宽度与左边框 ——
- * 那时它只是侧栏里的一个纵向片段，不该再画自己的分界线。
- */
-.filetree {
-  position: relative;
-  width: 264px;
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  background: var(--surface-solid);
-  border-left: 1px solid var(--border);
-}
-
-/*
- * 嵌在侧栏里的形态。
+ * 文件树：嵌在左侧栏里的一个纵向片段。
+ *
+ * **只有一个形态**。曾经还有一个占满内容区的「资源管理器」整页视图，
+ * 靠 `.filetree.is-embedded` 这个修饰类区分两套尺寸 —— 那个视图已删，
+ * 于是修饰类也失去了意义（它永远为真）。这里把两份规则合成一份：
+ * 宽度交给侧栏的布局、不画自己的左边框。
+ *
  * flex:1 + min-height:0 让它吃掉侧栏剩余的全部高度，
  * 而不是按内容高度撑开 —— 否则文件多的时候会把侧栏顶出滚动条。
  */
-.filetree.is-embedded {
+.filetree {
+  position: relative;
   width: auto;
   flex: 1;
+  display: flex;
+  flex-direction: column;
   min-height: 0;
-  border-left: none;
   background: transparent;
 }
 

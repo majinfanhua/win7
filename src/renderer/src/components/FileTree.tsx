@@ -65,7 +65,7 @@ export default function FileTree(): JSX.Element {
      * 再画一遍就是同一个标签出现两次。工具栏始终保留 ——
      * 它是「新建文件」唯一可发现的位置。
      */
-    <section className="filetree is-embedded">
+    <section className="filetree">
 
       <div className="tree-root-row">
         <button
@@ -125,7 +125,7 @@ export default function FileTree(): JSX.Element {
         )}
 
         {tree.sortedRoot.map((node) => (
-          <TreeNode key={node.path} node={node} depth={0} detailed={false} />
+          <TreeNode key={node.path} node={node} depth={0} />
         ))}
       </div>
 

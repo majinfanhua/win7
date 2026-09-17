@@ -13,13 +13,13 @@ AI 不只是聊天：它能读写工作区里的文件，在 Win10/11 上还能�
 2. **不能上 Electron 23+**：那版起 Chromium 110，Win7 跑不起来。
    **打包只走 GitHub Actions**（本地 `npm run dist:win` 会被 `scripts/guard-ci.mjs` 拦住）——
    交叉打包的产物与 CI 不一致，测了没意义。本地只做三件静态检查。
-3. **单文件不超 800 行**。当前最长的是 `store/tree-slice.ts`（407 行），已在红线内。
+3. **单文件不超 800 行**（这是目标，不是现状 —— 见下面的欠账）。
    `useAppStore.ts` 曾是 1100 行，已拆成三个 slice（session / tree / editor）——
    **别再合回去**：改文件树的移动逻辑不该碰到会话逻辑，这是拆它的全部理由。
    依赖方向是单向的 `editor → tree → session`，反向调用会让循环 import 爆炸。
    已经拆过、同样**别再合回去**的：
    - `store/explorer-helpers.ts`：文件树/排序/标签恢复的纯函数
-   - `store/dialogs.ts`：`askUnsaved`（tree 与 editor 都要用，避免互相 import）
+   - `store/confirm.ts`：`askConfirm` / `askUnsaved`（tree 与 editor 都要用，避免互相 import）
    - `dev-stub-fs.ts`：浏览器预览的内存文件系统
    - `components/file-tree/`：文件树的行为（`useFileTreeController`）与外壳分开
    - `main/shell.ts`：解释器定位与临时脚本（capabilities 与 exec 共用）
@@ -27,8 +27,15 @@ AI 不只是聊天：它能读写工作区里的文件，在 Win10/11 上还能�
    - `main/runtimes.ts`：python / node 等运行时探测
    注意 `parentOf` 已经从 useAppStore 删掉、统一用 `explorer-helpers` 的
    `parentDirOf`（import 时 as 重命名成 parentOf）—— 曾经两份实现并存过。
-   样式已按界面区块拆成 `styles/` 下的十二份，最长的是 `sidebar.css`（620 行）——
+   样式已按界面区块拆成 `styles/` 下的十三份 ——
    **层叠顺序写在 `styles/index.css`，动样式前先看那份注释。**
+
+   ⚠️ **当前有 8 个文件超了 800 行**（这份文档以前写着「最长 407 行」，
+   是过期信息）。按严重程度：`components/AiPanel.tsx`（1867）、
+   `main.tsx`（1402，大半是自检断言）、`components/SettingsPage.tsx`（1259）、
+   `styles/chat.css`（1011）、`main/ipc/ai.ts`（994）、`shared/types.ts`（929）、
+   `dev-api-stub.ts`（911）、`scripts/check-profile-io.mjs`（890）。
+   **动这几个文件时优先考虑顺手拆一刀**，别再往里加。
 
 4. **Electron 里 `window.prompt` 不可用**（调用即抛错、不弹框）。
    任何「让用户输入一个名字」的地方都必须走应用内弹层：
@@ -54,10 +61,13 @@ npm run check:watch  # 纯 Node 校验文件监视时序
 
 # 自检支持追加参数，用来复现 CI 的那几次不同配置
 npm run smoke -- --capability-profile=win7
-
-# 打包收尾（CI 里由 afterAllArtifactBuild 钩子自动跑，这里是手工补跑）
-npm run zip:wrap     # 扫 release/ 下的 zip，套一层顶层文件夹；幂等
 ```
+
+> **打包收尾（给 zip 套一层顶层文件夹）没有本地命令。**
+> 它只由 electron-builder 的 `afterAllArtifactBuild` 钩子调用，
+> 想验那套逻辑请跑 `npm run check:zipwrap`（自造 zip 做字节级断言，
+> 不碰打包、不需要产物）。理由见下面「打包产物」一节 ——
+> 本地开发机是 Linux，而打包只出 Windows 包。
 
 ## CI 失败时怎么定位
 
@@ -100,8 +110,10 @@ config.capability（人愿意放开到哪）
    =  发给模型的工具表（tools/meta.ts 的 TOOL_SCHEMAS 过滤后）
 ```
 
-结果是：**Win7 与 Win10/11 现在都是 12 个工具**（文件 8 + 命令 4）。
-同一份包、同一套代码，差的是探测结果。
+结果是：**Win7 与 Win10/11 现在都是 18 个工具**
+（文件 8 + 命令 4 + 记忆/会话 4 + 技能 2）。
+同一份包、同一套代码，差的是探测结果 —— 命令类那 4 个在没找到
+cmd.exe 的机器上会被过滤掉，其余 14 个不依赖外部程序。
 
 ⚠️ 这里改过一次判断：以前 Win7 分支**直接写死** `commandExec = false`，
 理由是「只有 cmd.exe，PowerShell 要装 WMF」—— 那个理由站不住，
@@ -152,8 +164,8 @@ cmd.exe 在所有 Windows 上都有，python/node 装好会写进 PATH。
 | `scripts/zip-wrap-folder.mjs` | 打包收尾：给 zip 套一层顶层文件夹 |
 | `renderer/src/image-input.ts` | 图片压缩（canvas → JPEG，长边 1568）|
 | `renderer/src/snippets.ts` | `!` / `css` / `js` 等触发词片段，与 file-templates 共用数据 |
-| `renderer/src/components/PreviewPane.tsx` | 内嵌 HTML 预览（iframe + 已有静态服务）|
 | `renderer/src/components/LogDrawer.tsx` | 底部日志抽屉 |
+| `main/tls.ts` | AI 请求的 HTTPS 证书校验策略（开关默认开，关掉只放行中转站那一个域名）|
 
 **搜索工具的两条约束**（改之前先看 `search-tools.ts` 的头注释）：
 不引 `fast-glob` / `minimatch`（依赖链长、启动开销），
@@ -161,11 +173,22 @@ cmd.exe 在所有 Windows 上都有，python/node 装好会写进 PATH。
 自己实现的 `compileGlob` 支持 `*` `?` `**` `[abc]`，
 **不支持 `{a,b}` 时明确报错而不是静默当字面量**。
 
-**预览面板的布局契约**（最容易踩的坑）：`.stage` 里编辑器是 `--split`、
-对话是 `(1 - --split)`，两者**加起来正好 100%**。预览作为第三栏
-**必须从 `--split` 里再切一刀**（`--preview-share`），否则总宽超过 100% →
-横向滚动条 + 对话栏被挤出可视区，而且不报错。share 还要夹住：
-按「对话最多让出一半」来夹，不然 split 拉到上限时对话只剩 15%。
+**内嵌预览面板已删除**（顶栏那个第三栏）。现在「预览文件」只有一条路：
+右键 HTML → 用系统浏览器打开，走的是绑在 `127.0.0.1` 的临时静态服务。
+所以 `--preview-share`、`PreviewPane.tsx`、`wsPreviewUrl` 这些都不存在了 ——
+**看到旧文档提到它们时，那是过期内容，不是要你去实现的东西**。
+
+**AI 请求的 HTTPS 证书校验**（`main/tls.ts`）：
+默认**开**。中转站用自签名证书时 Chromium 会直接拒连
+（`net::ERR_CERT_AUTHORITY_INVALID`），用户可以在设置里关掉校验 ——
+但关掉之后**只对当前配置的那个中转站域名**放行不可信证书，
+其它域名照旧拒绝。两条容易写错的地方：
+1. `config.ts` 的 normalize 里必须是 `input.verifyTls !== false` 而不是
+   `Boolean(...)`：老配置没有这个字段，`Boolean(undefined)` 会得到 false，
+   等于**给升级上来的用户静默关掉证书校验**。
+2. `session.defaultSession` 在 app ready 之前不可访问，而这个策略是在
+   `initConfig()`（main 最前面）里装的 —— 所以 `tls.ts` 会先记下来、
+   挂 `app.whenReady()` 再落地，不能直接同步装。
 
 **图片输入只在最后这一轮带图**：历史消息只发文本。base64 有几 MB，
 每轮重发会让同一张图被计费十几次，部分中转站还会因请求体过大直接 413。
@@ -220,47 +243,49 @@ Windows 7-Zip 21.07）与「7za 的文本输出」（按控制台代码页输出
 
 | 文件 | 行数 | 管什么 |
 |---|---|---|
-| `index.css` | 46 | 入口。只放 @import 与顺序说明 |
-| `base.css` | 347 | 主题变量、基础元素、控件、布局骨架 |
-| `chat.css` | 450 | 对话面板：消息气泡、空态/欢迎、输入区、引用胶囊 |
-| `dialog.css` | 106 | 弹窗与表单原语 |
-| `settings.css` | 397 | 设置页（已并入原 settings-extra.css）|
+| `index.css` | 52 | 入口。只放 @import 与顺序说明 |
+| `base.css` | 362 | 主题变量、基础元素、控件、布局骨架 |
+| `ui.css` | 134 | 通用原语（自绘下拉 `Select`）。**紧跟 base**：依赖它的变量，又要被后面的组件样式覆盖 |
+| `chat.css` | 1011 | 对话面板：消息气泡、空态/欢迎、输入区、引用胶囊、会话抬头、授权卡片。**已超 800 行，再加东西前先拆** |
+| `dialog.css` | 236 | 弹窗与表单原语（含 `ConfirmDialog` 的实心危险按钮）|
+| `settings.css` | 772 | 设置页（已并入原 settings-extra.css）|
 | `dormant.css` | 169 | 暂未渲染的界面（输出）。**看着没人用也不要删** —— 里面的 `.report` 系列正被 `DoctorDialog` 用着 |
-| `sidebar.css` | 618 | 左侧栏：导航、文件树、右键菜单、拖拽落点 |
-| `explorer.css` | 514 | 文件树工具栏 / 排序 / 面包屑 / 资源管理器整页视图 / 弹层补充（含 `MoveDialog`）。**必须在 sidebar.css 之后、responsive.css 之前** |
+| `sidebar.css` | 734 | 左侧栏：导航、文件树、右键菜单、拖拽落点 |
+| `explorer.css` | 290 | 文件树工具栏 / 排序 / 弹层补充（含 `MoveDialog`）。**必须在 sidebar.css 之后、responsive.css 之前** |
 | `logs.css` | 71 | 底部日志抽屉外壳。**必须在 dormant.css 之后**（那里面已有一份 `.logs`）|
-| `topbar.css` | 156 | 顶栏 |
-| `responsive.css` | 77 | 所有 `@media`。**必须最后** |
-| `editor.css` | 108 | 编辑器面板。**必须在拆分文件之后** |
+| `topbar.css` | 191 | 顶栏 |
+| `responsive.css` | 51 | 所有 `@media`。**必须最后** |
+| `editor.css` | 102 | 编辑器面板。**必须在拆分文件之后** |
 
 改样式前必读的四条顺序约束（也写在 `index.css` 里）：`base` 最前、
 `responsive` 在拆分文件里最后、`editor.css` 在所有拆分文件之后、
 `explorer.css` 在 `sidebar.css` 之后但在 `responsive.css` 之前。
 另外 `.nav-item` 在 `settings.css` 与 `sidebar.css` 里各有一份，靠顺序共存。
 
-### 文件树 / 资源管理器
+### 文件树
 
-本轮的入口与落点，改之前先理清这三句话：
+**只有一个形态**：嵌在左侧栏的「文件树」分组里。
+曾经还有一个占满内容区的整页「资源管理器」视图（`ExplorerPanel.tsx`），
+已按用户要求**彻底删除** —— 它与侧栏那份是同一逻辑的第二套皮，
+两边都要跟着改，改一边漏一边就出现行为不一致。
+
+改之前先理清这两句话：
 
 - **行为只有一份**：全部交互（右键菜单、新建/重命名弹层、排序、落点计算、面包屑）
-  在 `components/file-tree/useFileTreeController.ts` 里；两个外壳只负责各自的头与工具栏。
-- **两种形态共用同一份状态**：侧栏嵌的那份（`FileTree embedded`，由 `Sidebar.tsx` 渲染）
-  与内容区整页视图（`components/file-tree/ExplorerPanel.tsx`，`App.tsx` 的 `View='explorer'`）
-  读写同一个 zustand store，不存在「两套树逻辑」。
+  都在 `components/file-tree/useFileTreeController.ts` 里；外壳只负责头与工具栏。
 - **右键菜单的落点语义**（`resolveParentDir`）：右键文件夹 → 进它；右键文件 → 它同级；右键空白 → 项目根。
   这是「建完文件夹接着在里面建 html」能成立的地方，改动前先看那段注释。
 
 | 文件 | 管什么 |
 |---|---|
-| `components/FileTree.tsx` | 装配容器（嵌入 / 非嵌入两种形态，快捷键只挂在嵌入态）|
+| `components/FileTree.tsx` | 装配容器（快捷键挂在这里）|
 | `components/file-tree/TreeNode.tsx` | 递归节点。**保留 `data-path` / `data-kind` / `.tree-node` / `paddingLeft: 6 + depth*13`**，自检脚本依赖 |
 | `components/file-tree/TreeToolbar.tsx` | 工具栏按钮 + 排序下拉 |
 | `components/file-tree/tree-menu.ts` | 菜单项定义与「失效置灰」规则（纯函数）|
 | `components/file-tree/TreeOverlays.tsx` | 右键菜单浮层 + 新建/重命名/移动弹层 |
 | `components/file-tree/useFileTreeController.ts` | 上面这些的全部行为 |
 | `components/file-tree/MoveDialog.tsx` | 「移动到…」目录选择器（拖拽的等价备选路径）|
-| `components/file-tree/ExplorerPanel.tsx` | 内容区整页视图外壳（面包屑 + 树 + 信息栏）|
-| `components/file-tree/shared.ts` | 扩展名 / 基名 / 图标短标签 / 大小 / `isDescendantOf` |
+| `components/file-tree/shared.ts` | 扩展名 / 基名 / 图标短标签 / `isDescendantOf` |
 | `file-templates.ts` | 新建文件时的初始骨架（HTML / CSS / JS / MD / JSON / TXT）|
 | `store/explorer-helpers.ts` | `sortNodesBy` / `extOf` / `baseName` / `parentDirOf` / `tabsFromSession` 等纯函数 |
 | `dev-stub-fs.ts` | 浏览器预览的内存文件系统（`files` / `dirs` / `readDirSync` / `stubMtime`）|

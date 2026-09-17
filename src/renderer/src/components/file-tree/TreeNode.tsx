@@ -1,6 +1,6 @@
 import type { FileNode } from '@shared/types'
 import { useAppStore } from '../../store/useAppStore'
-import { fileBadge, humanSize, isDescendantOf } from './shared'
+import { fileBadge, isDescendantOf } from './shared'
 
 /**
  * 递归节点。
@@ -24,8 +24,6 @@ import { fileBadge, humanSize, isDescendantOf } from './shared'
 type Props = {
   node: FileNode
   depth: number
-  /** 独立面板里显示大小与时间，嵌在侧栏里不显示（侧栏太窄） */
-  detailed?: boolean
 }
 
 /**
@@ -38,7 +36,7 @@ type Props = {
  */
 export const TREE_DRAG_TYPE = 'application/x-hangke-tree-path'
 
-export default function TreeNode({ node, depth, detailed = false }: Props): JSX.Element {
+export default function TreeNode({ node, depth }: Props): JSX.Element {
   const expanded = useAppStore((s) => Boolean(s.expanded[node.path]))
   const children = useAppStore((s) => s.childMap[node.path])
   const activePath = useAppStore((s) => s.activePath)
@@ -85,7 +83,7 @@ export default function TreeNode({ node, depth, detailed = false }: Props): JSX.
           .join(' ')}
         style={{ paddingLeft: 6 + depth * 13 }}
         onClick={onClick}
-        title={detailed ? node.path : undefined}
+        title={node.path}
         data-path={node.path}
         data-kind={node.kind}
         draggable
@@ -134,14 +132,11 @@ export default function TreeNode({ node, depth, detailed = false }: Props): JSX.
           </span>
         )}
         <span className="tree-name">{node.name}</span>
-        {detailed && (
-          <span className="tree-meta">{isDir ? '' : humanSize(node)}</span>
-        )}
       </div>
       {isDir &&
         expanded &&
         (children || []).map((child) => (
-          <TreeNode key={child.path} node={child} depth={depth + 1} detailed={detailed} />
+          <TreeNode key={child.path} node={child} depth={depth + 1} />
         ))}
     </>
   )

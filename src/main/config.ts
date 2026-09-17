@@ -25,6 +25,7 @@ import {
 import { AI_NAME_MAX, HABITS_MAX, USER_NAME_MAX } from '../shared/system-doc'
 import { logger } from './logger'
 import { setPermissionMode } from './permissions'
+import { applyTlsPolicy } from './tls'
 
 let cached: AppConfig | null = null
 let configPath = ''
@@ -101,6 +102,15 @@ function normalizeAi(raw: unknown): AppConfig['ai'] {
     extraHeaders:
       input.extraHeaders && typeof input.extraHeaders === 'object' ? input.extraHeaders : {},
     supportsVision: Boolean(input.supportsVision),
+    /*
+     * 证书校验开关。
+     *
+     * ⚠️ 这里**必须**是 `!== false` 而不是 `Boolean(...)`：
+     * 老版本 config.json 里没有这个字段，`Boolean(undefined)` 会得到 false，
+     * 于是升级上来的用户会在毫不知情的情况下被静默关掉证书校验 ——
+     * 安全性反向降级，而且没有任何提示。缺省必须是「开」。
+     */
+    verifyTls: input.verifyTls !== false,
     contextWindow: Math.max(0, Number(input.contextWindow) || 0),
     maxOutputTokens: Math.max(0, Number(input.maxOutputTokens) || 0)
   }
@@ -393,6 +403,14 @@ export function initConfig(): AppConfig {
   }
   // 把落盘的权限模式灌进权限层 —— 那才是判定边界时真正读的地方
   setPermissionMode(cached.permission.mode)
+  /*
+   * 证书校验策略同样要按落盘的值装一次。
+   *
+   * 与 setPermissionMode 同一个模式：**落盘的值必须在启动时就生效**，
+   * 而不能等用户再点一次「保存」。漏了这里的表现是
+   * 「设置里明明关着校验，重启后又连不上自签证书的中转站」。
+   */
+  applyTlsPolicy(cached.ai.verifyTls, cached.ai.baseUrl)
   return cached
 }
 
@@ -417,6 +435,16 @@ export function setConfig(patch: Partial<AppConfig>): AppConfig {
    * 所以这里无条件调用是安全的（同值调用直接返回）。
    */
   setPermissionMode(next.permission.mode)
+  /*
+   * 证书开关与中转站地址都要立刻生效。
+   *
+   * 地址也算在里面：`verifyTls=false` 时放行的是**当前配置的那个域名**，
+   * 用户换了中转站却不重装 proc 的话，新域名会被误拒、旧域名的放行还挂着。
+   * 但这条调用本身很便宜 —— `applyTlsPolicy` 内部会比对「装上去的那份」，
+   * 值没变就直接返回（不重装、更不会去断在飞的连接）。
+   * 所以这里无条件调用是安全的。
+   */
+  applyTlsPolicy(next.ai.verifyTls, next.ai.baseUrl)
   return next
 }
 

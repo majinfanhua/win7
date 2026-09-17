@@ -48,13 +48,10 @@
  * ## 幂等
  *
  * 已经套好的包再跑一次不会被套成两层：检测到「顶层只有一个目录、
- * 且名字就是目标名」就直接跳过。手工重跑（`npm run zip:wrap`）安全。
+ * 且名字就是目标名」就直接跳过 —— 打包链路上被重复调用是安全的。
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
-
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 /* ── zip 结构常量 ─────────────────────────────────────────── */
 const SIG_LOCAL = 0x04034b50
@@ -338,49 +335,43 @@ function compSizeOf(buf, entry) {
   return buf.readUInt32LE(entry.cdOffset + 20)
 }
 
-/** 收集要处理的 zip：优先用构建结果给的产物列表 */
-function zipTargets(artifactPaths) {
-  const list = Array.isArray(artifactPaths) ? artifactPaths : []
-  const fromBuild = list.filter(
-    (p) => typeof p === 'string' && p.toLowerCase().endsWith('.zip') && fs.existsSync(p)
-  )
-  if (fromBuild.length > 0) return fromBuild
-
-  /*
-   * 没拿到构建结果（手工跑 `npm run zip:wrap`）时扫 release/。
-   *
-   * 目录从 electron-builder.yml 的 directories.output 读，不写死 'release'：
-   * 那个值改过一次就会对不上，而症状是「脚本说没有 zip，产物其实在那儿」，
-   * 排查起来要绕一圈。读不到就退回默认值。
-   */
-  const dir = path.join(root, readOutputDir())
-  if (!fs.existsSync(dir)) return []
-  return fs
-    .readdirSync(dir)
-    .filter((f) => f.toLowerCase().endsWith('.zip'))
-    .map((f) => path.join(dir, f))
-}
-
-/** 从 electron-builder.yml 里取 directories.output */
-function readOutputDir() {
-  try {
-    const yml = fs.readFileSync(path.join(root, 'electron-builder.yml'), 'utf8')
-    const match = /^\s*output:\s*(\S+)\s*$/m.exec(yml)
-    return match ? match[1].replace(/^['"]|['"]$/g, '') : 'release'
-  } catch {
-    return 'release'
-  }
-}
-
 /**
  * electron-builder 的钩子入口（配置见 electron-builder.yml）。
  *
- * 返回 `[]` 是**刻意**的：这个钩子可以把「新增的产物」交给发布流程，
- * 而这里只是原地改了已有的 zip，没有新增任何文件。返回 zip 列表的话，
- * electron-builder 会以为它们是新产物，走一遍发布调度 —— 没意义。
+ * ## 只能在打包流程里跑
+ *
+ * 这个函数**必须**由 electron-builder 调用并传入 `artifactPaths`。
+ * 没有产物列表就直接报错，不提供「扫 release/ 目录」这类本地入口 ——
+ * 本项目约定只通过 GitHub Actions 打包（见 `scripts/guard-ci.mjs`），
+ * 而这条约定是有代价换来的：
+ *
+ *   这个功能的第一版曾提供本地入口，我就是拿**本地**跑出来的绿灯
+ *   当成验证通过，结果 CI 上连挂两次 ——
+ *   一次是外部 7za 的版本/代码页差异，一次是 ESM 动态 import 的
+ *   Windows 路径。两次本地都测不出来，因为**打包这件事本身
+ *   在开发机（Linux）上跟 runner（Windows）不是一回事**。
+ *
+ * 所以现在把入口收窄成一个：electron-builder 的钩子。
+ * 想验这套逻辑，跑 `npm run check:zipwrap` —— 它用自造的 zip 做断言，
+ * 不碰打包、不需要产物、两边平台结果一致。
+ *
+ * ## 为什么返回空数组
+ *
+ * 这个钩子可以把「新增的产物」交给发布流程。这里只是原地改了已有的 zip，
+ * 没有新增任何文件；返回 zip 列表的话 electron-builder 会以为它们是新产物，
+ * 走一遍发布调度 —— 没意义。
  */
 export async function afterAllArtifactBuild(buildResult) {
-  const zips = zipTargets(buildResult && buildResult.artifactPaths)
+  const paths = buildResult && buildResult.artifactPaths
+  if (!Array.isArray(paths) || paths.length === 0) {
+    throw new Error(
+      'zip-wrap 只能由 electron-builder 的 afterAllArtifactBuild 钩子调用（需要 artifactPaths）。\n' +
+        '本项目不在本地打包，验证请用：npm run check:zipwrap'
+    )
+  }
+  const zips = paths.filter(
+    (p) => typeof p === 'string' && p.toLowerCase().endsWith('.zip') && fs.existsSync(p)
+  )
   if (zips.length === 0) {
     console.log('[zip-wrap] 本次构建没有 zip 产物，跳过')
     return []
@@ -390,19 +381,3 @@ export async function afterAllArtifactBuild(buildResult) {
 }
 
 export default afterAllArtifactBuild
-
-// 允许单独跑：node scripts/zip-wrap-folder.mjs [zip...]
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const args = process.argv.slice(2)
-  const targets = args.length > 0 ? args.map((p) => path.resolve(p)) : zipTargets(null)
-  if (targets.length === 0) {
-    console.error('[zip-wrap] 没有找到任何 zip（默认看 release/ 目录，也可以直接传路径）')
-    process.exit(1)
-  }
-  try {
-    for (const zip of targets) wrapZip(zip)
-  } catch (err) {
-    console.error(`[zip-wrap] 失败：${err instanceof Error ? err.message : String(err)}`)
-    process.exit(1)
-  }
-}

@@ -89,6 +89,10 @@ export function registerProfileIpc(): void {
    *
    * 失败**不提示**用户：这是补做，不是他刚点的动作。
    * 提示只会变成一条看不懂的报错。
+   *
+   * 实现见下面的 scheduleArchiveCatchUp —— 它单独导出而不是塞进这里，
+   * 因为「注册 IPC」与「开机做一件后台事」是两个不同的时机，
+   * 混在一个函数里会让 index.ts 的调用顺序变得不好读。
    */
 }
 

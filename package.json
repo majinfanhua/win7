@@ -28,7 +28,6 @@
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "smoke": "node scripts/smoke.mjs",
     "dist:win": "node scripts/guard-ci.mjs && electron-builder --win --x64 --ia32 --publish never",
-    "zip:wrap": "node scripts/zip-wrap-folder.mjs",
     "check:profile": "node scripts/check-profile.mjs",
     "check:profileio": "node scripts/check-profile-io.mjs",
     "check:timeout": "node scripts/check-idle-timeout.mjs",

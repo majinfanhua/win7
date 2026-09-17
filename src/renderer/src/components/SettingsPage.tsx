@@ -498,6 +498,39 @@ export default function SettingsPage({
                 </div>
 
                 {/*
+                  证书校验开关。
+
+                  默认**开**，而且这里的勾选语义刻意选「校验」而不是
+                  「允许不安全」：让默认状态是「勾上」，用户在看到它时
+                  不需要做任何判断。反过来写的话，一个默认未勾选的
+                  「允许不安全证书」看起来像是「推荐去勾」，方向就错了。
+
+                  关掉它等于对中间人攻击完全不设防 —— API Key 与整段
+                  对话都会暴露给能插进链路的人。所以下面的提示必须把
+                  代价说清楚，并且指出「只在确认可信时才关」。
+                */}
+                <div className="field">
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={draft.ai.verifyTls}
+                      onChange={(e) => patchAi({ verifyTls: e.target.checked })}
+                    />
+                    <span>校验中转站的 HTTPS 证书</span>
+                  </label>
+                  <div className="hint">
+                    保持勾选。如果中转站报
+                    <code>ERR_CERT_AUTHORITY_INVALID</code>
+                    这类证书错误（自建/自签名证书的中转站常见），
+                    确认该地址可信之后可以取消勾选再重试。
+                    <strong>
+                      取消后不再验证证书，密钥与对话内容可能被中间人截获
+                    </strong>
+                    —— 只在你自己搭的、或完全信任的中转站上这么做。
+                  </div>
+                </div>
+
+                {/*
                   图片支持是独立开关，不做自动探测。
                   「这个模型能不能看图」中转站的 /models 接口不会告诉你，
                   只能从模型名猜 —— 而模型名千奇百怪，猜错的代价不对称：

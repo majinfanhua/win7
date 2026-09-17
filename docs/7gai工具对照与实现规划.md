@@ -13,7 +13,10 @@
 > 甚至根本没去查解释器在不在，直接写死了 `commandExec = false`，
 > 代价是 Win7 用户白白少掉 4 个工具。
 >
-> **现在的状态**：Win7 与 Win10/11 都是 12 个工具（8 文件 + 4 命令），
+> **现在的状态**：Win7 与 Win10/11 都是 **18 个工具**
+> （8 文件 + 4 命令 + 4 记忆/会话 + 2 技能）。后两组是 2026-09-16/17
+> 两轮陆续加进来的（`MEMORY_TOOLS` / `SKILL_TOOLS`，见 `tools/meta.ts`），
+> 它们不碰工作区、不依赖外部程序，所以两档都有。
 > 执行器是 cmd 而不是 PowerShell（见 `src/main/shell.ts` 的注释）。
 > 另外 `Glob` / `Grep` 也已补上（自写匹配，不引 minimatch / ripgrep），
 > 仍缓做的只剩 `apply_patch`。

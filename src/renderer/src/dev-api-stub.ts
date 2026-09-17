@@ -762,7 +762,8 @@ ${target}
      *
      * 假梗概是**故意**的：真机上的梗概要发一次模型请求才拿到，
      * 而浏览器桩没有主进程、也没有密钥。写一句假的能让设置页
-     * 与 AI 工具的界面在 `npm run dev:web` 下也能完整走一遍。
+     * 与 AI 工具的界面在纯浏览器预览下也能完整走一遍 ——
+     * 启动方式见 README（`npx vite --config vite.preview.config.ts`）。
      */
     archiveSession: async (id: string) => {
       const entry = stubSessions.find((item) => item.id === id)

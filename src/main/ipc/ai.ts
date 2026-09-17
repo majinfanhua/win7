@@ -21,6 +21,7 @@ import {
 import { getCapabilityInfo } from '../capabilities'
 import { sessionSystemPrompt } from '../system-doc'
 import { buildHeaders, configError } from '../llm'
+import { describeNetworkError } from '../tls'
 import { recordUsage } from '../usage'
 import { executeTool, summarizeCall, toolSchemasForModel } from '../tools'
 import { collectMcpTools, ensureMcpStarted } from '../mcp/manager'
@@ -490,7 +491,8 @@ function streamRound(
       response.on('error', (err: Error) => settle({ kind: 'error', message: `响应中断: ${err.message}` }))
     })
 
-    request.on('error', (err: Error) => settle({ kind: 'error', message: `网络错误: ${err.message}` }))
+    // 走统一出口：证书类错误会被翻译成「去哪里关校验」的可照做提示
+    request.on('error', (err: Error) => settle({ kind: 'error', message: describeNetworkError(err.message) }))
     request.write(body)
     request.end()
   })
@@ -893,7 +895,7 @@ function testConnection(): Promise<AiTestResult> {
         else done({ ok: false, detail: describeHttpError(status, raw), latencyMs })
       })
     })
-    request.on('error', (err: Error) => done({ ok: false, detail: `网络错误: ${err.message}` }))
+    request.on('error', (err: Error) => done({ ok: false, detail: describeNetworkError(err.message) }))
     request.write(body)
     request.end()
   })
@@ -951,7 +953,9 @@ function listModels(): Promise<ModelListResult> {
         }
       })
     })
-    request.on('error', (err: Error) => done({ ok: false, models: [], detail: `网络错误: ${err.message}` }))
+    request.on('error', (err: Error) =>
+      done({ ok: false, models: [], detail: describeNetworkError(err.message) })
+    )
     request.end()
   })
 }
