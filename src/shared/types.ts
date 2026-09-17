@@ -51,20 +51,22 @@ export interface AIConfig {
    */
   supportsVision: boolean
   /**
-   * 是否校验中转站的 HTTPS 证书。**默认 true**。
+   * 是否校验中转站的 HTTPS 证书。**默认 false（不校验）**。
    *
-   * 为什么要留这个开关：中转站里有一批是用**自签名证书**跑的
-   * （学校/公司内网自建、或图省事没买证书的小站）。此时 Chromium 会在
-   * 建连阶段直接拒掉请求，报 `net::ERR_CERT_AUTHORITY_INVALID` ——
-   * 而那条错误以前只在界面上显示成「网络错误」，
-   * 学生既看不懂、也没有任何地方能把它改通。
+   * 为什么默认关：目标平台是 Win7 SP1，它的根证书库随系统更新，
+   * 而 Win7 早已停止主流支持，**新根 CA 装不进去** —— 典型的就是
+   * Let's Encrypt 的 ISRG Root X1 那一批，而中转站用免费证书的非常多。
+   * 校验开着的话，Chromium 会判定证书链不可信、在建连阶段直接拒掉，
+   * 报 `net::ERR_CERT_AUTHORITY_INVALID`。那不是「中转站配错了」，
+   * 而是这台机器老了 —— 用户换多少个中转站都没用。
    *
-   * 默认开：**关掉校验等于对中间人攻击完全不设防**，密钥与对话内容
-   * 都可能被截获。所以这是一个「知道自己在做什么才去关」的开关，
-   * 界面上的文案必须把代价说清楚，而不是让它看起来像个普通优化项。
+   * 所以默认「能连上优先」。开关留着，是因为不校验确实有代价：
+   * 无法确认对端身份，密钥与对话内容可能被中间人截获。
+   * 在证书链正常的环境（Win10/11、或打过补丁的 Win7）里，
+   * 用户可以主动把它打开换回这道防护。
    *
-   * 只影响 AI 请求（net.request 走的 defaultSession），
-   * 不影响工作区文件、也不影响浏览器预览那条路。
+   * 只影响 AI 请求（net.request 走的 defaultSession）：
+   * 渲染层加载本地文件、预览服务绑 127.0.0.1 的 http，都不受影响。
    */
   verifyTls: boolean
   /**
@@ -890,11 +892,11 @@ export const DEFAULT_CONFIG: AppConfig = {
     // 默认关：见 AIConfig.supportsVision 的注释（猜错的代价不对称）
     supportsVision: false,
     /*
-     * 默认开：证书校验是 HTTPS 的全部意义所在，关掉它等于把密钥
-     * 与对话内容暴露给任何能插进链路的人。只有中转站用自签名证书
-     * 且用户明确知道自己在做什么时，才该去设置里关掉它。
+     * 默认关（不校验）。Win7 的根证书库装不进新根 CA（如 Let's Encrypt
+     * 的 ISRG Root X1），开着校验会让目标平台默认连不上中转站 ——
+     * 详见 AIConfig.verifyTls 的注释。设置页里可以手动打开。
      */
-    verifyTls: true,
+    verifyTls: false,
     // 0 = 交给内置模型表判断。填了就以填的为准
     contextWindow: 0,
     maxOutputTokens: 0

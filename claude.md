@@ -165,7 +165,7 @@ cmd.exe 在所有 Windows 上都有，python/node 装好会写进 PATH。
 | `renderer/src/image-input.ts` | 图片压缩（canvas → JPEG，长边 1568）|
 | `renderer/src/snippets.ts` | `!` / `css` / `js` 等触发词片段，与 file-templates 共用数据 |
 | `renderer/src/components/LogDrawer.tsx` | 底部日志抽屉 |
-| `main/tls.ts` | AI 请求的 HTTPS 证书校验策略（开关默认开，关掉只放行中转站那一个域名）|
+| `main/tls.ts` | AI 请求的 HTTPS 证书校验策略（**默认不校验**，兼容 Win7 的旧根证书库；设置里可开启）|
 
 **搜索工具的两条约束**（改之前先看 `search-tools.ts` 的头注释）：
 不引 `fast-glob` / `minimatch`（依赖链长、启动开销），
@@ -179,14 +179,21 @@ cmd.exe 在所有 Windows 上都有，python/node 装好会写进 PATH。
 **看到旧文档提到它们时，那是过期内容，不是要你去实现的东西**。
 
 **AI 请求的 HTTPS 证书校验**（`main/tls.ts`）：
-默认**开**。中转站用自签名证书时 Chromium 会直接拒连
-（`net::ERR_CERT_AUTHORITY_INVALID`），用户可以在设置里关掉校验 ——
-但关掉之后**只对当前配置的那个中转站域名**放行不可信证书，
-其它域名照旧拒绝。两条容易写错的地方：
-1. `config.ts` 的 normalize 里必须是 `input.verifyTls !== false` 而不是
-   `Boolean(...)`：老配置没有这个字段，`Boolean(undefined)` 会得到 false，
-   等于**给升级上来的用户静默关掉证书校验**。
-2. `session.defaultSession` 在 app ready 之前不可访问，而这个策略是在
+**默认不校验**。原因是目标平台：Win7 的根证书库随系统更新，
+而 Win7 早已停止主流支持，新根 CA（Let's Encrypt 的 ISRG Root X1 等）
+装不进去，而中转站用免费证书的非常多 —— 开着校验会让 Win7 默认
+连不上，报 `net::ERR_CERT_AUTHORITY_INVALID`，用户会以为软件坏了。
+设置里留了开关，证书链正常的环境（新装 Win10/11）可以勾上换回防护。
+
+三条容易写错的地方：
+1. `config.ts` 的 normalize 里必须是 `input.verifyTls === true`。
+   写成 `!== false` 是**错的**：老配置没有这个字段，
+   `undefined !== false` 得到 true，等于**给老用户升级后静默打开校验** ——
+   在 Win7 上表现为「升级前能用、升级后连不上」。
+2. 不校验就是 `callback(0)` 放行一切，**不做「只放行中转站域名」的收窄**：
+   请求是 `redirect: 'follow'`，302 到别的域名时那一跳仍会被拒，
+   收窄在 Win7 上等于没修好。
+3. `session.defaultSession` 在 app ready 之前不可访问，而这个策略是在
    `initConfig()`（main 最前面）里装的 —— 所以 `tls.ts` 会先记下来、
    挂 `app.whenReady()` 再落地，不能直接同步装。
 

@@ -103,14 +103,18 @@ function normalizeAi(raw: unknown): AppConfig['ai'] {
       input.extraHeaders && typeof input.extraHeaders === 'object' ? input.extraHeaders : {},
     supportsVision: Boolean(input.supportsVision),
     /*
-     * 证书校验开关。
+     * 证书校验开关。默认关（不校验），只有显式存了 `true` 才算开。
      *
-     * ⚠️ 这里**必须**是 `!== false` 而不是 `Boolean(...)`：
-     * 老版本 config.json 里没有这个字段，`Boolean(undefined)` 会得到 false，
-     * 于是升级上来的用户会在毫不知情的情况下被静默关掉证书校验 ——
-     * 安全性反向降级，而且没有任何提示。缺省必须是「开」。
+     * ⚠️ 这里**必须**是 `=== true`，不能写成 `!== false`：
+     * 缺省值在 config.json 里是 `false`，而**老版本的配置文件里根本没有
+     * 这个字段**。写成 `!== false` 的话，`undefined !== false` 得到 true ——
+     * 于是老用户升级上来会在毫不知情的情况下被**重新打开**校验，
+     * 在 Win7 上表现为「升级之前能用，升级之后连不上中转站了」。
+     *
+     * 用 `=== true` 把「没有值 / 值坏了」一律收敛到默认的「关」，
+     * 与 DEFAULT_CONFIG.ai.verifyTls 保持一致。
      */
-    verifyTls: input.verifyTls !== false,
+    verifyTls: input.verifyTls === true,
     contextWindow: Math.max(0, Number(input.contextWindow) || 0),
     maxOutputTokens: Math.max(0, Number(input.maxOutputTokens) || 0)
   }
@@ -408,9 +412,9 @@ export function initConfig(): AppConfig {
    *
    * 与 setPermissionMode 同一个模式：**落盘的值必须在启动时就生效**，
    * 而不能等用户再点一次「保存」。漏了这里的表现是
-   * 「设置里明明关着校验，重启后又连不上自签证书的中转站」。
+   * 「设置里明明打开着校验，重启后又变成不校验」。
    */
-  applyTlsPolicy(cached.ai.verifyTls, cached.ai.baseUrl)
+  applyTlsPolicy(cached.ai.verifyTls)
   return cached
 }
 
@@ -436,15 +440,14 @@ export function setConfig(patch: Partial<AppConfig>): AppConfig {
    */
   setPermissionMode(next.permission.mode)
   /*
-   * 证书开关与中转站地址都要立刻生效。
+   * 证书开关要立刻生效：用户刚打开校验就发下一次请求，
+   * 不该还走着「不校验」的旧策略。
    *
-   * 地址也算在里面：`verifyTls=false` 时放行的是**当前配置的那个域名**，
-   * 用户换了中转站却不重装 proc 的话，新域名会被误拒、旧域名的放行还挂着。
-   * 但这条调用本身很便宜 —— `applyTlsPolicy` 内部会比对「装上去的那份」，
-   * 值没变就直接返回（不重装、更不会去断在飞的连接）。
+   * 这条调用很便宜 —— `applyTlsPolicy` 内部比对「已装上去的那个值」，
+   * 没变就直接返回（不重装、更不会去断在飞的连接）。
    * 所以这里无条件调用是安全的。
    */
-  applyTlsPolicy(next.ai.verifyTls, next.ai.baseUrl)
+  applyTlsPolicy(next.ai.verifyTls)
   return next
 }
 
