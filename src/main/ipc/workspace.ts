@@ -430,7 +430,7 @@ export function registerWorkspaceIpc(): void {
     const file = assertInsideRoot(target)
     if (!fs.existsSync(file)) throw new Error(`文件不存在: ${file}`)
     const root = getWorkspaceRoot()
-    const url = await serveOnce(root, path.relative(root, file))
+    const url = await serveOnce(path.relative(root, file))
     await shell.openExternal(url)
     logger.info('workspace', `预览: ${url} → ${file}`)
     return true
@@ -544,14 +544,28 @@ const MIME: Record<string, string> = {
  * URL 带时间戳是给「使用者改完代码再点一次预览」准备的：
  * 不带的话浏览器会拿缓存里的旧页面糊弄人，使用者会以为代码没生效。
  */
-async function serveOnce(root: string, relativeFile: string): Promise<string> {
+async function serveOnce(relativeFile: string): Promise<string> {
   if (!previewServer) {
     previewServer = http.createServer((req, res) => {
       try {
         const raw = decodeURIComponent((req.url || '/').split('?')[0])
+        /*
+         * ⚠️ 根目录要**每次请求现读**，不能把参数 root 闭包进去。
+         *
+         * 这个 server 是「同一时刻只保留一个、第二次预览复用端口」的，
+         * 而闭包捕获的是**第一次**调用时的 root。于是切了工作区之后：
+         *   URL 用的是新项目的相对路径，服务器却还在拿旧项目当根 ——
+         * 轻则 404，重则两个项目有同名文件时**把 A 的文件当 B 的返回**。
+         * 每次请求读当前工作区，就与 URL 的生成口径一致了。
+         */
+        const currentRoot = getWorkspaceRoot()
+        if (!currentRoot) {
+          res.writeHead(404).end('404 未打开工作区')
+          return
+        }
         // 关键：拼完必须再校验一次，`..%2f` 这类编码绕过就挡在这里
-        const resolved = path.resolve(root, `.${raw}`)
-        const rel = path.relative(root, resolved)
+        const resolved = path.resolve(currentRoot, `.${raw}`)
+        const rel = path.relative(currentRoot, resolved)
         if (rel.startsWith('..') || path.isAbsolute(rel)) {
           res.writeHead(403).end('403 路径越界')
           return

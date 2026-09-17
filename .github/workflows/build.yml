@@ -309,11 +309,31 @@ jobs:
         if: failure()
         shell: pwsh
         run: |
-          # 目录名由 src/main/index.ts 的 app.setPath('userData') 固定为 hangkeIDE
-          $logDir = Join-Path $env:APPDATA 'hangkeIDE\logs'
-          if (Test-Path $logDir) {
-            Get-ChildItem $logDir | ForEach-Object { Write-Host "===== $($_.Name) ====="; Get-Content $_.FullName -Raw }
-          } else { Write-Host "未生成日志目录 $($logDir)" }
+          # 日志目录有三个可能：
+          #   1. %APPDATA%\hangkeIDE-selftest —— 自检进程用的（CI 跑的就是它）
+          #   2. <解包目录>\data\logs        —— 便携模式（非自检的打包运行）
+          #   3. %APPDATA%\hangkeIDE\logs    —— 便携目录不可写时的回退
+          #
+          # 以前这里只找第 3 个，而 CI 跑的全是自检（第 1 个）——
+          # 于是「失败时导出日志」这一步**永远什么都导不出来**，
+          # 恰好在最需要它的时候（自检失败）失效。
+          $dirs = @(
+            (Join-Path $env:APPDATA 'hangkeIDE-selftest\logs'),
+            (Join-Path $env:APPDATA 'hangkeIDE\logs'),
+            (Join-Path (Get-Location).Path 'release\win-unpacked\data\logs')
+          )
+          $found = $false
+          foreach ($logDir in $dirs) {
+            if (Test-Path $logDir) {
+              $found = $true
+              Write-Host "===== 日志目录 $logDir ====="
+              Get-ChildItem $logDir | ForEach-Object {
+                Write-Host "===== $($_.Name) ====="
+                Get-Content $_.FullName -Raw
+              }
+            }
+          }
+          if (-not $found) { Write-Host "未找到日志目录，已尝试：`n$($dirs -join "`n")" }
 
       - name: 产物清单（日志即证据）
         shell: pwsh

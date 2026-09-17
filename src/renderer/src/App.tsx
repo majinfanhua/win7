@@ -193,6 +193,31 @@ export default function App(): JSX.Element {
         void useAppStore.getState().undoLast()
       } else if (action === 'new-session') {
         onNewSession()
+      } else if (action === 'save') {
+        /*
+         * 菜单「保存」(Ctrl+S) 的兜底。
+         *
+         * 编辑器聚焦时 Ctrl+S 由 EditorPane 自己接住，走不到这里；
+         * 但焦点在别处（文件树、对话区）时，加速键会落到菜单上 ——
+         * 这条分支就是那种情况。以前没接，于是「菜单里的保存点了没反应」。
+         */
+        void useAppStore.getState().saveActive()
+      } else if (action === 'open-folder') {
+        setView('chat')
+        void openWorkspace()
+      } else if (action === 'new-file') {
+        /*
+         * 「新建文件」复用文件树自己那份 keydown 处理。
+         *
+         * 新建弹层需要知道「当前目录、已占用的名字」，那些是
+         * useFileTreeController 的组件内状态，App 拿不到。
+         * 与其为此再开一条跨组件通道（多一处需要同步的状态），
+         * 不如派发同一个按键 —— 那条路径已经存在且有测试覆盖，
+         * 行为与用户自己按 Ctrl+Alt+N 完全一致。
+         */
+        window.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'n', ctrlKey: true, altKey: true, bubbles: true })
+        )
       }
     })
   }, [onNewSession])

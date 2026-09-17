@@ -844,11 +844,35 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
      * userData/系统.md（覆盖手改、让设置改动生效），同一会话内复用快照
      * 以保证前后一致。上面的 recordSession 已经跑过，所以这里必然有值。
      */
-    await window.api.aiChat(requestId, messages, useAppStore.getState().sessionId)
-    setBusy(false)
-    // 回答结束，把带完整回答的 items 一次性写回 store。
-    // 带上还在缓冲区里的尾段：那有可能是整段回答的最后一句
-    syncStore(flushDelta())
+    /*
+     * ⚠️ 必须 try/finally 收尾。
+     *
+     * 主进程 handler 若抛出（比如准备阶段的某一步异常），这里的 await 会 reject；
+     * 没有 finally 的话 setBusy(false) 不执行 —— 发送键**永久停在「停止生成」**，
+     * 既发不出新消息、也停不下来，只能刷新页面。
+     *
+     * 正常结束与出错都要做同一件事：清 busy、把已经拿到的内容落库。
+     * 所以放 finally，而不是在两个分支里各写一遍。
+     */
+    try {
+      await window.api.aiChat(requestId, messages, useAppStore.getState().sessionId)
+    } catch (err) {
+      /*
+       * 记一条可读日志。正常情况下主进程会把错误作为 error 事件发过来
+       * （那条路已在流处理里显示），走到这里说明是主进程自己在更早的阶段挂了。
+       */
+      useAppStore.getState().pushLog({
+        time: '',
+        level: 'error',
+        scope: 'ai',
+        text: `本次请求异常结束：${err instanceof Error ? err.message : String(err)}`
+      })
+    } finally {
+      setBusy(false)
+      // 回答结束（或异常结束），把带已生成内容的 items 一次性写回 store。
+      // 带上还在缓冲区里的尾段：那有可能是整段回答的最后一句
+      syncStore(flushDelta())
+    }
   }
 
   /**

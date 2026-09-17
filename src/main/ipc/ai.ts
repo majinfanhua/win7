@@ -862,13 +862,29 @@ export function registerAiIpc(): void {
   ipcMain.handle(IPC.aiListModels, () => listModels())
   ipcMain.handle(IPC.aiChat, async (event, requestId: string, messages: ChatMessage[], sessionId?: string) => {
     const sender = event.sender
-    await runStream(
-      requestId,
-      messages,
-      (chunk) => {
-        if (!sender.isDestroyed()) sender.send(IPC.evtAiStream, chunk)
-      },
-      typeof sessionId === 'string' ? sessionId : ''
-    )
+    const emit = (chunk: AiStreamChunk): void => {
+      if (!sender.isDestroyed()) sender.send(IPC.evtAiStream, chunk)
+    }
+    /*
+     * ⚠️ 兜底 catch：任何未预期的异常都要变成一条 **error 事件**，
+     * 而不是让 IPC promise reject。
+     *
+     * runStream 内部大部分失败都会自己 emit error，但准备阶段
+     * （建请求、拼 header、读系统提示词…）里抛出的异常没有那层保护 ——
+     * 它会一路 reject 到渲染层的 await。渲染层虽然有 finally 兜住 busy 状态，
+     * 但用户只会看到「突然结束」，看不到原因。
+     * 这里补一条可读的 error，两端都不会留下无解释的失败。
+     */
+    try {
+      await runStream(requestId, messages, emit, typeof sessionId === 'string' ? sessionId : '')
+    } catch (err) {
+      logger.error('ai', `请求 ${requestId} 异常终止: ${String(err)}`)
+      emit({
+        requestId,
+        kind: 'error',
+        message: `本次请求异常终止：${err instanceof Error ? err.message : String(err)}`
+      })
+      emit({ requestId, kind: 'done' })
+    }
   })
 }
