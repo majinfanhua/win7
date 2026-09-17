@@ -7,7 +7,6 @@ import ConfirmHost from './components/ConfirmHost'
 import SettingsPage from './components/SettingsPage'
 import Sidebar from './components/Sidebar'
 import EditorPane from './components/EditorPane'
-import ExplorerPanel from './components/file-tree/ExplorerPanel'
 import { canOpenInBrowser } from '@shared/language'
 import LogDrawer from './components/LogDrawer'
 import { useAppStore } from './store/useAppStore'
@@ -18,11 +17,11 @@ import { applyTheme, readTheme, type Theme } from './theme'
 /**
  * 内容区的视图。
  *
- * `explorer` 是「资源管理器」整页视图：与设置页同级，占满内容区，
- * 而不是在 .stage 里再加一栏 —— 那个布局用 `--split` 做宽度分割，
- * DOM 顺序「编辑器 → 分割条 → 对话」是踩过坑的契约，加栏会连锁破坏它。
+ * 只有「对话」与「设置」两页。曾经还有第三个 `explorer`
+ * （占满内容区的「资源管理器」文件树视图），已按用户要求删掉 ——
+ * 文件树在侧栏里常驻，不需要第二个形态。
  */
-type View = 'chat' | 'settings' | 'explorer'
+type View = 'chat' | 'settings'
 
 /**
  * 双击分割条时回到的默认比例。
@@ -149,17 +148,6 @@ export default function App(): JSX.Element {
 
   const openSettings = useCallback(() => setView('settings'), [])
   const backToChat = useCallback(() => setView('chat'), [])
-  /**
-   * 顶栏「资源管理器」按钮。
-   *
-   * 再点一次回到对话（当成开关），而不是切到别的页 ——
-   * 用户点它时的意图基本都是「看一眼文件」，看完要回到代码那儿。
-   */
-  const toggleExplorer = useCallback(
-    () => setView((v) => (v === 'explorer' ? 'chat' : 'explorer')),
-    []
-  )
-
   const onNewSession = useCallback(() => {
     startNewSession()
     aiRef.current?.reset()
@@ -223,7 +211,7 @@ export default function App(): JSX.Element {
     })
   }, [onNewSession])
 
-  // Esc 退出设置页 / 资源管理器 / 弹层；对话区的输入框与弹层自己有 Esc 处理，
+  // Esc 退出设置页 / 弹层；对话区的输入框与弹层自己有 Esc 处理，
   // 不冲突（它们都会 stopPropagation）
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -237,7 +225,7 @@ export default function App(): JSX.Element {
         setLogsOpen(false)
         return
       }
-      if (view === 'settings' || view === 'explorer') setView('chat')
+      if (view === 'settings') setView('chat')
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
@@ -353,25 +341,8 @@ export default function App(): JSX.Element {
     return () => window.removeEventListener('beforeunload', onUnload)
   }, [])
 
-  /**
-   * Ctrl+Shift+E 切换资源管理器。
-   *
-   * 与 VS Code 一致，教师从别的编辑器迁过来不用重新学。
-   * 只拦这一个组合：Ctrl+E 在 Monaco 里是「查找」，绝不能抢。
-   */
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent): void => {
-      if (!e.ctrlKey || !e.shiftKey || e.key.toLowerCase() !== 'e') return
-      e.preventDefault()
-      toggleExplorer()
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [toggleExplorer])
-
-  const nextTheme: Theme = theme === 'dark' ? 'light' : 'dark'
   const inSettings = view === 'settings'
-  const inExplorer = view === 'explorer'
+  const nextTheme: Theme = theme === 'dark' ? 'light' : 'dark'
 
   return (
     <div className="app" data-app-ready={ready ? '1' : '0'}>
@@ -379,7 +350,6 @@ export default function App(): JSX.Element {
         <Sidebar
           collapsed={navCollapsed}
           onToggleCollapse={() => setNavCollapsed((v) => !v)}
-          onOpenExplorer={toggleExplorer}
         />
 
         <div className="main">
@@ -422,10 +392,10 @@ export default function App(): JSX.Element {
 
             {/*
               历史会话。
-              以前这个位置是「资源管理器」—— 那个整页视图已移到侧栏的
-              「文件树」分组头里（它本质是文件树的放大形态，与文件树放一起
-              更合理，也不该占顶栏这个「全局动作」的位置）。
-              这个位置让给历史会话：切会话是高频导航，比看文件树更常点。
+              它原来在对话区抬头里，已移到这里 —— 切会话是**导航**，
+              与「打开文件夹」同类；而抬头那个位置给了「新对话」，
+              那才是紧贴当前对话、会频繁点的动作。
+              （这个位置原来的「资源管理器」整页视图已按用户要求删掉。）
             */}
             <SessionHistory />
 
@@ -495,7 +465,7 @@ export default function App(): JSX.Element {
 
           <main
             ref={stageRef}
-            className={`stage${inSettings || inExplorer ? ' stage-page' : ''}`}
+            className={`stage${inSettings ? ' stage-page' : ''}`}
             /*
               两侧宽度用 calc 从 --split 算出来。
               拖动时 useSplitter 直接改 documentElement 上的 --split，
@@ -503,7 +473,7 @@ export default function App(): JSX.Element {
               松手后 React 状态更新，把 --split 清掉，回落到下面这个默认值。
             */
             style={
-              inSettings || inExplorer
+              inSettings
                 ? undefined
                 : ({
                     /*
@@ -516,14 +486,7 @@ export default function App(): JSX.Element {
                   } as React.CSSProperties)
             }
           >
-            {/*
-              资源管理器整页视图。
-              与设置页一样走 stage-page（单栏全宽），
-              完全不参与 .stage 的 --split 宽度分割 —— 那条布局约束一行都不用碰。
-            */}
-            {inExplorer && <ExplorerPanel />}
-
-            {!inSettings && !inExplorer && (
+            {!inSettings && (
               <div className="editor-dock">
                 <EditorPane />
               </div>
@@ -537,7 +500,7 @@ export default function App(): JSX.Element {
               因为前面两栏的宽度加起来已经占满了。
               设置页是全宽单栏，这时不要；对话栏收起时也没有可调的对象。
             */}
-            {!inSettings && !inExplorer && chatOpen && (
+            {!inSettings && chatOpen && (
               <div
                 className={`splitter is-vertical${splitter.dragging ? ' is-dragging' : ''}`}
                 role="separator"
@@ -563,7 +526,7 @@ export default function App(): JSX.Element {
               注意：即使在设置页，这个 div 也要留在 DOM 里（自检会查 .composer 是否还在）。
             */}
             <div
-              className={`view${inSettings || inExplorer ? '' : ' is-active'}`}
+              className={`view${inSettings ? '' : ' is-active'}`}
               data-chat-closed={chatOpen ? undefined : '1'}
             >
               <AiPanel ref={aiRef} onOpenSettings={openSettings} onNewSession={onNewSession} />

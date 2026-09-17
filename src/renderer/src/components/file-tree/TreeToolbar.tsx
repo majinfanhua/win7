@@ -14,8 +14,6 @@ type Props = {
   disabled: boolean
   showHidden: boolean
   sortBy: ExplorerSortBy
-  /** 独立面板里工具栏可以宽松一点，显示排序下拉的文字 */
-  expanded?: boolean
   onNewFile: () => void
   onNewDir: () => void
   onRefresh: () => void
@@ -34,7 +32,6 @@ export default function TreeToolbar({
   disabled,
   showHidden,
   sortBy,
-  expanded = false,
   onNewFile,
   onNewDir,
   onRefresh,
@@ -43,7 +40,7 @@ export default function TreeToolbar({
   onSort
 }: Props): JSX.Element {
   return (
-    <div className={`tree-tools${expanded ? ' is-expanded' : ''}`}>
+    <div className="tree-tools">
       <button
         className="tree-tool"
         title="新建文件（Ctrl+Alt+N）"

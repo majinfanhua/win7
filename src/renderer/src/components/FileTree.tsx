@@ -8,29 +8,28 @@ import { useFileTreeController, type FileTreeController } from './file-tree/useF
 import { useAppStore } from '../store/useAppStore'
 
 /**
- * 文件树。
+ * 文件树（只此一个形态，嵌在侧栏的「文件树」分组里）。
  *
- * 两个形态（embedded / 非嵌入）共用这个组件，外壳与工具栏的差别由 embedded 决定。
- * 两种形态如果各写一套，很快就会出现「这边能建 html、那边不能」的割裂，
- * 所以行为（菜单、弹层、排序、落点）全部在 useFileTreeController 里。
+ * 它曾经有两个形态：侧栏里的嵌入态，以及内容区那个占满整页的
+ * 「资源管理器」视图。后者已按用户要求删掉 —— 于是 embedded 这个开关
+ * 也失去了意义，一并去掉，免得留一个永远为 true 的参数让人猜。
+ *
+ * 行为（菜单、弹层、排序、落点）全部在 useFileTreeController 里。
  *
  * ⚠️ 保留的 DOM 契约（自检脚本与右键菜单都依赖，不要改名）：
  *   .filetree / .tree-node / .tree-body / [data-path] / [data-kind]
  *
- * 本轮修掉的根因：新建 / 重命名原本调用 `window.prompt`，
+ * 修过的根因：新建 / 重命名原本调用 `window.prompt`，
  * 而 **Electron 不支持 prompt** —— 调用即抛错，界面上表现为什么也没发生。
  * 现在这两件事全部走应用内弹层（TreeOverlays）。
  */
-export default function FileTree({ embedded = true }: { embedded?: boolean } = {}): JSX.Element {
+export default function FileTree(): JSX.Element {
   const tree = useFileTreeController()
   const openWorkspace = useAppStore((s) => s.openWorkspace)
   const collapseAll = useAppStore((s) => s.collapseAll)
 
   /*
    * 快捷键：Ctrl+Alt+N 新建文件、Ctrl+Alt+Shift+N 新建文件夹、F5 刷新。
-   *
-   * 只挂一份（嵌入态），因为嵌入态总是挂着的（侧栏收起时整个侧栏不渲染，
-   * 但资源管理器会自己占满内容区）。挂在非嵌入态会与它重复。
    *
    * 用 ref 拿最新的 tree 而不是把 tree 塞进 deps：
    * tree 每次渲染都是新对象，塞进去等于每次渲染都解绑重绑监听器。
@@ -39,7 +38,6 @@ export default function FileTree({ embedded = true }: { embedded?: boolean } = {
   treeRef.current = tree
 
   useEffect(() => {
-    if (!embedded) return
     const onKey = (e: KeyboardEvent): void => {
       // 输入框里打字时不要抢键（比如正在给 AI 写提示词），
       // 也不要在弹层开着时抢 —— 那时 Enter / 方向键属于弹层
@@ -59,20 +57,15 @@ export default function FileTree({ embedded = true }: { embedded?: boolean } = {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [embedded])
+  }, [])
 
   return (
-    <section className={`filetree${embedded ? ' is-embedded' : ''}`}>
-      {/*
-        嵌在侧栏里时不画自己的标题栏：外层 Sidebar 已经有了「文件树」分组头，
-        再画一遍就是同一个标签出现两次。工具栏则始终保留 ——
-        它是「新建文件」唯一可发现的位置。
-      */}
-      {!embedded && (
-        <div className="tree-head">
-          <span className="tree-head-title">文件树</span>
-        </div>
-      )}
+    /*
+     * 不画自己的标题栏：外层 Sidebar 已经有「文件树」分组头，
+     * 再画一遍就是同一个标签出现两次。工具栏始终保留 ——
+     * 它是「新建文件」唯一可发现的位置。
+     */
+    <section className="filetree is-embedded">
 
       <div className="tree-root-row">
         <button
@@ -90,7 +83,6 @@ export default function FileTree({ embedded = true }: { embedded?: boolean } = {
         </button>
         <TreeToolbar
           disabled={!tree.workspace}
-          expanded={!embedded}
           showHidden={tree.showHidden}
           sortBy={tree.sortBy}
           onNewFile={() => tree.requestNew('file')}
@@ -133,7 +125,7 @@ export default function FileTree({ embedded = true }: { embedded?: boolean } = {
         )}
 
         {tree.sortedRoot.map((node) => (
-          <TreeNode key={node.path} node={node} depth={0} detailed={!embedded} />
+          <TreeNode key={node.path} node={node} depth={0} detailed={false} />
         ))}
       </div>
 

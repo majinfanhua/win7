@@ -2,7 +2,7 @@ import type { AppConfig, EditorSession, ExplorerConfig, ExplorerSortBy, FileNode
 import { DEFAULT_CONFIG, EDITOR_TABS_MAX, SESSION_TITLE_MAX } from '@shared/types'
 
 /**
- * 文件树 / 资源管理器相关的纯函数。
+ * 文件树相关的纯函数（排序 / 扩展名 / 路径）。
  *
  * 从 useAppStore.ts 里抽出来，原因有两个：
  *   1. 那个文件已经到 800 行的红线附近，而这些函数与 store 的

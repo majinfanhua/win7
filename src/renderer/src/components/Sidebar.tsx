@@ -25,15 +25,9 @@ import { useFileTreeController } from './file-tree/useFileTreeController'
 type Props = {
   collapsed: boolean
   onToggleCollapse: () => void
-  /** 在内容区打开「资源管理器」整页视图（文件树的放大形态） */
-  onOpenExplorer: () => void
 }
 
-export default function Sidebar({
-  collapsed,
-  onToggleCollapse,
-  onOpenExplorer
-}: Props): JSX.Element {
+export default function Sidebar({ collapsed, onToggleCollapse }: Props): JSX.Element {
   const workspace = useAppStore((s) => s.workspace)
   const workspaces = useAppStore((s) => s.workspaces)
   const openWorkspace = useAppStore((s) => s.openWorkspace)
@@ -339,37 +333,8 @@ export default function Sidebar({
               )}
             </button>
 
-            {/*
-              「展开到整页」：资源管理器视图的入口。
-              原先在顶栏，已移到这里 —— 它就是文件树的放大形态
-              （更宽、带已打开文件列表），与文件树放在一处最自然。
-            */}
-            {treeOpen && workspace && (
-              <button
-                className="nav-group-sub"
-                title="在内容区展开文件树（Ctrl+Shift+E）"
-                onClick={onOpenExplorer}
-              >
-                <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">
-                  <g
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.7"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <path d="M14 4h6v6" />
-                    <path d="M20 4 13 11" />
-                    <path d="M10 20H4v-6" />
-                    <path d="M4 20l7-7" />
-                  </g>
-                </svg>
-                <span>展开到整页</span>
-              </button>
-            )}
-
             {/* 用 display 控制而不是条件渲染：树展开时保留滚动位置与展开的目录 */}
-            {treeOpen && <FileTree embedded />}
+            {treeOpen && <FileTree />}
           </div>
           </>
         )}

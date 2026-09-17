@@ -28,44 +28,15 @@
 }
 
 /*
- * 资源管理器整页视图：窄屏优先保树体宽度。
- * 右边的信息栏（已打开文件 / 提示 / 快捷键）都是辅助内容，
- * 跟树抢宽度会本末倒置，所以先收窄、再整栏去掉。
- * 工具栏允许换行，因为按钮是 24px 的固定尺寸，挤不下就会溢出。
+ * 窄屏：把侧栏里那份树收掉，给编辑器与对话让出宽度。
+ *
+ * 以前这里还有一段「救一下独立形态」的例外（`.filetree:not(.is-embedded)`）
+ * —— 因为资源管理器整页视图用的是同一个 .filetree 类名，
+ * 会被一起 display:none 干掉。那个视图已删，例外也就不需要了。
  */
-@media (max-width: 1080px) {
-  .explorer-side-col {
-    width: 208px;
-    padding: 12px;
-  }
-
-  .tree-tools.is-expanded {
-    flex-wrap: wrap;
-  }
-}
-
 @media (max-width: 900px) {
   .filetree {
     display: none;
-  }
-
-  /*
-   * ⚠️ 这里要显式救一下独立形态。
-   * 上面那条 display:none 是为了把侧栏里那份窄树收掉，
-   * 但资源管理器里的树用的是同一个 .filetree 类名，
-   * 会被一起干掉 —— 整页视图就变成一片空白了。
-   */
-  .explorer-tree-col > .filetree,
-  .filetree:not(.is-embedded) {
-    display: flex;
-  }
-
-  .explorer-side-col {
-    display: none;
-  }
-
-  .explorer-crumb {
-    max-width: 120px;
   }
 }
 
