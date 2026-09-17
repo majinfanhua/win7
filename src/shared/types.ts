@@ -599,7 +599,7 @@ export interface AiUsage {
 
 export interface AiStreamChunk {
   requestId: string
-  kind: 'delta' | 'done' | 'error' | 'tool'
+  kind: 'delta' | 'done' | 'error' | 'tool' | 'compacted'
   text?: string
   /**
    * 这段文本是**思考过程**（模型的思维链），不是最终回答。
@@ -616,6 +616,68 @@ export interface AiStreamChunk {
   usage?: AiUsage
   /** 只在 kind === 'tool' 时给出：AI 正在调用哪个工具 */
   tool?: ToolProgress
+  /**
+   * 只在 kind === 'compacted' 时给出：上下文已被压缩。
+   *
+   * 为什么要发回渲染层，而不是主进程自己默默压掉：
+   *
+   *   历史消息**归渲染层所有**（store.messages），每轮整份发过来。
+   *   主进程压完却不告诉渲染层的话，下一轮渲染层发过来的还是那份
+   *   完整历史 —— 于是每轮都要重新总结一次：既重复花钱，
+   *   又因为每次都从同样的输入算出同样的摘要，压缩永远「压不下去」。
+   *
+   * 渲染层收到后要把自己的消息列表换成「摘要 + 保留的最近几轮」，
+   * 下一次请求才会真的变小。
+   */
+  compaction?: CompactionNotice
+}
+
+/**
+ * 压缩后插入的那条摘要消息的开头标记。
+ *
+ * 为什么要有这个标记（而不是只放摘要正文）：
+ *   1. 模型要能一眼区分「这是系统给的交接说明」与「用户真说过这句话」——
+ *      不加标记的话，模型可能以为学生自己说了这段总结
+ *   2. 界面据此把它渲染成一条**系统提示**（不是气泡），
+ *      否则学生回看历史时会以为那是自己或 AI 说的一段话
+ *
+ * 放在 shared 而不是主进程：主进程生成它、渲染层识别它，两边必须一致。
+ */
+export const SUMMARY_MARKER = '【以下是之前对话的摘要，由系统自动生成】'
+
+/** 一次上下文压缩的结果，用于告知渲染层怎么改自己的历史 */
+export interface CompactionNotice {
+  /** 摘要正文（已由主进程生成，渲染层直接显示） */
+  summary: string
+  /**
+   * 保留了多少条原消息（从被折叠处往后的）。
+   *
+   * 渲染层按这个数**从末尾截取**自己的历史，而不是自己再数一遍
+   * 「最近几轮」—— 两处各写一份判定迟早会跑偏，而跑偏的表现是
+   * 要么重复发（浪费），要么把模型正在用的那几轮也丢掉（答非所问）。
+   */
+  keptCount: number
+  /** 被折进摘要的消息条数，只用于提示文案 */
+  foldedCount: number
+}
+
+/**
+ * 手动压缩（`/compact` 命令）的结果。
+ *
+ * 为什么不复用流式的 `compacted` 事件：手动压缩是**用户主动发起、
+ * 并且要立刻看到结论**的操作 —— 压了多少、省了多少，得当场说清楚。
+ * 走流式那条路的话，它得先造一个假的 requestId 并让渲染层去认，
+ * 而两者本来就没有回答要显示。
+ */
+export interface ManualCompactionResult {
+  ok: boolean
+  /** 压缩后的通知（成功时给出），渲染层据此改自己的历史 */
+  notice?: CompactionNotice
+  /** 压缩前后的估算 token，用于给用户看「省了多少」 */
+  beforeTokens: number
+  afterTokens: number
+  /** 失败时的可读原因（可直接展示给用户） */
+  message: string
 }
 
 export interface AiTestResult {
@@ -861,6 +923,8 @@ export const IPC = {
   aiAbort: 'ai:abort',
   aiTest: 'ai:test',
   aiListModels: 'ai:list-models',
+  /** 手动压缩当前会话的上下文（`/compact` 命令） */
+  aiCompact: 'ai:compact',
 
   /** 编辑器会话（打开过哪些标签）的读写 */
   editorSessionGet: 'editor:session-get',

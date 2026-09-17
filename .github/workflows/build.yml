@@ -184,6 +184,39 @@ jobs:
             exit 1
           }
 
+      - name: 护栏 - 上下文压缩的接线
+        # 压缩最容易坏在**接线**上，而且完全静默：摘要作为 system 消息
+        # 回传渲染层，渲染层若按老写法只留 user/assistant，摘要就被丢掉 ——
+        # 表现是「看着省了 token，下一轮又变回完整历史」，
+        # 每轮重复花一次总结的钱，没有报错，只有账单在涨。
+        # 所以断言「算对话内容的判定只有一处、且包含 system」。
+        shell: pwsh
+        run: |
+          $out = & npm run check:compact 2>&1 | Out-String
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) {
+            $tail = (($out -split "`r?`n") | Where-Object { $_ -ne '' } | Select-Object -Last 25) -join '%0A'
+            $tail = $tail -replace '%', '%25' -replace "`r", '%0D'
+            Write-Host "::error title=check:compact 失败::$tail"
+            exit 1
+          }
+
+      - name: 护栏 - / 命令的解析边界
+        # 命令解析错起来是静默的，而且方向相反：判定太宽会把
+        # 「/compact 帮我看看」这种正常消息当命令吞掉（学生以为发出去了）；
+        # 太严则命令被当成普通消息发给模型（白花一次请求）。
+        # 两种都不报错，只在真实使用时表现成「这功能坏了」。
+        shell: pwsh
+        run: |
+          $out = & npm run check:slash 2>&1 | Out-String
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) {
+            $tail = (($out -split "`r?`n") | Where-Object { $_ -ne '' } | Select-Object -Last 25) -join '%0A'
+            $tail = $tail -replace '%', '%25' -replace "`r", '%0D'
+            Write-Host "::error title=check:slash 失败::$tail"
+            exit 1
+          }
+
       - name: 护栏 - zip 套文件夹的字节级改写
         # 这个功能在 CI 上挂过一次：第一版调外部 7za 并解析它的文本输出来拿
         # 文件名，开发机（Linux pzip 16.02）正常、runner（Windows 7-Zip 21.07）挂 ——

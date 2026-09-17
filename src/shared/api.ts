@@ -12,6 +12,7 @@ import type {
   FileNode,
   LoadedFile,
   LogLine,
+  ManualCompactionResult,
   McpServerStatus,
   ModelListResult,
   RuntimeInfo,
@@ -167,6 +168,13 @@ export interface AppApi {
   aiAbort(requestId: string): Promise<boolean>
   aiTest(): Promise<AiTestResult>
   aiListModels(): Promise<ModelListResult>
+  /**
+   * 手动压缩当前会话的上下文（`/compact` 命令）。
+   *
+   * 要整份消息是因为**历史在渲染层**：主进程不保存对话，
+   * 每次都是渲染层把当前历史发过来。压缩也只是对这一份做处理。
+   */
+  aiCompact(messages: ChatMessage[], sessionId?: string): Promise<ManualCompactionResult>
 
   onAiStream(cb: (chunk: AiStreamChunk) => void): () => void
   onLog(cb: (line: LogLine) => void): () => void

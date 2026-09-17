@@ -55,7 +55,7 @@ AI 不只是聊天：它能读写工作区里的文件，在 Win10/11 上还能�
 
 ```bash
 npm run typecheck    # 主进程 + 渲染层两份 tsconfig
-npm run build        # 会先跑全部护栏（17 道）再 electron-vite build
+npm run build        # 会先跑全部护栏（19 道）再 electron-vite build
 npm run smoke        # 启动窗口自检（Linux 无 DISPLAY 时自动套 xvfb）
 npm run check:watch  # 纯 Node 校验文件监视时序
 
@@ -166,6 +166,28 @@ cmd.exe 在所有 Windows 上都有，python/node 装好会写进 PATH。
 | `renderer/src/snippets.ts` | `!` / `css` / `js` 等触发词片段，与 file-templates 共用数据 |
 | `renderer/src/components/LogDrawer.tsx` | 底部日志抽屉 |
 | `main/tls.ts` | AI 请求的 HTTPS 证书校验策略（**默认不校验**，兼容 Win7 的旧根证书库；设置里可开启）|
+| `main/compaction.ts` | 上下文压缩的**执行**（总结较早对话；判定在 `compaction-policy.ts`）|
+| `renderer/src/slash-commands.ts` | `/` 命令表与解析（纯函数）|
+
+**上下文压缩**（`main/compaction-policy.ts` 判定 + `main/compaction.ts` 执行）：
+到**模型窗口的 80%** 就把较早的对话总结成一段，插回最前面，保留最近 2 轮原文。
+三处不能动的地方：
+1. **阈值按比例**（`COMPACT_AT_RATIO = 0.8`），不是「窗口减固定预留」——
+   旧公式在小窗口上会算出负数，靠下限兜住等于「刚到 1k 就压」。
+2. **只在 user 消息边界切分**（`splitForCompaction`）：切在 assistant / tool
+   中间会留下不配对的 tool 消息，OpenAI 兼容接口直接 400。
+3. **摘要是 `system` 角色**，而渲染层「哪些角色算对话内容」的判定
+   **只有一处**（`AiPanel` 的 `isConversationRole`）。历史上它是硬编码的
+   `user || assistant`，压缩加进来后那样写会把摘要**静默丢掉** ——
+   表现是「看着省了 token，下一轮又变回完整历史」，每轮重复花钱、
+   永远压不下去，且**不报错**。护栏 `scripts/check-compaction.mjs` 钉住这条。
+
+**`/` 命令**（`renderer/src/slash-commands.ts`）：
+**渲染层直接执行，不发请求、不花 token** —— 与 Skills（给模型读的工具）
+是两回事，所以不复用技能那套。两条边界（护栏 `check-slash-commands.mjs`）：
+只在行首/空白后触发（`3/4`、`/usr/local` 不算），且**命令名后不能跟内容**
+（`/compact 帮我看看` 是普通消息，不是带参数调用）—— 判定太宽会把学生的
+正常消息吞掉，他以为发出去了其实什么都没发生。
 
 **搜索工具的两条约束**（改之前先看 `search-tools.ts` 的头注释）：
 不引 `fast-glob` / `minimatch`（依赖链长、启动开销），

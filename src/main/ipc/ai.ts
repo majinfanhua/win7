@@ -3,21 +3,33 @@ import { ipcMain, net } from 'electron'
 import {
   IPC,
   textOf,
+  SUMMARY_MARKER,
   type AiStreamChunk,
   type AiTestResult,
   type AiUsage,
   type ChatContent,
   type ChatMessage,
+  type ManualCompactionResult,
   type ModelListResult
 } from '../../shared/types'
 import { chatEndpoint, describeHttpError, modelsEndpoint } from '../../shared/ai-endpoint'
 import { getConfig } from '../config'
 import {
   isModelKnown,
+  KEEP_RECENT_USER_TURNS,
+  MIN_COMPACTION_INTERVAL_MS,
+  MIN_COMPACTION_USER_MESSAGES,
   PRUNE_MINIMUM_TOKENS,
   resolveBudgetForModel,
   resolveThreshold
 } from '../compaction-policy'
+import {
+  noteCompacted,
+  pressureOf,
+  splitForCompaction,
+  summarizeForCompaction,
+  summaryContent
+} from '../compaction'
 import { getCapabilityInfo } from '../capabilities'
 import { sessionSystemPrompt } from '../system-doc'
 import { buildHeaders, configError } from '../llm'
@@ -535,26 +547,40 @@ async function runStream(
   const wire: WireMessage[] = messages.map((m) => ({ role: m.role, content: m.content }))
   const systemText = await sessionSystemPrompt(sessionId)
   if (systemText) {
-    const systemIndex = wire.findIndex((m) => m.role === 'system')
-    if (systemIndex >= 0) wire[systemIndex] = { role: 'system', content: systemText }
-    else wire.unshift({ role: 'system', content: systemText })
+    injectSystemPrompt(wire, systemText)
   } else if (wire.every((m) => m.role !== 'system')) {
     // 组装失败（极端情况）时退回渲染层发来的那份，而不是发一个没有 system 的请求
     logger.warn('ai', '系统提示词组装失败，本次对话不带 system prompt')
   }
 
-  // 先记下本次 prompt，估算缓存命中要拿它当下一轮请求的对比基准。
-  // 放在补完 system 之后：否则算出来的前缀与真正发出去的不一致
-  const promptText = flattenPrompt(wire)
+  /*
+   * 自动压缩：到模型窗口的 80% 就把**较早的**对话总结成一段。
+   *
+   * 放在预算检查**之前**：压缩是解决超预算的手段，先拦下来报错
+   * 就等于这个功能不存在。压完还超才会走到下面的拒绝分支。
+   *
+   * 失败不阻断 —— 那只是回到「带着完整历史发出去」，与没有这个功能时一样。
+   */
+  await compactIfNeeded(wire, sessionId, requestId, emit)
 
-  // 发出去之前先算一次预算。撑爆窗口就在这里拦住并说清原因，
+  // 压完再算一次。撑爆窗口就在这里拦住并说清原因，
   // 别让用户对着中转站那句 "context length exceeded" 发懵
   const overBudget = checkContextBudget(wire)
   if (overBudget) {
-    logger.warn('ai', `上下文超出预算，已拒绝本次请求: 约 ${roughTokens(promptText)} token`)
+    logger.warn('ai', `上下文超出预算，已拒绝本次请求: 约 ${roughTokens(flattenPrompt(wire))} token`)
     emit({ requestId, kind: 'error', message: overBudget })
     return
   }
+
+  /*
+   * 记下本次**真正要发出去**的 prompt，估算缓存命中要拿它当下一轮基准。
+   *
+   * ⚠️ 必须在压缩**之后**取：压缩会把历史换成「摘要 + 最近几轮」，
+   * 那才是发出去的东西。在压缩前取的话，下一轮估算缓存命中时
+   * 比的是一份**根本没发出去过**的文本 —— 命中率会算成很低，
+   * 用量统计凭白变得难看，而真实请求其实是命中缓存的。
+   */
+  const promptText = flattenPrompt(wire)
 
   /*
    * 先把 MCP 服务器拉起来再接工具表。
@@ -751,6 +777,181 @@ async function runStream(
 
 /** 被裁掉的工具输出替换成这句话，让模型知道「这里原本有内容」 */
 const PRUNED_PLACEHOLDER = '[输出已被裁剪以腾出上下文空间。需要的话请重新读取。]'
+
+/**
+ * 自动压缩：到模型上下文窗口的 80% 就把较早的对话总结成一段。
+ *
+ * ## 放在哪一步
+ *
+ * 在预算检查之前、pruneOldToolOutput 之后：
+ *   1. 先裁工具输出（不花钱、无副作用）—— 能解决就不必花这次总结的钱
+ *   2. 裁完仍到阈值，才调模型总结
+ *
+ * ## 为什么必须把结果发回渲染层
+ *
+ * 历史消息归渲染层所有，每轮整份发过来。主进程压完不通知的话，
+ * 下一轮收到的还是完整历史 —— 每轮都要重新总结一次，
+ * 既重复花钱、又永远压不下去（每次输入相同，算出同样的摘要）。
+ *
+ * ## 失败怎么办
+ *
+ * 不抛、不阻断。压缩失败只是回到「带着完整历史发出去」——
+ * 与没有这个功能时的行为完全一样。绝不能因为总结不了就让用户发不出话。
+ */
+async function compactIfNeeded(
+  wire: WireMessage[],
+  sessionId: string,
+  requestId: string,
+  emit: (chunk: AiStreamChunk) => void
+): Promise<void> {
+  const ai = getConfig().ai
+  const budget = resolveBudgetForModel(ai)
+  const now = Date.now()
+  const pressure = pressureOf(sessionId, now)
+
+  const threshold = resolveThreshold({
+    intent: 'optimization',
+    contextWindow: budget.contextWindow,
+    maxOutputToken: budget.maxOutputToken,
+    pressureLevel: pressure.level
+  })
+
+  const total = roughTokens(flattenPrompt(wire))
+  if (total < threshold) return
+
+  /*
+   * 冷却：刚压完就别再压。
+   *
+   * 只在「用户消息还很少」时挡 —— 一次超大粘贴会让对话立刻越阈值，
+   * 那时若因为冷却而不压，用户会一直卡在超预算里发不出话。
+   */
+  const userMessages = wire.filter((m) => m.role === 'user').length
+  if (
+    pressure.lastCompactionAt > 0 &&
+    now - pressure.lastCompactionAt < MIN_COMPACTION_INTERVAL_MS &&
+    userMessages < MIN_COMPACTION_USER_MESSAGES
+  ) {
+    return
+  }
+
+  /*
+   * 切分：system 与工具消息不参与总结，只在 user 边界上切。
+   *
+   * 切在 assistant / tool 中间会留下「回答没有对应提问」或
+   * 「工具结果没有对应调用」的历史，而 OpenAI 兼容接口对 tool
+   * 消息有配对要求 —— 那会直接 400。
+   */
+  const { head, tail } = splitForCompaction(wire)
+  if (head.length === 0) {
+    // 没有可折叠的内容（比如只有一轮但单条极大）——
+    // 那不是压缩能解决的，交给后面的预算检查去报错
+    return
+  }
+
+  logger.info(
+    'ai',
+    `上下文到 ${Math.round((total / threshold) * 100)}% 阈值，开始压缩：折叠 ${head.length} 条，保留 ${tail.length} 条`
+  )
+
+  const result = await summarizeForCompaction(head, sessionId)
+  if (!result.ok || !result.summary) {
+    // 压不动不算错误：退回原文发送，预算检查会在真的超了时报可读的错
+    logger.warn('ai', `压缩失败，本次仍按完整历史发送：${result.error || '模型未返回摘要'}`)
+    return
+  }
+
+  /*
+   * 用摘要替换被折叠的那一段。
+   *
+   * 角色用 system 而不是 user：它是系统生成的交接说明，
+   * 不是学生说的话。让学生以为「自己说过这段话」是错的。
+   */
+  // 就地改 wire：调用方之后直接用它发请求
+  rebuildAfterCompaction(wire, summaryContent(result.summary), tail)
+
+  const after = roughTokens(flattenPrompt(wire))
+  noteCompacted(sessionId, { totalTokensAfter: after, threshold, now })
+
+  logger.info(
+    'ai',
+    `压缩完成：约 ${total} → ${after} token（摘要 ${result.summary.length} 字，折叠 ${result.foldedCount} 条）`
+  )
+
+  /*
+   * 通知渲染层改它自己的历史。
+   *
+   * keptCount 用「实际保留的条数」而不是让它自己再数一遍：
+   * 两处各写一份「保留最近几轮」的判定迟早跑偏，
+   * 跑偏要么重复发（浪费），要么把模型正在用的那几轮也丢掉（答非所问）。
+   */
+  emit({
+    requestId,
+    kind: 'compacted',
+    compaction: {
+      summary: result.summary,
+      keptCount: tail.length,
+      foldedCount: result.foldedCount
+    }
+  })
+}
+
+/**
+ * 压缩之后重建 wire：`[system prompt?] [新摘要] [保留的最近几轮]`
+ *
+ * ## 为什么单独一个函数（两个调用点都必须一致）
+ *
+ * 自动压缩与手动压缩（`/compact`）都要做这件事。以前是各写一遍，
+ * 而两份都写错了同一个地方：用 `findIndex(role === 'system')` 拿
+ * 「第一条 system」当作系统提示词塞回最前面 ——
+ *
+ *   - 若历史里**已经有**上一次的摘要（那也是 system，且在更前面），
+ *     取到的其实是摘要，于是新旧两条摘要同时存在：模型会读两遍
+ *     而且可能读到互相矛盾的两版
+ *   - 若系统提示词组装失败（极端情况），也会取到摘要，
+ *     把它当成系统提示词插到最前 —— 语义完全错位
+ *
+ * 现在只认「非摘要的 system」才是系统提示词（用 SUMMARY_MARKER 区分）。
+ * 找不到就不放（主进程稍后还会注入真正的那份，见 injectSystemPrompt）。
+ */
+function rebuildAfterCompaction(wire: WireMessage[], summary: string, tail: WireMessage[]): void {
+  const promptIndex = wire.findIndex(
+    (m) =>
+      m.role === 'system' &&
+      !(typeof m.content === 'string' && m.content.startsWith(SUMMARY_MARKER))
+  )
+  const rebuilt: WireMessage[] = []
+  if (promptIndex >= 0) rebuilt.push(wire[promptIndex])
+  rebuilt.push({ role: 'system', content: summary }, ...tail)
+  wire.length = 0
+  wire.push(...rebuilt)
+}
+
+/**
+ * 把真正的 system prompt 放到 wire 的最前面。
+ *
+ * ## 为什么不能简单地「找到第一条 system 就替换」
+ *
+ * 压缩摘要**也是 system 角色**（见 compaction.ts）。老写法是
+ * `findIndex(role === 'system')` 然后整个替换掉 —— 那会把摘要**直接删掉**：
+ * 模型于是完全不知道之前聊过什么，压缩反而变成了「失忆」。
+ * 这个 bug 完全静默（请求照常成功），只是 AI 突然开始答非所问。
+ *
+ * 所以判定要区分两种 system：
+ *   - **摘要**：以 SUMMARY_MARKER 开头 → 属于历史内容，必须保留
+ *   - **占位/系统提示词**：渲染层发来的空壳（旧版行为）或上次注入的那份
+ *     → 可以被替换
+ *
+ * 替换掉第一条**非摘要**的 system；没有就插到最前面。
+ * 摘要永远留在它原来的位置（历史的开头），语义不变。
+ */
+function injectSystemPrompt(wire: WireMessage[], systemText: string): void {
+  const isSummary = (m: WireMessage): boolean =>
+    typeof m.content === 'string' && m.content.startsWith(SUMMARY_MARKER)
+
+  const index = wire.findIndex((m) => m.role === 'system' && !isSummary(m))
+  if (index >= 0) wire[index] = { role: 'system', content: systemText }
+  else wire.unshift({ role: 'system', content: systemText })
+}
 
 /**
  * 裁剪历史里较旧的工具输出。
@@ -960,10 +1161,97 @@ function listModels(): Promise<ModelListResult> {
   })
 }
 
+/**
+ * 手动压缩（`/compact` 命令）。
+ *
+ * ## 与自动压缩的区别
+ *
+ *   - **不看阈值**：用户说了压就压，哪怕现在只有 30% ——
+ *     他的意图可能是「我知道接下来要贴个大文件，先腾地方」
+ *   - **不看冷却**：刚压完又压一次是用户自己的选择
+ *   - **要给出结论**：压了多少、省了多少，当场说清楚；
+ *     自动那次是后台行为，不打扰用户
+ *
+ * 硬守卫仍然生效：至少得有两轮以上对话才谈得上压缩，
+ * 否则「压完只剩摘要」等于把刚问的那句话也吞了。
+ *
+ * 返回结构化结果而不是抛异常：渲染层要拿它拼一句中文提示。
+ */
+async function manualCompact(messages: ChatMessage[], sessionId: string): Promise<ManualCompactionResult> {
+  const invalid = configError()
+  if (invalid) return { ok: false, beforeTokens: 0, afterTokens: 0, message: invalid }
+
+  const wire: WireMessage[] = messages.map((m) => ({ role: m.role, content: m.content }))
+  const systemText = await sessionSystemPrompt(sessionId)
+  // 走与自动压缩同一个注入函数：它会跳过摘要，不会把已有的摘要顶掉
+  if (systemText) injectSystemPrompt(wire, systemText)
+
+  const beforeTokens = roughTokens(flattenPrompt(wire))
+
+  /*
+   * 至少要留得下一轮完整对话才值得压。
+   *
+   * keepTurns=2 时，splitForCompaction 要求 user 消息 > 2 才有得切；
+   * 否则 head 为空，这里直接给一句可读的说明，而不是让用户
+   * 对着一个「压完了但什么都没变」的结果发懵。
+   */
+  const userMessages = wire.filter((m) => m.role === 'user').length
+  if (userMessages <= KEEP_RECENT_USER_TURNS) {
+    return {
+      ok: false,
+      beforeTokens,
+      afterTokens: beforeTokens,
+      message: `对话还很短（${userMessages} 轮），压缩会把当前话题也一起折叠掉。先多聊几轮再用 /compact。`
+    }
+  }
+
+  const { head, tail } = splitForCompaction(wire)
+  if (head.length === 0) {
+    return {
+      ok: false,
+      beforeTokens,
+      afterTokens: beforeTokens,
+      message: '没有可压缩的内容 —— 较早的部分已经是摘要了。'
+    }
+  }
+
+  logger.info('ai', `手动压缩：折叠 ${head.length} 条，保留 ${tail.length} 条`)
+  const result = await summarizeForCompaction(head, sessionId)
+  if (!result.ok || !result.summary) {
+    return {
+      ok: false,
+      beforeTokens,
+      afterTokens: beforeTokens,
+      message: `压缩失败：${result.error || '模型没有返回摘要'}`
+    }
+  }
+
+  // 与自动压缩走同一个重建函数：两处各写一遍正是上面那串 bug 的来源
+  rebuildAfterCompaction(wire, summaryContent(result.summary), tail)
+
+  const afterTokens = roughTokens(flattenPrompt(wire))
+
+  // 手动压缩也要记压力：否则「刚手动压完、下一轮自动又压一次」
+  noteCompacted(sessionId, { totalTokensAfter: afterTokens, threshold: 0, now: Date.now() })
+
+  logger.info('ai', `手动压缩完成：约 ${beforeTokens} → ${afterTokens} token`)
+
+  return {
+    ok: true,
+    beforeTokens,
+    afterTokens,
+    notice: { summary: result.summary, keptCount: tail.length, foldedCount: result.foldedCount },
+    message: `已压缩：约 ${beforeTokens} → ${afterTokens} token（折叠 ${result.foldedCount} 条，保留最近 ${tail.length} 条）`
+  }
+}
+
 export function registerAiIpc(): void {
   ipcMain.handle(IPC.aiAbort, (_e, requestId: string) => abortAi(requestId))
   ipcMain.handle(IPC.aiTest, () => testConnection())
   ipcMain.handle(IPC.aiListModels, () => listModels())
+  ipcMain.handle(IPC.aiCompact, (_e, messages: ChatMessage[], sessionId?: string) =>
+    manualCompact(messages, typeof sessionId === 'string' ? sessionId : '')
+  )
   ipcMain.handle(IPC.aiChat, async (event, requestId: string, messages: ChatMessage[], sessionId?: string) => {
     const sender = event.sender
     const emit = (chunk: AiStreamChunk): void => {

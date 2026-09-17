@@ -92,6 +92,8 @@ const api: AppApi = {
   aiAbort: (requestId: string) => ipcRenderer.invoke(IPC.aiAbort, requestId),
   aiTest: () => ipcRenderer.invoke(IPC.aiTest),
   aiListModels: () => ipcRenderer.invoke(IPC.aiListModels),
+  aiCompact: (messages: ChatMessage[], sessionId?: string) =>
+    ipcRenderer.invoke(IPC.aiCompact, messages, sessionId),
 
   onAiStream: (cb: (chunk: AiStreamChunk) => void) => subscribe<AiStreamChunk>(IPC.evtAiStream, cb),
   onLog: (cb: (line: LogLine) => void) => subscribe<LogLine>(IPC.evtLog, cb),

@@ -14,21 +14,59 @@
  *
  *   1. 先**裁剪**历史里最占地方的旧工具输出（不花钱、无副作用），
  *      这是第一道防线，多数情况到这一步就够了
- *   2. 裁剪还不够，才提示「需要压缩」——由上层决定是否总结
+ *   2. 裁剪还不够，就把旧消息**总结**成一段（要调一次模型），
+ *      总结插回最前面、保留最近若干轮原文
  *
- * 阈值取 `contextWindow - maxOutputToken * factor`，而不是整个窗口：
- * 必须给模型的回答留出空间，否则输入刚好占满、输出没地方放，照样报错。
+ * 判定与执行分家：本文件只回答「该不该压、压到多少」，
+ * 真正的总结在 `compaction.ts`（它要用 llm.ts 发请求）。
+ * 这样策略是纯函数，护栏可以直接钉住，不必起窗口、不必联网。
  *
- * ## 为什么因子是 1.2 / 1.5
- *
- * 日常主动压缩留更多余量（1.5），运行中被迫保护时收紧（1.2）。
- * 数值直接照搬 LiveAgent，它们是与真实中转站磨合出来的经验值。
+ * 阈值 = **模型上下文窗口 × 比例**（默认 80%）：
+ * 必须给模型的回答、以及工具返回的内容留出空间，否则输入刚好占满、
+ * 输出没地方放，照样报错。
  */
 
-/** 主动（发请求前）判断时的余量因子 */
-export const OPTIMIZATION_THRESHOLD_FACTOR = 1.5
-/** 运行中保护性判断时的余量因子 */
-export const PROTECTION_THRESHOLD_FACTOR = 1.2
+/**
+ * 触发压缩的窗口占用比例 —— **到模型上下文窗口的 80% 就压**。
+ *
+ * 为什么按比例而不是「窗口减去固定的输出预留」：
+ * 窗口从 8k 到 1M 跨了两个数量级，减固定值在小窗口上会算出一个
+ * 几乎没有余量的阈值（8k 窗口减 16k 预留直接变负数）。
+ * 按比例则每个模型都留出同样比例的空间给回答。
+ *
+ * 为什么是 80% 而不是更晚：剩下 20% 要同时装下「这一轮的回答」
+ * 与「工具调用返回的内容」。后者往往比想象中大（读一个大文件就是
+ * 几千 token），压到 90% 才动手会在工具轮里直接撞墙。
+ */
+export const COMPACT_AT_RATIO = 0.8
+
+/**
+ * 保护性判断（回答中途、工具轮之间）用的比例。
+ *
+ * 比主动压缩**晚一点**：那时模型正在用刚拿到的工具结果，
+ * 一压就把它的上下文抽走了，所以多让出 5% 的余量再动。
+ */
+export const PROTECTION_COMPACT_AT_RATIO = 0.85
+
+/**
+ * 连续压不动时用的比例。
+ *
+ * 压缩已经证明没效果（压完还在阈值以上），就往上抬，
+ * 别在同一个位置反复压 —— 那只会把对话越压越薄。
+ */
+export const EXHAUSTED_COMPACT_AT_RATIO = 0.9
+
+/**
+ * 保留多少轮最近对话不参与总结。
+ *
+ * 按「用户轮」数：1 个用户轮 = 一条 user 消息 + 它引发的全部
+ * assistant / 工具消息。留 2 轮，模型就能接着刚才的话题往下说，
+ * 而不是从总结里重新猜「我们刚才在干什么」。
+ *
+ * 定成 2 而不是更多：压缩的目的就是腾出空间，留太多等于白压。
+ * 也不要留 0：那样模型完全不知道当前进行到哪一步。
+ */
+export const KEEP_RECENT_USER_TURNS = 2
 
 /** 两次压缩之间的最短间隔，避免刚压完又立刻压 */
 export const MIN_COMPACTION_INTERVAL_MS = 60_000
@@ -244,10 +282,21 @@ export interface CompactionDecision {
 }
 
 /**
- * 阈值 = 窗口 − 输出预留 × 因子。
+ * 阈值 = 窗口 × 比例。
  *
- * 下限 1024 保证小窗口模型（如 8k）也有个正数阈值，
- * 不会因为算出来是负数而永远不触发。
+ * **比例制**：到模型上下文窗口的 80% 就该压缩了。
+ *
+ * 以前这里是「窗口 − 输出预留 × 因子（1.5 / 1.2）」，问题在于
+ * 那个公式对小窗口模型会算出几乎没有余量的阈值：
+ * 8k 窗口减 16k 预留是负数，只能靠下限 1024 兜住，
+ * 而 1024 这个数在 8k 窗口上意味着「输入刚到 1k 就要压缩」——
+ * 等于小窗口模型的对话根本用不起来。
+ *
+ * 换成比例之后，所有窗口大小的触发点都是「同一个相对位置」，
+ * 并且天然给回答留出了 (1 − 比例) 的空间。
+ *
+ * 下限 1024 仍然保留：极小窗口（比如用户手填了 1000）时保证是正数，
+ * 不会因为算出 0 或负数而永远不触发。
  */
 export function resolveThreshold(params: {
   intent: CompactionIntent
@@ -255,12 +304,22 @@ export function resolveThreshold(params: {
   maxOutputToken: number
   pressureLevel: PressureLevel
 }): number {
-  const factor =
-    params.intent === 'optimization' ? OPTIMIZATION_THRESHOLD_FACTOR : PROTECTION_THRESHOLD_FACTOR
-  // 压力到顶时把保护因子也降到 1.0：余量已经保不住了，先保证能发出去
-  const effective =
-    params.intent === 'protection' && params.pressureLevel >= MAX_PRESSURE_LEVEL ? 1.0 : factor
-  return Math.max(1024, Math.floor(params.contextWindow - params.maxOutputToken * effective))
+  /*
+   * 取哪个比例：
+   *   - 主动压缩（发请求前）：0.8
+   *   - 运行中保护（工具轮之间）：0.85，晚一点，别把模型正在用的
+   *     工具结果抽走
+   *   - 压力到顶（连续压不动）：0.9，再往上抬，避免在同一位置反复压
+   */
+  let ratio: number
+  if (params.pressureLevel >= MAX_PRESSURE_LEVEL) {
+    ratio = EXHAUSTED_COMPACT_AT_RATIO
+  } else if (params.intent === 'optimization') {
+    ratio = COMPACT_AT_RATIO
+  } else {
+    ratio = PROTECTION_COMPACT_AT_RATIO
+  }
+  return Math.max(1024, Math.floor(params.contextWindow * ratio))
 }
 
 /**
@@ -320,6 +379,39 @@ export function decideCompaction(params: {
   }
 
   return { ...base, shouldCompact: true, reason: 'threshold-exceeded', threshold }
+}
+
+/**
+ * 按「用户轮」把消息切成「要总结的」与「保留原文的」两部分。
+ *
+ * 一个用户轮 = 一条 user 消息 + 它引发的全部 assistant / 工具消息。
+ * 从**后往前**数满 keepTurns 个 user 消息，那段之后的一律保留。
+ *
+ * ⚠️ 只在 user 消息边界上切。切在 assistant / tool 中间的话，
+ * 会留下一条「回答没有对应提问」或「工具结果没有对应调用」的历史，
+ * 而 OpenAI 兼容接口对 tool 消息有配对要求 —— 那会直接 400。
+ *
+ * 为什么放在这个纯函数模块里（而不是 compaction.ts）：
+ * 它是压缩里最容易写错的一处（边界差一、切在 tool 中间），
+ * 而 compaction.ts 要 import electron 与 llm，护栏加载不了它。
+ * 放这里就能被离线钉住，不必起窗口、不必联网。
+ *
+ * 泛型是为了不依赖 ipc/ai.ts 的 WireMessage（那个类型是文件私有的）。
+ */
+export function splitForCompaction<T extends { role: string }>(
+  messages: T[],
+  keepTurns = KEEP_RECENT_USER_TURNS
+): { head: T[]; tail: T[] } {
+  const userIndexes: number[] = []
+  for (let i = 0; i < messages.length; i++) {
+    if (messages[i].role === 'user') userIndexes.push(i)
+  }
+
+  // 本来就没几轮，没什么可总结的
+  if (userIndexes.length <= keepTurns) return { head: [], tail: [...messages] }
+
+  const cut = userIndexes[userIndexes.length - keepTurns]
+  return { head: messages.slice(0, cut), tail: messages.slice(cut) }
 }
 
 /**

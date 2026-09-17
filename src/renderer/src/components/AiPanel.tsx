@@ -4,17 +4,47 @@ import type {
   ApprovalRequest,
   ChatContentBlock,
   ChatMessage,
+  CompactionNotice,
   PermissionMode
 } from '@shared/types'
+import { SUMMARY_MARKER } from '@shared/types'
 import { splitReasoning, splitReasoningStreaming } from '@shared/think-blocks'
 import { normalizeChatText } from '@shared/chat-text'
 import { compressImage, humanBytes, withImages } from '../image-input'
+import { askConfirm } from '../store/confirm'
 import { useAppStore } from '../store/useAppStore'
+import {
+  matchSlashCommands,
+  parseSlashCommand,
+  parseSlashQuery,
+  slashCommandHelp,
+  type SlashCommand
+} from '../slash-commands'
 import Select from './ui/Select'
 import ConfirmDialog from './ConfirmDialog'
 import { AtIcon, PaperclipIcon, SendIcon } from './icons'
 
-type Role = 'user' | 'assistant' | 'system' | 'error'
+type Role = 'user' | 'assistant' | 'system' | 'error' | 'notice'
+
+/**
+ * 哪些角色算「真正的对话内容」，要落盘、也要发给模型。
+ *
+ * ## 为什么需要这个判定（别在两处各写一遍）
+ *
+ * 以前这里是硬编码的 `role === 'user' || role === 'assistant'`，
+ * 出现在发送、落盘两个地方。压缩功能加进来之后**摘要必须是 system**，
+ * 而那两处过滤会把摘要**静默丢掉** —— 表现是：
+ * 「压缩完看着省了，下一轮又变回完整历史」，因为摘要根本没进过 wire。
+ *
+ * 所以收成一个判定：
+ *   - `user` / `assistant`：正常对话
+ *   - `system`：**压缩摘要**（要发、也要存 —— 不然重开会话就丢上下文）
+ *   - `error` / `notice`：纯本地提示（如 `/help` 的输出、网络错误），
+ *     既不发也不存。存下来的话，下次打开会看到一堆「连接超时」。
+ */
+function isConversationRole(role: Role): boolean {
+  return role === 'user' || role === 'assistant' || role === 'system'
+}
 
 /** 父组件能调进来的动作，目前只有「清空聊天区」 */
 export interface AiPanelHandle {
@@ -323,6 +353,25 @@ const AiPanel = forwardRef<
   /** 高亮的候选下标（↑↓ 移动，回车选中） */
   const [atIndex, setAtIndex] = useState(0)
 
+  /**
+   * `/` 命令的候选列表状态。
+   *
+   * 与 `@` 分开存而不是共用一个浮层：两者的触发规则、过滤方式、
+   * 「选中后往输入框里填什么」都不一样（@ 填路径、/ 直接执行），
+   * 合在一起会得到一堆 if。两边同时打开也不可能 —— 光标前只能是其一。
+   */
+  const [slashOpen, setSlashOpen] = useState(false)
+  const [slashQuery, setSlashQuery] = useState('')
+  const [slashStart, setSlashStart] = useState(-1)
+  const [slashIndex, setSlashIndex] = useState(0)
+  /**
+   * 正在压缩上下文。
+   *
+   * 与 busy 分开：busy 表示「有回答在流」，压缩期间并不在流式输出，
+   * 但同样不该让人连点两次 `/compact`（每次都要花一次模型调用）。
+   */
+  const [compacting, setCompacting] = useState(false)
+
   const loadFiles = async (): Promise<void> => {
     try {
       setFileList(await window.api.listFiles())
@@ -462,23 +511,37 @@ const AiPanel = forwardRef<
    */
   useImperativeHandle(ref, () => ({
     reset() {
-      if (requestRef.current) void window.api.aiAbort(requestRef.current)
-      requestRef.current = ''
-      // 缓冲区与定时器必须一起清：留着定时器的话，它稍后会拿旧 requestId
-      // 往一个已经不存在的气泡里写文本（那次 map 找不到目标，但白跑一遍）
-      if (deltaTimerRef.current !== null) {
-        window.clearTimeout(deltaTimerRef.current)
-        deltaTimerRef.current = null
-      }
-      deltaBufRef.current = ''
-      updateItems([])
-      setInput('')
-      setRefs([])
-      setBusy(false)
-      // 消息本体由 store.startNewSession 清（它负责落盘旧会话），
-      // 这里只清展示态，两边不重复清同一份数据
+      resetPanel()
     }
   }))
+
+  /**
+   * 「新对话」：清空消息与输入，并中断正在跑的请求。
+   *
+   * 必须中断 —— 否则上一轮的回答会继续往新会话里写 token，
+   * 学生看到的是「明明点了新对话，答案还在自己往外冒」。
+   *
+   * 单独抽出来是因为 `/new` 命令与顶栏按钮都要用它：
+   * 两处各写一份的话，以后改了中断逻辑只改一处，另一处就会留一个
+   * 「清了界面但请求还在跑」的缺口。
+   */
+  function resetPanel(): void {
+    if (requestRef.current) void window.api.aiAbort(requestRef.current)
+    requestRef.current = ''
+    // 缓冲区与定时器必须一起清：留着定时器的话，它稍后会拿旧 requestId
+    // 往一个已经不存在的气泡里写文本（那次 map 找不到目标，但白跑一遍）
+    if (deltaTimerRef.current !== null) {
+      window.clearTimeout(deltaTimerRef.current)
+      deltaTimerRef.current = null
+    }
+    deltaBufRef.current = ''
+    updateItems([])
+    setInput('')
+    setRefs([])
+    setBusy(false)
+    // 消息本体由 store.startNewSession 清（它负责落盘旧会话），
+    // 这里只清展示态，两边不重复清同一份数据
+  }
 
   // 面板卸载时清掉待执行的定时器，避免在卸载后 setState
   useEffect(() => {
@@ -608,6 +671,18 @@ const AiPanel = forwardRef<
             return { ...it, tools }
           })
         )
+      } else if (chunk.kind === 'compacted') {
+        /*
+         * 主进程刚把上下文压掉了，要同步改本地的历史。
+         *
+         * 为什么必须在**流还没结束**时就处理：这一轮结束后 syncStore
+         * 会拿 itemsRef 整份回写 store。若等到那时再合并压缩结果，
+         * 竞争关系就说不清了（谁先谁后都可能），而漏掉的表现正是
+         * 「压缩看着生效了，下一轮又变回完整历史」。
+         *
+         * 这里先落，则后面的 syncStore 天然带上「摘要 + 保留的几轮」。
+         */
+        if (chunk.compaction) applyCompaction(chunk.compaction)
       } else if (chunk.kind === 'error') {
         // 报错也要先把攒着的文本落下去，否则学生看到的是「回答到一半就没了」
         flushDelta()
@@ -659,8 +734,8 @@ const AiPanel = forwardRef<
   const syncFromItems = (list: ChatItem[]): void => {
     const at = new Date().toISOString()
     const payload = list
-      .filter((it) => it.role === 'user' || it.role === 'assistant')
-      .map((it) => ({ role: it.role as 'user' | 'assistant', text: it.text, at }))
+      .filter((it) => isConversationRole(it.role))
+      .map((it) => ({ role: it.role as 'user' | 'assistant' | 'system', text: it.text, at }))
     useAppStore.getState().setSessionMessages(payload)
   }
 
@@ -690,8 +765,8 @@ const AiPanel = forwardRef<
       : itemsRef.current
     if (pending) updateItems(authoritative)
     const payload = authoritative
-      .filter((it) => it.role === 'user' || it.role === 'assistant')
-      .map((it) => ({ role: it.role as 'user' | 'assistant', text: it.text, at }))
+      .filter((it) => isConversationRole(it.role))
+      .map((it) => ({ role: it.role as 'user' | 'assistant' | 'system', text: it.text, at }))
     useAppStore.getState().setSessionMessages(payload)
   }
 
@@ -767,8 +842,183 @@ const AiPanel = forwardRef<
     void attachImages(files)
   }
 
+  /**
+   * 执行一条 `/` 命令。
+   *
+   * 命令由**渲染层直接执行**，不发请求、不花 token —— 这是它与 Skills
+   * 最本质的区别（Skills 是给模型读的，见 slash-commands.ts 的头注释）。
+   *
+   * 统一的收尾：清输入框、关浮层。放这里而不是各分支里，是因为
+   * 漏掉一处的表现是「打完命令它还在输入框里留着」，看着像没执行。
+   */
+  const runSlashCommand = async (command: SlashCommand): Promise<void> => {
+    setInput('')
+    setSlashOpen(false)
+    setSlashStart(-1)
+    setSlashQuery('')
+    setAtIndex(0)
+
+    switch (command.id) {
+      case 'compact': {
+        await compactNow()
+        return
+      }
+      case 'new': {
+        /*
+         * 走父组件给的 onNewSession，而不是自己调 startNewSession()。
+         *
+         * 那个回调还负责「切回对话视图」等导航动作 —— 自己调 store
+         * 的话，在设置页里打 /new 就会「会话换了但人还在设置页」。
+         */
+        onNewSession()
+        return
+      }
+      case 'clear': {
+        const choice = await askConfirm({
+          title: '清空当前对话？',
+          lines: ['这会删掉当前对话里的全部消息（只影响这一条会话，不影响其他会话）。'],
+          actions: [
+            { id: 'no', label: '取消', kind: 'ghost' },
+            { id: 'yes', label: '清空', kind: 'danger' }
+          ],
+          tone: 'danger'
+        })
+        if (choice !== 'yes') return
+        /*
+         * 只清渲染层与 store 的消息，**不调 startNewSession**：
+         * 学生说的是「清空试试别的」，不是「开一条新会话」。
+         * 保留 sessionId 的话，落盘会覆盖掉同一条记录 —— 这正是预期。
+         */
+        updateItems([])
+        useAppStore.getState().setSessionMessages([])
+        return
+      }
+      case 'help': {
+        // 当成一条本地消息显示，不走模型
+        appendLocalNotice(slashCommandHelp())
+        return
+      }
+      default:
+        return
+    }
+  }
+
+  /**
+   * 压缩上下文（`/compact`）。
+   *
+   * 与自动压缩的区别：用户说了就压、不等阈值，并且**当场给出结论**。
+   * 之所以要把结果写回 items 与 store，是同一个理由 ——
+   * 渲染层才是历史的持有者，不回写的话下一轮又会把完整历史发出去。
+   */
+  const compactNow = async (): Promise<void> => {
+    /*
+     * 带上已有的 system（上一次压缩的摘要）一起发。
+     *
+     * 不带的话，主进程看到的是「没有摘要的历史」，会**再总结一次**
+     * 已经总结过的内容 —— 既重复花钱，又可能把上一版摘要里
+     * 独有的信息（更早的对话）彻底丢掉。
+     */
+    const history = itemsRef.current.filter((it) => isConversationRole(it.role))
+    if (history.length === 0) {
+      appendLocalNotice('当前对话还是空的，没什么可压缩的。')
+      return
+    }
+    if (busy) {
+      appendLocalNotice('正在生成回答，等这一轮结束再压缩。')
+      return
+    }
+
+    /*
+     * 把历史整份发过去（含可能已存在的摘要那条 system）。
+     *
+     * 不再固定插一条空的 system 占位：历史里可能已经有摘要了，
+     * 再插一条会变成「两个 system」，而 splitForCompaction 只把
+     * 第一个当 system —— 另一条会被当成普通内容参与总结，很乱。
+     * 主进程那边本来就会按需补/覆盖 system prompt。
+     */
+    const payload: ChatMessage[] = history.map((it) => ({
+      role: it.role as 'user' | 'assistant' | 'system',
+      content: it.text
+    }))
+
+    setCompacting(true)
+    try {
+      const result = await window.api.aiCompact(payload, useAppStore.getState().sessionId)
+      if (!result.ok || !result.notice) {
+        appendLocalNotice(result.message || '压缩失败。')
+        return
+      }
+      applyCompaction(result.notice)
+      appendLocalNotice(result.message)
+    } catch (err) {
+      appendLocalNotice(`压缩失败：${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setCompacting(false)
+    }
+  }
+
+  /**
+   * 把主进程给出的压缩结果落到本地历史。
+   *
+   * 两处都要改，少一处就会「下一轮又变回完整历史」：
+   *   1. `items`（界面与发送来源）
+   *   2. `store.messages`（落盘与会话恢复）
+   *
+   * `keptCount` 用主进程给的值而不是自己再数一遍「最近几轮」：
+   * 两处各写一份判定迟早跑偏，而跑偏要么浪费、要么把模型
+   * 正在用的那几轮也丢掉。详见 CompactionNotice 的注释。
+   */
+  const applyCompaction = (notice: CompactionNotice): void => {
+    const list = itemsRef.current
+    // 从末尾取主进程保留的那些（它们与主进程手里的那一份逐条对应）
+    const kept = list.slice(Math.max(0, list.length - notice.keptCount))
+    const summaryItem: ChatItem = {
+      id: `sum-${Date.now()}`,
+      role: 'system',
+      text: `${SUMMARY_MARKER}\n${notice.summary}`
+    }
+    const next = [summaryItem, ...kept]
+    updateItems(next)
+    syncFromItems(next)
+  }
+
+  /** 往对话里插一条纯本地的提示（不发给模型、不落盘成对话内容） */
+  const appendLocalNotice = (text: string): void => {
+    updateItems((prev) => [
+      ...prev,
+      {
+        // role 用 notice 而不是 system：system 现在被压缩摘要占用，
+        // 而摘要是要落盘、要发给模型的；本地提示两样都不能做。
+        // 混用会让「/help 的输出」被当成历史发给模型，还会写进会话文件。
+        id: `sys-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        role: 'notice',
+        text
+      }
+    ])
+  }
+
   const send = async (raw?: string): Promise<void> => {
     const typed = (raw ?? input).trim()
+
+    /*
+     * `/` 命令拦截。
+     *
+     * 放在最前面（早于 busy 与空内容判定）：`/help`、`/clear` 这类
+     * 命令不依赖「能发消息」，而且 `/clear` 恰恰要在有内容时用。
+     *
+     * 判定是严格的（见 parseSlashCommand）：`/compact 帮我看看` 里的
+     * 斜杠只是普通字符，那种情况要当成正常消息发出去。
+     */
+    const slash = parseSlashCommand(typed)
+    if (slash) {
+      if (slash.command.disabledWhileBusy && (busy || compacting)) {
+        appendLocalNotice('正在忙，等这一轮结束再执行命令。')
+        return
+      }
+      await runSlashCommand(slash.command)
+      return
+    }
+
     // 只挂了引用文件 / 只贴了图、一句话没写，也应该能发 ——
     // 学生的意图就是「看看这个文件」或「看看这张图」
     if ((!typed && refs.length === 0 && images.length === 0) || busy || imageBusy) return
@@ -793,7 +1043,15 @@ const AiPanel = forwardRef<
     const userItem: ChatItem = { id: `u-${Date.now()}`, role: 'user', text: withImageNote }
     const aiItem: ChatItem = { id: requestId, role: 'assistant', text: '', streaming: true }
 
-    const history = [...items, userItem].filter((it) => it.role === 'user' || it.role === 'assistant')
+    /*
+     * 发出去的历史要**带上压缩摘要**（role === 'system'）。
+     *
+     * 这正是压缩能持续生效的关键：主进程压完之后，摘要进了 items；
+     * 这里若把它过滤掉，下一轮发出去的又变回完整历史 ——
+     * 于是每轮都重新总结一次，白花钱且永远压不下去。
+     * 判定收在 isConversationRole，别在这里再写一遍。
+     */
+    const history = [...items, userItem].filter((it) => isConversationRole(it.role))
     updateItems((prev) => [...prev, userItem, aiItem])
     setInput('')
     setRefs([])
@@ -807,7 +1065,7 @@ const AiPanel = forwardRef<
     // 同步落盘。aiItem 此时是空串，但回答结束后会通过 syncStore 补上
     store.setSessionMessages(
       history.map((it) => ({
-        role: it.role as 'user' | 'assistant',
+        role: it.role as 'user' | 'assistant' | 'system',
         text: it.text,
         at: new Date().toISOString()
       }))
@@ -819,9 +1077,12 @@ const AiPanel = forwardRef<
      * 图片的 base64 有几 MB，每轮都重发的话：token 消耗爆炸（同一张图
      * 被计费十几次），而且实测部分中转站会因为请求体过大直接 413。
      * 需要模型回看之前的图时，让学生重新贴一次 —— 这比每轮烧几 MB 划算。
+     *
+     * `system` 也原样带上：那是压缩摘要（如果有）。主进程会把它
+     * 当作历史的一部分，只覆盖**第一条** system 为真正的系统提示词。
      */
     const historyMessages: ChatMessage[] = history.map((it) => ({
-      role: it.role as 'user' | 'assistant',
+      role: it.role as 'user' | 'assistant' | 'system',
       content: it.text
     }))
     if (sentImages.length > 0 && historyMessages.length > 0) {
@@ -841,8 +1102,15 @@ const AiPanel = forwardRef<
      *
      * 不再是 config.ai.systemPrompt：那只是 系统.md 里的一段，
      * 发过来只会被丢掉，留着反而容易让人误以为「这里改了就生效」。
+     *
+     * ⚠️ 占位 system 只在**历史里还没有摘要**时插。
+     * 历史里已经有压缩摘要（也是 system）时再插一条，就会出现
+     * **两个 system**：主进程只覆盖第一个，摘要反而落在后面 ——
+     * 位置不对，模型会把它当成「正在进行的系统指令」，语义就错了。
      */
-    const messages: ChatMessage[] = [{ role: 'system', content: '' }, ...historyMessages]
+    const messages: ChatMessage[] = historyMessages.some((m) => m.role === 'system')
+      ? historyMessages
+      : [{ role: 'system', content: '' }, ...historyMessages]
 
     /*
      * 带上会话 id。
@@ -1047,6 +1315,9 @@ const AiPanel = forwardRef<
     return scored.slice(0, 30).map((s) => s.path)
   })()
 
+  /** 当前该显示哪些命令（按已输入的前缀过滤） */
+  const slashMatches = slashOpen ? matchSlashCommands(slashQuery) : []
+
   /**
    * 输入框内容变化时维护 `@` 的状态。
    *
@@ -1056,6 +1327,7 @@ const AiPanel = forwardRef<
    */
   const onInputChange = (value: string, caret: number): void => {
     setInput(value)
+    maintainSlash(value, caret)
     const before = value.slice(0, caret)
     const at = before.lastIndexOf('@')
     if (at < 0 || (at > 0 && !/\s/.test(before[at - 1]))) {
@@ -1070,12 +1342,41 @@ const AiPanel = forwardRef<
       setAtStart(-1)
       return
     }
+    /*
+     * `/` 与 `@` 互斥。
+     *
+     * 光标前同时有 `/` 和 `@` 时（比如 `/compact @a.txt`），
+     * 该弹的是**后敲的那个**。这里以「谁的下标更靠后」为准。
+     */
+    if (atOpen && slashStart > at) return
     setAtStart(at)
     setAtQuery(query)
     setAtIndex(0)
     setAtOpen(true)
     // 第一次触发时才拉清单，见 fileList 的注释
     if (fileList.length === 0) void loadFiles()
+  }
+
+  /** 维护 `/` 命令浮层的开合（与 onInputChange 里的 @ 判定同一套思路） */
+  const maintainSlash = (value: string, caret: number): void => {
+    const parsed = parseSlashQuery(value, caret)
+    if (!parsed) {
+      setSlashOpen(false)
+      setSlashStart(-1)
+      return
+    }
+    // 与 @ 互斥：@ 更靠后时归 @
+    const before = value.slice(0, caret)
+    const at = before.lastIndexOf('@')
+    if (at > parsed.start && (at === 0 || /\s/.test(before[at - 1]))) {
+      setSlashOpen(false)
+      setSlashStart(-1)
+      return
+    }
+    setSlashStart(parsed.start)
+    setSlashQuery(parsed.query)
+    setSlashIndex(0)
+    setSlashOpen(true)
   }
 
   /**
@@ -1258,12 +1559,44 @@ const AiPanel = forwardRef<
           placeholder={
             visionOn
               ? '输入消息，可直接粘贴截图（Ctrl+V）…'
-              : '输入消息，@ 引用文件，/ 引用 Skills，提示词可队列发送…'
+              : '输入消息，@ 引用文件，/ 命令，提示词可队列发送…'
           }
           value={input}
           onPaste={onPaste}
           onChange={(e) => onInputChange(e.target.value, e.target.selectionStart ?? e.target.value.length)}
           onKeyDown={(e) => {
+            /*
+             * `/` 命令浮层优先于 @ —— 两者互斥（见 maintainSlash），
+             * 同时打开只可能是状态没清干净，那时以命令为准更安全：
+             * 命令是「执行动作」，误选一个文件只是插个路径，误执行命令
+             * 可能把对话清掉。
+             *
+             * Esc 的判定单独放在最前面，理由与 @ 那段注释完全一样：
+             * 一个都不匹配时（比如 /zzz）列表仍开着但为空，
+             * 那时恰恰最需要 Esc 关掉它。
+             */
+            if (slashOpen && e.key === 'Escape') {
+              e.preventDefault()
+              setSlashOpen(false)
+              return
+            }
+            if (slashOpen && slashMatches.length > 0) {
+              if (e.key === 'ArrowDown') {
+                e.preventDefault()
+                setSlashIndex((i) => (i + 1) % slashMatches.length)
+                return
+              }
+              if (e.key === 'ArrowUp') {
+                e.preventDefault()
+                setSlashIndex((i) => (i - 1 + slashMatches.length) % slashMatches.length)
+                return
+              }
+              if (e.key === 'Enter' && !e.ctrlKey && !e.metaKey) {
+                e.preventDefault()
+                void runSlashCommand(slashMatches[Math.min(slashIndex, slashMatches.length - 1)])
+                return
+              }
+            }
             /*
              * @ 候选列表打开时，↑↓ / 回车 / Esc 归它用 ——
              * 尤其是回车：平时回车是换行，这里必须是「选中这个文件」，
@@ -1303,6 +1636,41 @@ const AiPanel = forwardRef<
             }
           }}
         />
+
+        {/*
+          `/` 命令浮层。
+          与 @ 浮层同一套交互（下方弹出、onMouseDown 防失焦），
+          但选中即**执行**，不像 @ 那样往输入框里填内容。
+        */}
+        {slashOpen && (
+          <div className="slash-pop">
+            {slashMatches.length === 0 ? (
+              <div className="at-empty">没有匹配 /{slashQuery} 的命令</div>
+            ) : (
+              slashMatches.map((cmd, i) => {
+                const unavailable =
+                  (cmd.disabledWhileBusy && (busy || compacting)) ||
+                  (cmd.needsHistory && items.length === 0)
+                return (
+                  <button
+                    key={cmd.id}
+                    className={`slash-item${i === slashIndex ? ' active' : ''}${unavailable ? ' is-disabled' : ''}`}
+                    disabled={unavailable}
+                    title={unavailable ? '当前还用不了' : cmd.detail}
+                    onMouseDown={(e) => {
+                      e.preventDefault()
+                      void runSlashCommand(cmd)
+                    }}
+                    onMouseEnter={() => setSlashIndex(i)}
+                  >
+                    <span className="slash-name">/{cmd.name}</span>
+                    <span className="slash-detail">{cmd.detail}</span>
+                  </button>
+                )
+              })
+            )}
+          </div>
+        )}
 
         {/*
           @ 候选浮层。放在输入框**下方**：输入框贴底，上方空间要留给消息。

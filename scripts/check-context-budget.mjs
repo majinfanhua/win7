@@ -47,56 +47,73 @@ const {
   resolvePruneOptions,
   resolveBudgetForModel,
   roughTokens,
+  splitForCompaction,
   MIN_COMPACTION_INTERVAL_MS
 } = await loadModule()
 
 const W = 128_000
 const OUT = 16_384
 
-/* ══ 1. 阈值公式 ════════════════════════════════════════════ */
+/* ══ 1. 阈值公式（按窗口比例，不是「减输出预留」） ══════════ */
 
 {
-  // optimization 因子 1.5：128000 - 16384*1.5 = 128000 - 24576 = 103424
+  // 主动压缩：128000 × 0.8 = 102400
   const t = resolveThreshold({
     intent: 'optimization',
     contextWindow: W,
     maxOutputToken: OUT,
     pressureLevel: 0
   })
-  check('阈值：主动压缩用 1.5 因子', t === 103_424, `得到 ${t}`)
+  check('阈值：主动压缩取窗口的 80%', t === 102_400, `得到 ${t}`)
 }
 
 {
-  // protection 因子 1.2：128000 - 16384*1.2 = 128000 - 19660.8 → floor 108339
+  // 保护性（工具轮之间）：128000 × 0.85 = 108800，比主动压缩晚
   const t = resolveThreshold({
     intent: 'protection',
     contextWindow: W,
     maxOutputToken: OUT,
     pressureLevel: 0
   })
-  check('阈值：保护性压缩用 1.2 因子（更晚触发）', t === 108_339, `得到 ${t}`)
+  check('阈值：保护性判断更晚触发（85%）', t === 108_800, `得到 ${t}`)
 }
 
 {
-  // 压力到顶时 protection 降到 1.0，阈值变高（更晚压缩）
+  // 压力到顶：128000 × 0.9 = 115200，再往上抬，别在原地反复压
   const t = resolveThreshold({
     intent: 'protection',
     contextWindow: W,
     maxOutputToken: OUT,
     pressureLevel: 2
   })
-  check('阈值：压力到顶时保护因子降到 1.0', t === W - OUT, `得到 ${t}`)
+  check('阈值：压力到顶时抬到 90%', t === 115_200, `得到 ${t}`)
 }
 
 {
-  // ★ 小窗口模型不能算出负数阈值，否则永远不触发
+  /*
+   * ★ 这条是换公式的**主要理由**：小窗口模型不能算出「几乎没有余量」
+   * 的阈值。旧公式 8000 − 8192×1.5 是负数，靠下限 1024 兜住 ——
+   * 而 1024 在 8k 窗口上意味着「输入刚到 1k 就要压缩」，
+   * 等于小窗口模型的对话根本用不起来。
+   */
   const t = resolveThreshold({
     intent: 'optimization',
     contextWindow: 8_000,
     maxOutputToken: 8_192,
     pressureLevel: 0
   })
-  check('阈值：小窗口下仍为正数（下限 1024）', t === 1024, `得到 ${t}`)
+  check('阈值：小窗口按比例算（8000 × 0.8）', t === 6_400, `得到 ${t}`)
+}
+
+{
+  // 极小窗口仍要有正数阈值，否则永远不触发
+  const t = resolveThreshold({
+    intent: 'optimization',
+    contextWindow: 1_000,
+    maxOutputToken: 100,
+    pressureLevel: 0
+  })
+  check('阈值：极小窗口下仍有正数阈值（下限 1024）', t === 1024, `得到 ${t}`)
 }
 
 {
@@ -338,7 +355,59 @@ const base = {
   )
 }
 
-/* ══ 5. token 估算 ══════════════════════════════════════════ */
+/* ══ 5. 压缩切分（最容易写错的一处边界） ═══════════════════ */
+
+{
+  /*
+   * ★ 核心约束：**只能在 user 消息上切**。
+   *
+   * 切在 assistant / tool 中间会留下「回答没有对应提问」或
+   * 「工具结果没有对应调用」的历史，而 OpenAI 兼容接口对 tool
+   * 消息有配对要求 —— 那会直接 400，而且是发出去才报。
+   */
+  const withTools = [
+    { role: 'system' },
+    { role: 'user' }, // 轮 1
+    { role: 'assistant' },
+    { role: 'tool' },
+    { role: 'assistant' },
+    { role: 'user' }, // 轮 2
+    { role: 'assistant' },
+    { role: 'user' }, // 轮 3
+    { role: 'assistant' }
+  ]
+  const { head, tail } = splitForCompaction(withTools, 2)
+  // 3 轮里保留后 2 轮：tail 从第 2 个 user（下标 5）开始，共 4 条；
+  // head 是前面 5 条（system + 第 1 轮的全部消息）
+  check('切分：保留最近 2 轮（3 轮时折叠第 1 轮）', head.length === 5 && tail.length === 4,
+    `head=${head.length} tail=${tail.length}`)
+  check('切分：tail 的第一条必须是 user（不能切在 tool 中间）', tail[0].role === 'user',
+    `得到 ${tail[0].role}`)
+  check('切分：head 与 tail 拼回原样', [...head, ...tail].length === withTools.length)
+}
+
+{
+  // 轮数不够就不压 —— 压完只剩摘要等于把刚问的话也吞了
+  const few = [{ role: 'user' }, { role: 'assistant' }, { role: 'user' }, { role: 'assistant' }]
+  const { head, tail } = splitForCompaction(few, 2)
+  check('切分：轮数刚好等于保留数时不折叠', head.length === 0 && tail.length === 4,
+    `head=${head.length}`)
+}
+
+{
+  // 空历史不能炸
+  const empty = splitForCompaction([], 2)
+  check('切分：空数组安全', empty.head.length === 0 && empty.tail.length === 0)
+}
+
+{
+  // 保留数大于总轮数时全部保留
+  const one = [{ role: 'user' }, { role: 'assistant' }]
+  const { head, tail } = splitForCompaction(one, 5)
+  check('切分：保留数大于总轮数时全部保留', head.length === 0 && tail.length === 2)
+}
+
+/* ══ 6. token 估算 ══════════════════════════════════════════ */
 
 {
   check('估算：空串为 0', roughTokens('') === 0)

@@ -869,6 +869,29 @@ ${target}
       detail: '浏览器预览模式不拉取模型列表；请在 Electron 里获取'
     }),
 
+    /*
+     * 压缩：桩里给一个**假摘要**。
+     *
+     * 为什么要假装成功而不是报「不支持」：压缩这条链路的重点在
+     * 「主进程算出的摘要怎么回到渲染层、怎么替换历史」，
+     * 而那段逻辑在浏览器里完全跑得通。返回失败的话，
+     * 设置页与对话界面在这条路径上就永远测不到（点一下就报错）。
+     */
+    aiCompact: async (messages) => {
+      const folded = Math.max(0, messages.length - 2)
+      return {
+        ok: true,
+        beforeTokens: messages.length * 120,
+        afterTokens: 240,
+        notice: {
+          summary: '（浏览器预览模式的示例摘要）之前的对话主要是在搭一个示例页面。',
+          keptCount: 2,
+          foldedCount: folded
+        },
+        message: `已压缩：约 ${messages.length * 120} → 240 token（示例数据）`
+      }
+    },
+
     onAiStream: (cb) => subscribe(aiListeners, cb),
     onLog: (cb) => {
       const off = subscribe(logListeners, cb)

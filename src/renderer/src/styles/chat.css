@@ -51,11 +51,32 @@
   border-bottom-left-radius: 6px;
 }
 
+/*
+ * 压缩摘要（role=system）。
+ *
+ * 视觉上刻意与普通气泡区分：它是系统生成的交接说明，
+ * 不是学生说的话、也不是 AI 的回答。做得像一条「资料卡」，
+ * 学生一眼就知道「这段是程序补的，不是我说的」。
+ */
 .msg-row.system .bubble {
   font-size: 12.5px;
   color: var(--text-2);
   background: var(--accent-soft);
   border-color: transparent;
+}
+
+/*
+ * 纯本地提示（role=notice，如 /help 的输出、压缩结果）。
+ *
+ * 与 system 摘要用同一种淡色，但**不落盘、不发模型** ——
+ * 这条角色是为此专门加的，见 isConversationRole 的注释。
+ */
+.msg-row.notice .bubble {
+  font-size: 12.5px;
+  color: var(--text-2);
+  background: var(--bubble-ai);
+  border-style: dashed;
+  white-space: pre-wrap;
 }
 
 .msg-row.error .bubble {
@@ -808,6 +829,84 @@
 }
 
 .at-dir {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11.5px;
+  color: var(--text-3);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ==========================================================================
+ * `/` 命令浮层
+ *
+ * 与 `.at-pop` 同一套定位（都是贴在输入框下方往上弹），
+ * 但每行是「命令名 + 一句说明」而不是「文件名 + 目录」。
+ * 不复用 .at-* 类名：两者的排版诉求不同（这里命令名要像代码），
+ * 硬套会让以后改 @ 的样式时误伤命令列表。
+ * ========================================================================== */
+
+.slash-pop {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  /* 与 .at-pop 同一条理由：输入框高度随 rows 变，从底部定位才稳 */
+  bottom: calc(100% - 6px);
+  z-index: 40;
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 5px;
+  background: var(--surface-solid);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+}
+
+.slash-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 9px;
+  text-align: left;
+  color: var(--text-2);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+}
+
+.slash-item.active:not(:disabled) {
+  color: var(--text);
+  background: var(--accent-soft);
+  border-color: var(--border-strong);
+}
+
+/*
+ * 当前用不了的命令置灰但仍然显示。
+ *
+ * 灰着比藏起来好：学生能看到「/compact 存在，只是现在没内容可压」，
+ * 而不是打完发现列表里什么都没有、以为命令名记错了。
+ */
+.slash-item:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.slash-name {
+  flex: none;
+  font-size: 12.5px;
+  font-weight: 600;
+  /* 命令名是代码，用等宽 —— 与 settings.css 里的代码块同一套字体栈 */
+  font-family: ui-monospace, Consolas, monospace;
+  color: var(--accent);
+}
+
+.slash-item:disabled .slash-name {
+  color: var(--text-3);
+}
+
+.slash-detail {
   flex: 1;
   min-width: 0;
   overflow: hidden;
