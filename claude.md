@@ -48,7 +48,7 @@ AI 不只是聊天：它能读写工作区里的文件，在 Win10/11 上还能�
 
 ```bash
 npm run typecheck    # 主进程 + 渲染层两份 tsconfig
-npm run build        # 会先跑全部护栏（14 道）再 electron-vite build
+npm run build        # 会先跑全部护栏（17 道）再 electron-vite build
 npm run smoke        # 启动窗口自检（Linux 无 DISPLAY 时自动套 xvfb）
 npm run check:watch  # 纯 Node 校验文件监视时序
 
@@ -187,11 +187,19 @@ cmd.exe 在所有 Windows 上都有，python/node 装好会写进 PATH。
 测试在 `scripts/check-chat-text.mjs`。
 
 **打包产物 zip 里有一层顶层文件夹**，靠 `afterAllArtifactBuild` 钩子
-（`scripts/zip-wrap-folder.mjs`）在打包后改归档内路径实现 ——
+（`scripts/zip-wrap-folder.mjs`）在打包后**直接改 zip 字节**实现 ——
 electron-builder 24.x 的 zip 目标在 Windows 上写死平铺，配置里改不了。
-用 7za 的 `rn` 而不是解压重压：不重压（97 MB 解压重压要几分钟）、
-不碰内容（CRC / 时间戳 / UTF-8 标志位原样保留，中文文件名不会变乱码）。
-CI 里有一条断言开箱验这个结构，钩子没生效会直接红。
+压缩数据原样搬运（CRC / 时间戳 / 压缩方法 / UTF-8 标志位都不动），
+名字在 local header 与中央目录里各存一份、两份都要加前缀，
+CD 里的 local 偏移要按**累计**平移量改。
+
+⚠️ **第一版调外部 `7za rn` 在 CI 上挂了**，这个坑值得记住：
+它依赖「外部 7za 的版本行为」（开发机 Linux p7zip 16.02 vs runner
+Windows 7-Zip 21.07）与「7za 的文本输出」（按控制台代码页输出文件名，
+英文 runner 表示不了「使用说明.txt」，读回乱码后 `rn` 匹配不到，
+**而退出码仍是 0**）。**本项目只出 Windows 包，拿 Linux 的 7za 验证等于没验证。**
+现在纯 Node、零外部进程。护栏 `scripts/check-zip-wrap.mjs` 钉住那串细节
+（名字存两份、偏移累计平移、元数据不变、幂等、Zip64 要拒绝）。
 
 ### 图标
 

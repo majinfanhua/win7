@@ -184,6 +184,24 @@ jobs:
             exit 1
           }
 
+      - name: 护栏 - zip 套文件夹的字节级改写
+        # 这个功能在 CI 上挂过一次：第一版调外部 7za 并解析它的文本输出来拿
+        # 文件名，开发机（Linux pzip 16.02）正常、runner（Windows 7-Zip 21.07）挂 ——
+        # 7za 按控制台代码页输出，英文 runner 表示不了「使用说明.txt」，
+        # 读回乱码后再喂回 rn 就匹配不到，而退出码仍是 0（静默没做）。
+        # 现在改成纯 Node 改字节，这道护栏钉住那串容易错的细节
+        # （名字存两份、偏移要累计平移、CRC/时间戳/UTF-8 标志位不能变、幂等）。
+        shell: pwsh
+        run: |
+          $out = & npm run check:zipwrap 2>&1 | Out-String
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) {
+            $tail = (($out -split "`r?`n") | Where-Object { $_ -ne '' } | Select-Object -Last 25) -join '%0A'
+            $tail = $tail -replace '%', '%25' -replace "`r", '%0D'
+            Write-Host "::error title=check:zipwrap 失败::$tail"
+            exit 1
+          }
+
       - name: 构建（electron-vite）
         shell: pwsh
         run: |

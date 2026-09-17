@@ -26,9 +26,18 @@ hangkeIDE-<version>-win7-win10-ia32.zip
 > 一个目录，而不是把 exe / dll / locales 摊在下载目录里。
 > 实现见 `scripts/zip-wrap-folder.mjs`：electron-builder 24.x 的 zip 目标是
 > 平铺的（`ArchiveTarget` 在 Windows 上写死 `withoutDir=true`，配置里改不了），
-> 所以挂在 `afterAllArtifactBuild` 钩子上，用 7za 的 `rn` 只改归档内的路径 ——
-> 不重压、不碰文件内容（CRC / 时间戳 / UTF-8 标志位原样保留，中文文件名不会变乱码）。
-> CI 里有一条断言开箱验这个结构，钩子没生效会直接红。
+> 所以挂在 `afterAllArtifactBuild` 钩子上，**直接改 zip 字节**把顶层条目
+> 挪进那个目录 —— 压缩数据原样搬运，CRC / 时间戳 / 压缩方法 / UTF-8 标志位
+> 全都不变（中文文件名不会变乱码），97 MB 的包毫秒级完成。
+>
+> ⚠️ **第一版是调外部 `7za rn`，在 CI 上挂了**，教训写在这里：
+> 那个写法依赖两件开发机上测不到的事 —— 一是外部 7za 的版本行为
+> （开发机 Linux p7zip 16.02、runner Windows 7-Zip 21.07，不是同一个程序，
+> 而本项目**只出 Windows 包**，拿 Linux 的 7za 验证等于没验证）；
+> 二是**它的文本输出**（按控制台代码页输出文件名，英文 runner 表示不了
+> 「使用说明.txt」，读回乱码再喂回 `rn` 就匹配不到，而退出码仍是 0 ——
+> 静默什么都没做）。现在纯 Node 实现，不依赖任何外部程序、不解析任何文本，
+> 两边行为完全一致。护栏见 `scripts/check-zip-wrap.mjs`。
 
 > Windows 版本不是打包维度。同一份包在 Win7 SP1 / Win8 / Win10 上都能跑，
 > 系统差异在启动时自适应（Win7/8 走软件渲染，Win10 走硬件加速）。

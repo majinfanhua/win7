@@ -8,24 +8,43 @@ updated: 2026-09-17（第四轮：超时改停顿判定 + 气泡换行清理 + z
 
 | 报的问题 | 根因 | 修法 |
 |---|---|---|
-| ✅ **zip 解压摊一地** | electron-builder 的 zip 目标在 Windows 上写死平铺（`ArchiveTarget` 的 `withoutDir = !isMac`），配置里没有「包一层目录」的选项 | 新增 `scripts/zip-wrap-folder.mjs`，挂 `afterAllArtifactBuild`，用 7za 的 `rn` 把顶层条目挪进 `hangkeIDE-<version>-...-<arch>/`。CI 加一条断言开箱验结构 |
+| ✅ **zip 解压摊一地** | electron-builder 的 zip 目标在 Windows 上写死平铺（`ArchiveTarget` 的 `withoutDir = !isMac`），配置里没有「包一层目录」的选项 | 新增 `scripts/zip-wrap-folder.mjs`，挂 `afterAllArtifactBuild`，**纯 Node 直接改 zip 字节**把顶层条目挪进 `hangkeIDE-<version>-...-<arch>/`。CI 加一条断言开箱验结构 |
 | ✅ **AI 明明在输出却因 120s 结束** | `streamRound` 里的 `setTimeout(120_000)` 覆盖**整次 HTTP 往返**（建连 + 等首字 + 输出），是「总时长上限」而不是「多久没动静才算卡死」。每轮确实都重置 —— 问题不在重置，而在每轮给的是总时长 | 改成停顿看门狗（`src/main/stream-watchdog.ts`）：每收到一片数据重置（5 分钟）+ 单轮硬上限 15 分钟兜底 |
 | ✅ **改代码时因超时被中断** | 同上。要调 `editFile` 的那一轮，模型得先吐完思维链与正文、再分片吐工具调用参数，往返超过 120s 就在参数吐完前被掐断。（**工具执行本身不在计时范围内** —— 那时这一轮已 settle、表已撤） | 同上 |
 | ✅ **气泡无效换行**（每执行一次工具就多一片空白） | 一次回答由好几轮拼成，每轮正文前后模型都带换行，直接拼进同一个气泡 | `shared/chat-text.ts` 的 `normalizeChatText`，在 `MessageBubble` 渲染前收口 |
 
-**新增的两道护栏**（都进了 `npm run build` 与 CI）：
+**新增的三道护栏**（都进了 `npm run build` 与 CI）：
 
 - `scripts/check-idle-timeout.mjs` —— 超时必须仍是停顿判定。
   光把常量改大不算修好：如果 SSE 的 `data` 回调里没有 `progress()`，
   那仍然是一个「每轮固定 N 分钟」的定时炸弹。所以同时断言阈值、重置点、停表点。
 - `scripts/check-chat-text.mjs` —— 换行清理的三条规则
   （只压连续空行 / 只动行尾 / 幂等）。错了只是空白多寡的差别，界面上很难看出来。
+- `scripts/check-zip-wrap.mjs` —— zip 字节级改写的 16 项断言。
+  测试用的 zip 由脚本自己按规范拼出来（只用 `node:zlib`），
+  所以不依赖 electron-builder、不依赖 7za、也不依赖产物已存在，**打包前就能跑**。
+
+**这一轮踩的坑（重要）**：
+
+zip 套文件夹的第一版实现调外部 `7za rn` 并解析它的**文本输出**拿文件名，
+**在 CI 上挂了**。两个原因都在开发机上测不到：
+
+1. 外部 7za 的版本行为 —— 开发机是 Linux p7zip **16.02**，
+   runner 是 Windows 7-Zip **21.07**，不是同一个程序。
+   **本项目只出 Windows 包，拿 Linux 的 7za 验证等于没验证。**
+2. 7za 按**控制台代码页**输出文件名，英文 runner 表示不了「使用说明.txt」，
+   读回来是乱码，再喂回 `rn` 就匹配不到 —— **而匹配不到时退出码仍是 0**，
+   静默什么都没做。
+
+现在改成纯 Node 直接改 zip 字节：零外部进程、不解析任何文本输出，
+两边行为完全一致。**以后凡是「给 Windows 用的东西」，别拿 Linux 的同名工具
+当验证依据** —— 这条对打包链路尤其重要。
 
 **这一轮没在真机上验过的**：
-- ⬜ zip 套文件夹只在 Linux 上用 `7za` 与**真实 Release 产物**验过
-  （顶层 19 项 → 1 项、`使用说明.txt` 的 UTF-8 标志位 0x800 保留、
-  解压后 exe 的 SHA256 与改前一致）。**Windows 上的 `7za.exe` 行为没跑过** ——
-  下次 CI 的「断言 zip 里套了一层文件夹」那一步会验到。
+- ⬜ zip 套文件夹在本地用**真实 Release 产物**验过（顶层 19 项 → 1 项、
+  75 个条目的 CRC / 大小 / 压缩方法 / 时间戳 / UTF-8 标志位逐条一致、
+  内容 SHA256 全等，并用 python zipfile 与 7za 两条独立路径复验）。
+  现在实现是纯 Node、无平台差异，但**仍以 CI 那一步的实际结果为准**。
 - ⬜ 停顿看门狗只做了静态断言与构建验证，**没有真的挂一个慢模型跑满 5 分钟**。
   想手工验：把 `STREAM_STALL_TIMEOUT_MS` 临时改成 10 秒，发一个长问题，
   看是不是「只要还在吐字就不超时」。
