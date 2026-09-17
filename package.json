@@ -21,15 +21,18 @@
     "check:utf8": "node scripts/check-utf8-decode.mjs",
     "check:dialog": "node scripts/check-no-blocking-dialog.mjs",
     "check:contract": "node scripts/check-prompt-contract.mjs",
-    "build": "npm run check:node16 && npm run check:watch && npm run check:editmatch && npm run check:argguard && npm run check:cmdsafety && npm run check:budget && npm run check:css108 && npm run check:nativeselect && npm run check:abortdone && npm run check:utf8 && npm run check:dialog && npm run check:contract && npm run check:profile && npm run check:profileio && electron-vite build",
+    "build": "npm run check:node16 && npm run check:watch && npm run check:editmatch && npm run check:argguard && npm run check:cmdsafety && npm run check:budget && npm run check:css108 && npm run check:nativeselect && npm run check:abortdone && npm run check:utf8 && npm run check:dialog && npm run check:contract && npm run check:profile && npm run check:profileio && npm run check:timeout && npm run check:chattext && electron-vite build",
     "preview": "electron-vite preview",
     "typecheck:node": "tsc --noEmit -p tsconfig.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "smoke": "node scripts/smoke.mjs",
     "dist:win": "node scripts/guard-ci.mjs && electron-builder --win --x64 --ia32 --publish never",
+    "zip:wrap": "node scripts/zip-wrap-folder.mjs",
     "check:profile": "node scripts/check-profile.mjs",
-    "check:profileio": "node scripts/check-profile-io.mjs"
+    "check:profileio": "node scripts/check-profile-io.mjs",
+    "check:timeout": "node scripts/check-idle-timeout.mjs",
+    "check:chattext": "node scripts/check-chat-text.mjs"
   },
   "devDependencies": {
     "@types/node": "20.17.9",

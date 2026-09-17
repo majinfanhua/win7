@@ -22,6 +22,17 @@ extraFiles:
   - from: resources/使用说明.txt
     to: 使用说明.txt
 
+# zip 打完之后套一层顶层文件夹。
+#
+# electron-builder 的 zip 目标是**平铺**的（Windows 上写死 withoutDir=true），
+# 解压出来是 hangkeIDE.exe + locales/ + resources/ + 一堆 dll 散在下载目录里。
+# 这里挂一个钩子把顶层条目整体挪进 `hangkeIDE-<version>-win7-win10-<arch>/`，
+# 学生解压得到的是一个文件夹，整个拖到 D:\ 下就能用。
+#
+# 为什么不在配置里解决：24.x 的 zip 目标没有「包一层目录」的选项，
+# artifactName 只管归档文件名，改不了归档内的路径。详见脚本头注释。
+afterAllArtifactBuild: scripts/zip-wrap-folder.mjs
+
 asar: true
 
 # 零原生依赖，跳过 node-gyp 重建

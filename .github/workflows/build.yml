@@ -152,6 +152,38 @@ jobs:
             exit 1
           }
 
+      - name: 护栏 - 流式超时是停顿判定
+        # 用户报过「AI 明明在输出，却因为 120s 的限制结束了」。
+        # 根因是一轮 HTTP 往返写死了 120 秒总时长，而不是「多久没动静才算卡死」——
+        # 长回答与慢工具都会被它误杀。这类 bug 在开发机上极难复现
+        # （要模型恰好输出满两分钟），所以靠静态扫描钉住写法。
+        shell: pwsh
+        run: |
+          $out = & npm run check:timeout 2>&1 | Out-String
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) {
+            $tail = (($out -split "`r?`n") | Where-Object { $_ -ne '' } | Select-Object -Last 25) -join '%0A'
+            $tail = $tail -replace '%', '%25' -replace "`r", '%0D'
+            Write-Host "::error title=check:timeout 失败::$tail"
+            exit 1
+          }
+
+      - name: 护栏 - 聊天气泡的换行清理
+        # 一次带工具的回答由好几轮拼成，每轮正文都带换行 ——
+        # 不清理就是「每执行一次工具，气泡就多一片空白」。
+        # 三条规则（只压连续空行、只动行尾、幂等）都是看起来对实际错的写法，
+        # 错了只是空白多寡的差别，界面上很难看出来，所以钉在测试里。
+        shell: pwsh
+        run: |
+          $out = & npm run check:chattext 2>&1 | Out-String
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) {
+            $tail = (($out -split "`r?`n") | Where-Object { $_ -ne '' } | Select-Object -Last 25) -join '%0A'
+            $tail = $tail -replace '%', '%25' -replace "`r", '%0D'
+            Write-Host "::error title=check:chattext 失败::$tail"
+            exit 1
+          }
+
       - name: 构建（electron-vite）
         shell: pwsh
         run: |
@@ -348,6 +380,46 @@ jobs:
           $zipCount = (Get-ChildItem release -Filter *.zip).Count
           Write-Host "共 $($zipCount) 个 zip 产物"
           if ($zipCount -lt 2) { throw "预期 2 个 zip（x64 / ia32），实际 $($zipCount) 个" }
+
+      - name: 断言 zip 里套了一层文件夹
+        # 这一条守的是「解压不摊一地」。套文件夹靠 afterAllArtifactBuild 钩子
+        # （scripts/zip-wrap-folder.mjs）在打包之后改归档内的路径 ——
+        # 钩子没被触发、或 7za 静默失败时，构建照样会绿，
+        # 只有真去解开看才知道。所以在这里开箱验一次。
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $bad = @()
+          foreach ($zip in Get-ChildItem release -Filter *.zip) {
+            $expected = [System.IO.Path]::GetFileNameWithoutExtension($zip.Name)
+            $archive = [System.IO.Compression.ZipFile]::OpenRead($zip.FullName)
+            try {
+              # 顶层目录集合：取每个条目路径的第一段。
+              # ⚠️ 必须用 @() 包起来：只有一个顶层项时，管道返回的是**字符串**
+              # 而不是数组，那样 $tops[0] 取到的是第一个字符，断言会永远失败。
+              $tops = @($archive.Entries |
+                ForEach-Object { ($_.FullName -split '/')[0] } |
+                Where-Object { $_ -ne '' } |
+                Sort-Object -Unique)
+              $exe = $archive.Entries | Where-Object { $_.FullName -eq "$expected/hangkeIDE.exe" }
+              Write-Host "$($zip.Name)：顶层 $($tops.Count) 项 [$($tops -join ', ')]，exe=$(if ($exe) { '有' } else { '无' })"
+              if ($tops.Count -ne 1) {
+                $bad += "$($zip.Name) 的顶层有 $($tops.Count) 项（应为 1）：$($tops -join ', ')"
+              } elseif ($tops[0] -ne $expected) {
+                $bad += "$($zip.Name) 的顶层文件夹是 $($tops[0])，应为 $expected"
+              } elseif (-not $exe) {
+                $bad += "$($zip.Name) 里没有 $expected/hangkeIDE.exe"
+              }
+            } finally {
+              $archive.Dispose()
+            }
+          }
+          if ($bad.Count -gt 0) {
+            $detail = ($bad -join '%0A') -replace '%', '%25' -replace "`r", ''
+            Write-Host "::error title=zip 未套顶层文件夹::$detail"
+            throw "zip 结构不符合预期：`n$($bad -join "`n")"
+          }
+          Write-Host '✓ 两个 zip 都套了顶层文件夹，解压出来是一个目录而不是一地文件'
 
       - name: 上传产物（Artifacts）
         if: always()

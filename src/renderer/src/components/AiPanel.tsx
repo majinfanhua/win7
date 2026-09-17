@@ -7,6 +7,7 @@ import type {
   PermissionMode
 } from '@shared/types'
 import { splitReasoning, splitReasoningStreaming } from '@shared/think-blocks'
+import { normalizeChatText } from '@shared/chat-text'
 import { compressImage, humanBytes, withImages } from '../image-input'
 import { useAppStore } from '../store/useAppStore'
 import Select from './ui/Select'
@@ -1591,6 +1592,17 @@ const MessageBubble = memo(function MessageBubble({
       .filter((seg) => seg.kind === 'text')
       .map((seg) => seg.content)
       .join('') + split.pending
+  /*
+   * 气泡正文的最后一道清理：去掉无意义的换行。
+   *
+   * 一次回答由好几轮拼成，每轮正文前后模型都会带换行 ——
+   * 于是「每执行一次工具，气泡就多一片空白」，正文被推得越来越远。
+   * 规则与理由见 shared/chat-text.ts（只压连续空行，不动行首缩进）。
+   *
+   * 放在**渲染这一层**而不是写入 items 的那一层：历史消息、流式分片、
+   * 重试回填全都经过这里，一处收口就全覆盖了。
+   */
+  const bubbleText = normalizeChatText(visibleText)
   const reasoningText = streamedReasoning + inlineReasoning
   const [showReasoning, setShowReasoning] = useState(false)
 
@@ -1669,11 +1681,15 @@ const MessageBubble = memo(function MessageBubble({
           思考过程与工具过程都在上面的折叠块里 —— 它们不该把气泡撑大，
           也不该和答案混在一起（学生要的是结论）。
           正文为空时干脆不渲染气泡，避免留一个空气泡占位。
+
+          判定用 bubbleText（清理过的）而不是 visibleText：
+          只吐了几个换行就去调工具的那一轮，清理后是空串 ——
+          它不该撑出一片空白。
         */}
-        {(visibleText || (!toolCount && !reasoningText)) && (
+        {(bubbleText || (!toolCount && !reasoningText)) && (
           <div className="bubble">
-            {visibleText ? (
-              visibleText
+            {bubbleText ? (
+              bubbleText
             ) : item.streaming ? (
               // 还在流里但一个字没来：三种点的等待动画
               <span className="dots">

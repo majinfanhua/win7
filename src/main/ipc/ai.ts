@@ -30,6 +30,11 @@ import {
   type TruncationReport
 } from '../tools/argument-guard'
 import { logger } from '../logger'
+import {
+  stallTimeoutMessage,
+  STREAM_ROUND_MAX_MS,
+  STREAM_STALL_TIMEOUT_MS
+} from '../stream-watchdog'
 
 /** 正在进行的流式请求，用于中断 */
 const active = new Map<string, Electron.ClientRequest>()
@@ -41,7 +46,15 @@ const active = new Map<string, Electron.ClientRequest>()
  */
 const aborted = new Set<string>()
 
-const CHAT_TIMEOUT_MS = 120_000
+/**
+ * 「连接自检 / 拉模型列表」这类短请求的超时。
+ *
+ * ⚠️ 它**不是**对话请求的超时。对话那边原来是同名的 `CHAT_TIMEOUT_MS = 120_000`，
+ * 含义是「一次 HTTP 往返的总时长上限」—— 于是模型连续输出超过 2 分钟必然被砍，
+ * 要调 editFile 的那一轮也可能在参数吐完前被掐断
+ * （用户报的「AI 明明在输出却因 120s 结束」与「改代码时被超时中断」都是它）。
+ * 现在对话改走停顿看门狗，规则见 stream-watchdog.ts。
+ */
 const SHORT_TIMEOUT_MS = 30_000
 
 export function abortAi(requestId: string): boolean {
@@ -257,7 +270,6 @@ function streamRound(
 
   return new Promise((resolve) => {
     let settled = false
-    let timer: NodeJS.Timeout
     let rawUsage: RawUsage | null = null
     let completionText = ''
     const calls = new Map<number, WireToolCall>()
@@ -266,11 +278,58 @@ function streamRound(
     // 事后再看无法区分真截断和「累计快照流」。
     const argTracker = new ToolArgumentTracker()
 
+    /*
+     * 停顿看门狗。
+     *
+     * 规则见 stream-watchdog.ts：计时器在**每一片到达的数据**上重置，
+     * 而不是「一轮只给 120 秒」。这是「AI 明明在输出却被超时结束」的修复点。
+     *
+     * 两个计时器各管一件事：
+     *   - stall：多久没有收到任何数据（每片重置）→ 防上游半死不活
+     *   - ceiling：这一轮总共跑了多久（不重置）→ 防「连接活着但永远不答」
+     *
+     * 两个都不覆盖工具执行时间：模型给出 tool_calls 时这一轮就结束了，
+     * settle() 会停表；工具跑完开下一轮才重新起表。
+     */
+    let stallTimer: NodeJS.Timeout | null = null
+    let ceilingTimer: NodeJS.Timeout | null = null
+
+    const stopWatchdog = (): void => {
+      if (stallTimer !== null) {
+        clearTimeout(stallTimer)
+        stallTimer = null
+      }
+      if (ceilingTimer !== null) {
+        clearTimeout(ceilingTimer)
+        ceilingTimer = null
+      }
+    }
+
+    /** 判定超时：掐断连接并报错。两个计时器共用 */
+    const timeOut = (kind: 'stall' | 'ceiling', limit: number): void => {
+      try {
+        request.abort()
+      } catch {
+        /* ignore */
+      }
+      logger.warn(
+        'ai',
+        `请求 ${requestId} 判定超时（${kind}，${Math.round(limit / 1000)}s），已中断`
+      )
+      settle({ kind: 'error', message: stallTimeoutMessage(kind, limit) })
+    }
+
+    /** 有进展（收到任意一片数据）就重新计时 */
+    const progress = (): void => {
+      if (stallTimer !== null) clearTimeout(stallTimer)
+      stallTimer = setTimeout(() => timeOut('stall', STREAM_STALL_TIMEOUT_MS), STREAM_STALL_TIMEOUT_MS)
+    }
+
     const settle = (result: RoundResult): void => {
       if (settled) return
       settled = true
       active.delete(requestId)
-      clearTimeout(timer)
+      stopWatchdog()
       resolve(result)
     }
 
@@ -314,17 +373,19 @@ function streamRound(
     }
 
     active.set(requestId, request)
-    timer = setTimeout(() => {
-      try {
-        request.abort()
-      } catch {
-        /* ignore */
-      }
-      settle({
-        kind: 'error',
-        message: `请求超时（${CHAT_TIMEOUT_MS / 1000}s），请检查网络或中转站状态`
-      })
-    }, CHAT_TIMEOUT_MS)
+
+    /*
+     * 两个计时器一起起。
+     *
+     * 起表点在这里（请求发出前）而不是收到响应头之后：
+     * 上游「连上了但一个字不回」同样需要兜住，而那时还没有任何分片能重置停顿计时器。
+     *
+     * 停顿计时器第一段给的是 STREAM_STALL_TIMEOUT_MS，不是更短的值 ——
+     * HTTP 响应头通常要等模型吐出第一个 token 才发，
+     * 所以「建连阶段」和「等首字」在时间上分不开（详见 stream-watchdog.ts）。
+     */
+    progress()
+    ceilingTimer = setTimeout(() => timeOut('ceiling', STREAM_ROUND_MAX_MS), STREAM_ROUND_MAX_MS)
 
     for (const [key, value] of Object.entries(buildHeaders('text/event-stream'))) request.setHeader(key, value)
 
@@ -356,6 +417,16 @@ function streamRound(
        */
       const decoder = new StringDecoder('utf8')
       response.on('data', (chunk) => {
+        /*
+         * 收到了数据 —— 先重置停顿计时器，再解析。
+         *
+         * 放在解析之前是刻意的：判断「上游还活着吗」只看**有没有字节到达**，
+         * 不看这些字节解析出了什么。中转站的保活注释（`: keep-alive`）、
+         * 空 choices、usage 块，全都算「活着」的证据。
+         * 放到解析之后就要求「必须解析出正文分片」才算进展，
+         * 那会把「上游在正常发心跳」误判成卡死。
+         */
+        progress()
         buffer += decoder.write(chunk)
         const lines = buffer.split('\n')
         buffer = lines.pop() || ''

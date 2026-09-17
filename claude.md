@@ -48,12 +48,15 @@ AI 不只是聊天：它能读写工作区里的文件，在 Win10/11 上还能�
 
 ```bash
 npm run typecheck    # 主进程 + 渲染层两份 tsconfig
-npm run build        # 会先跑 check:node16 与 check:watch
+npm run build        # 会先跑全部护栏（14 道）再 electron-vite build
 npm run smoke        # 启动窗口自检（Linux 无 DISPLAY 时自动套 xvfb）
 npm run check:watch  # 纯 Node 校验文件监视时序
 
 # 自检支持追加参数，用来复现 CI 的那几次不同配置
 npm run smoke -- --capability-profile=win7
+
+# 打包收尾（CI 里由 afterAllArtifactBuild 钩子自动跑，这里是手工补跑）
+npm run zip:wrap     # 扫 release/ 下的 zip，套一层顶层文件夹；幂等
 ```
 
 ## CI 失败时怎么定位
@@ -144,6 +147,9 @@ cmd.exe 在所有 Windows 上都有，python/node 装好会写进 PATH。
 | `main/shell.ts` | 解释器定位（cmd/powershell）、临时 .cmd 脚本、启动清扫 |
 | `main/tools/search-tools.ts` | Glob / Grep 的实现（自写 glob 匹配，不引库）|
 | `main/runtimes.ts` | 探测 python / node / git 等，结果进 system prompt |
+| `main/stream-watchdog.ts` | 流式超时的全部规则（停顿看门狗，见下）|
+| `shared/chat-text.ts` | 聊天气泡正文的换行清理（纯函数、幂等）|
+| `scripts/zip-wrap-folder.mjs` | 打包收尾：给 zip 套一层顶层文件夹 |
 | `renderer/src/image-input.ts` | 图片压缩（canvas → JPEG，长边 1568）|
 | `renderer/src/snippets.ts` | `!` / `css` / `js` 等触发词片段，与 file-templates 共用数据 |
 | `renderer/src/components/PreviewPane.tsx` | 内嵌 HTML 预览（iframe + 已有静态服务）|
@@ -163,6 +169,29 @@ cmd.exe 在所有 Windows 上都有，python/node 装好会写进 PATH。
 
 **图片输入只在最后这一轮带图**：历史消息只发文本。base64 有几 MB，
 每轮重发会让同一张图被计费十几次，部分中转站还会因请求体过大直接 413。
+
+**流式超时是「停顿」判定，不是「一轮 N 秒」**（`main/stream-watchdog.ts`）。
+原来的 `setTimeout(120_000)` 覆盖**整次 HTTP 往返**（建连 + 等首字 + 输出），
+是「总时长上限」而非「空闲上限」，导致
+「AI 明明在输出却被超时结束」（长回答超过 2 分钟必被砍）与
+「改代码改到一半被中断」（要调 editFile 的那一轮，参数还没吐完就被掐断；
+工具**执行**本身不在计时范围内，那时表已撤）。
+现在：每收到一片数据就重置（5 分钟），另加一个 15 分钟的单轮硬上限兜底
+（防「一直发心跳、模型永不答」）。
+`scripts/check-idle-timeout.mjs` 钉住这个写法 —— 光把常量改大不算修好。
+
+**聊天气泡正文要过一遍 `normalizeChatText`**（`shared/chat-text.ts`）。
+一次回答由好几轮拼成，每轮正文都带换行，不清理就是「每执行一次工具，
+气泡就多一片空白」。三条不能动的规则：**只压连续空行**（保留一个空行的分段）、
+**只动行尾**（行首缩进是代码，且结果会存进会话记录）、**必须幂等**。
+测试在 `scripts/check-chat-text.mjs`。
+
+**打包产物 zip 里有一层顶层文件夹**，靠 `afterAllArtifactBuild` 钩子
+（`scripts/zip-wrap-folder.mjs`）在打包后改归档内路径实现 ——
+electron-builder 24.x 的 zip 目标在 Windows 上写死平铺，配置里改不了。
+用 7za 的 `rn` 而不是解压重压：不重压（97 MB 解压重压要几分钟）、
+不碰内容（CRC / 时间戳 / UTF-8 标志位原样保留，中文文件名不会变乱码）。
+CI 里有一条断言开箱验这个结构，钩子没生效会直接红。
 
 ### 图标
 
