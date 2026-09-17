@@ -30,7 +30,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import zlib from 'node:zlib'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(here, '..')
@@ -188,9 +188,17 @@ function readZip(buf) {
   return { entries, cdSize, cdOffset, eocd, commentLen: buf.readUInt16LE(eocd + 20) }
 }
 
-/** 载入被测模块 */
+/**
+ * 载入被测模块。
+ *
+ * ⚠️ 必须用 pathToFileURL 转成 file:// URL，不能直接 `import('D:\\a\\...')`。
+ * ESM 加载器只认 file / data / node 三种 scheme，Windows 上的绝对路径
+ * （`D:\a\...`）会被当成 scheme `d:` 而报 ERR_UNSUPPORTED_ESM_URL_SCHEME。
+ * 在 Linux 上跑永远正常（`/home/...` 恰好能当相对 URL 解析），
+ * 这个错犯过一次，而且只在 CI 上暴露 —— 又是「开发机是 Linux」那类坑。
+ */
 const { afterAllArtifactBuild } = await import(
-  path.join(root, 'scripts/zip-wrap-folder.mjs')
+  pathToFileURL(path.join(root, 'scripts/zip-wrap-folder.mjs')).href
 )
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'zipwrap-'))
