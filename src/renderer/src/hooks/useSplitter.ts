@@ -96,7 +96,36 @@ export function useSplitter({
       if (e.button !== 0) return
       e.preventDefault()
       const el = e.currentTarget as HTMLElement
-      el.setPointerCapture(e.pointerId)
+      /*
+       * 先把可能残留的捕获放掉，再重新捕获。
+       *
+       * ⚠️ 残留捕获会让**整个界面点不动**：指针捕获期间所有指针事件
+       * 都被路由给捕获元素，输入框、按钮一律收不到 mousedown ——
+       * 表现就是「拖过一次之后，输入框再也选不中」。
+       * 上一次的 pointerup 若丢了（Win7 上软件渲染 + 高负载时可能发生），
+       * 捕获就留在这里；这里主动释放一次，保证每次拖动都是干净起点。
+       */
+      for (const pid of capturedIds(el)) {
+        try {
+          el.releasePointerCapture(pid)
+        } catch {
+          /* 没捕获过会抛错，忽略 */
+        }
+      }
+      /*
+       * 捕获失败不能让拖动整个失效。
+       *
+       * setPointerCapture 在几种情况下会抛（指针已不活跃、合成事件、
+       * 某些远程桌面/驱动环境）。原来它裸调用，一抛就把整个 pointerdown
+       * 处理器打断 —— 结果是 setDragging(true) 都没执行，拖动完全不响应。
+       * 捕获只是「手滑出条子也能继续拖」的增强，失败时退化成普通拖动
+       * 仍然可用，所以这里必须 try 住。
+       */
+      try {
+        el.setPointerCapture(e.pointerId)
+      } catch {
+        /* 没捕获到就退化成不捕获的拖动，功能不受影响 */
+      }
       startRef.current = {
         pos: axisRef.current === 'vertical' ? e.clientX : e.clientY,
         ratio: value
@@ -159,17 +188,60 @@ export function useSplitter({
       pending = null
     }
 
-    /** 清掉临时变量，让 CSS 回落到由 state 算出的值 */
-    const clearVar = (): void => {
+    /** 取消未落地的 rAF 写入 */
+    const cancelPending = (): void => {
       if (rafId !== 0) {
         window.cancelAnimationFrame(rafId)
         rafId = 0
       }
       pending = null
-      targetEl()?.style.removeProperty(cssVarRef.current)
+    }
+
+    /**
+     * 把变量写成某个确定的值。
+     *
+     * ⚠️ 这里**绝不能用 removeProperty**，那是「拖动后弹回原位」的根因。
+     *
+     * 原因是这个变量同时被两方写：拖动期间是这里，非拖动时是 React
+     * （App.tsx 把 `--split` 放进 .stage 的 style prop）。
+     * 以前松手时调 removeProperty，删掉的正是 React 那一个 ——
+     * 于是 .editor-dock 的 `calc(var(--split, 0.62) * 100%)` 回落到
+     * fallback 0.62，宽度弹回原位。
+     *
+     * 更糟的是它会**永久**卡住：React 记着自己上次渲染的是 0.62，
+     * 松手后重渲染仍是 0.62（store 更新还没轮到），React 判定「style 没变」
+     * 就不重新写入；等 store 变成新值时，React 才会写 —— 但只要中间
+     * 任何一次渲染让它以为没变，属性就一直是空的。
+     * 实测：松手后 --split 为空、编辑器宽度 748px 纹丝不动，
+     * 而 config.json 里明明存着 0.4543。
+     *
+     * 现在改成写入**具体值**：松手时写最终值，React 之后渲染同一个值，
+     * 两者一致，不会跳变也不会丢。
+     */
+    const writeVar = (v: number): void => {
+      cancelPending()
+      targetEl()?.style.setProperty(cssVarRef.current, String(v))
     }
 
     const onMove = (e: PointerEvent): void => {
+      /*
+       * ★ 兜底：鼠标键已经松开了，但我们没收到 pointerup。
+       *
+       * pointerup 丢失时（Win7 软件渲染高负载、驱动异常、窗口失焦都可能），
+       * 指针捕获会**一直留着**，而捕获期间所有指针事件都被路由给分割条 ——
+       * 输入框、按钮一律收不到 mousedown，表现就是「拖过一次之后，
+       * 输入框再也点不中」。实测确认过这条链路。
+       *
+       * `buttons` 是**当前**按下的键位掩码，它比事件可靠：只要指针还在动
+       * 就一定会带上真实状态。发现 0 就说明用户早已松手，直接按「松手」
+       * 处理并结束拖动，别等一个可能永远不来的 pointerup。
+       *
+       * 判断放在写变量之前：这样不会用一个过期坐标覆盖最终值。
+       */
+      if (e.buttons === 0) {
+        onUp(e)
+        return
+      }
       pending = ratioAt(e)
       if (rafId === 0) rafId = window.requestAnimationFrame(flush)
       captured = (e.target as HTMLElement) || captured
@@ -179,36 +251,77 @@ export function useSplitter({
     const onUp = (e: PointerEvent): void => {
       const next = ratioAt(e)
       /*
-       * 松手才提交。顺序要注意：**先清临时变量，再 setState**。
-       * 反过来的话，state 更新后 React 会重写 .stage 的内联 --split，
-       * 而残留的旧变量与它打架，会闪一下。
+       * 松手才提交。
+       *
+       * 顺序：先把**最终值**写进变量，再 setState 提交。
+       *
+       * 不写这一下的话：最后一次 pointermove 可能还在 rAF 里没落地，
+       * 松手瞬间会闪一下旧值。而写成最终值则与 React 随后的渲染一致。
        */
-      clearVar()
+      writeVar(next)
       setDragging(false)
       onChange(next)
     }
 
     const onCancel = (): void => {
-      // pointercancel 发生在系统抢走指针时（比如弹出右键菜单、切窗口），
-      // 这时不能把当前值提交 —— 用户并没有确认这个位置
-      clearVar()
+      /*
+       * pointercancel：系统抢走指针（弹右键菜单、切窗口）时触发。
+       * 这时不能提交 —— 用户并没有确认这个位置，要**还原成拖动前的值**。
+       *
+       * 还原用 writeVar(起始值) 而不是 removeProperty：
+       * 理由同上面的 writeVar 注释（删属性会连带删掉 React 那份）。
+       */
+      writeVar(startRef.current.ratio)
       setDragging(false)
     }
 
+    /*
+     * 捕获丢失兜底。
+     *
+     * 系统在某些情况下（窗口失焦、弹系统菜单、驱动异常）会直接
+     * 撤掉指针捕获而不发 pointerup。那时拖动状态不会自己结束 ——
+     * `dragging` 一直为 true，界面停在「正在拖」，而且按钮一直按着的样子。
+     * 这里按「取消」处理：还原到拖动前的值，因为用户并没有确认这个位置。
+     */
+    const onLostCapture = (): void => {
+      writeVar(startRef.current.ratio)
+      setDragging(false)
+    }
+    window.addEventListener('lostpointercapture', onLostCapture)
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
     window.addEventListener('pointercancel', onCancel)
     return () => {
+      window.removeEventListener('lostpointercapture', onLostCapture)
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
       window.removeEventListener('pointercancel', onCancel)
-      // 组件在拖动中被卸载（比如切到设置页）时，别留下一个脏变量
-      clearVar()
+      /*
+       * 这里**不能**动那个变量。
+       *
+       * effect 的依赖里有 dragging，所以松手时（true→false）这个 cleanup
+       * 也会跑一次。以前它在这里 removeProperty，正好把 onUp 刚写好的
+       * 值擦掉 —— 这是「弹回原位」的第二个入口，即使 onUp 改对了也会被它毁掉。
+       * 变量此时已经是正确值，交给 React 保持即可。
+       */
       if (captured && pointerId >= 0 && captured.hasPointerCapture?.(pointerId)) {
         captured.releasePointerCapture(pointerId)
       }
     }
   }, [dragging, min, max, onChange])
+
+  /*
+   * 卸载时才清掉变量。
+   *
+   * 单独一个空依赖的 effect：与上面那个不同，它只在组件真正卸载时跑，
+   * 不会被 dragging 变化误触发（切到设置页等场景要靠它清干净）。
+   */
+  useEffect(() => {
+    return () => {
+      const el = document.querySelector<HTMLElement>(targetRef.current)
+      el?.style.removeProperty(cssVarRef.current)
+    }
+  }, [])
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -233,4 +346,23 @@ export function useSplitter({
 
 function clamp(n: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, n))
+}
+
+/**
+ * 列出这个元素当前捕获着的所有 pointerId。
+ *
+ * 没有 API 能直接枚举，只能按 id 探。指针 id 是小的自增整数
+ * （鼠标恒为 1，触摸从 1 起递增），探 1~12 足够覆盖真实交互，
+ * 超过这个数只可能是异常状态 —— 那时也还有下面的指针捕获丢失兜底。
+ */
+function capturedIds(el: HTMLElement): number[] {
+  const ids: number[] = []
+  for (let pid = 1; pid <= 12; pid++) {
+    try {
+      if (el.hasPointerCapture(pid)) ids.push(pid)
+    } catch {
+      /* 某些实现会在未捕获时抛错，忽略 */
+    }
+  }
+  return ids
 }

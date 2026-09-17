@@ -1,5 +1,6 @@
 import type { ExplorerSortBy } from '@shared/types'
 import { RefreshIcon } from './icons'
+import Select from '../ui/Select'
 
 /**
  * 文件树工具栏：新建文件 / 新建文件夹 / 刷新 / 全部折叠 / 显示隐藏文件 / 排序。
@@ -95,23 +96,25 @@ export default function TreeToolbar({
 
       {/*
         排序：窄栏里只给一个下拉，没有空间铺三个按钮。
-        用原生 <select> 而不是自绘下拉 —— 前者在 Win7 上一定能弹出来，
-        而且键盘可达性白拿（上下键、首字母跳转）。
+
+        ⚠️ 这里原来用**原生 <select>**，理由写的是「在 Win7 上一定能弹出来」。
+        现在改用自绘下拉，原因是原生那个在深色模式下会**白底浅字看不见**：
+        它的展开列表由 Windows 系统主题引擎绘制，`color-scheme: dark`
+        在 Win7 上不生效（explorer.css 里那条 `.tree-sort select option`
+        补丁就是为它打的，但改不动列表背景本身）。
+        自绘的列表完全由 CSS 控制，两个主题下都正常。
       */}
       <label className="tree-sort" title="文件树排序方式（文件夹始终排在最前）">
         <SortIcon />
-        <select
+        <Select
           value={sortBy}
+          options={SORTS.map((item) => ({ value: item.key, label: item.label }))}
+          onChange={(v) => onSort(v)}
+          ariaLabel="排序方式"
+          title="文件树排序方式（文件夹始终排在最前）"
+          className="tree-sort-select"
           disabled={disabled}
-          aria-label="排序方式"
-          onChange={(e) => onSort(e.target.value as ExplorerSortBy)}
-        >
-          {SORTS.map((item) => (
-            <option key={item.key} value={item.key}>
-              {item.label}
-            </option>
-          ))}
-        </select>
+        />
       </label>
     </div>
   )

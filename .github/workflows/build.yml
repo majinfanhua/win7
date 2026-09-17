@@ -78,6 +78,37 @@ jobs:
             exit 1
           }
 
+      - name: 护栏 - 不用原生 select
+        # 原生下拉的展开列表由操作系统绘制，CSS 改不到它。
+        # Win7 上即使声明 color-scheme: dark，系统仍把列表画成白底，
+        # 而选项文字继承浅色变量 → 深色模式下看不见。
+        # 开发机（Linux Chromium 108）复现不了，所以靠这道静态扫描拦住。
+        shell: pwsh
+        run: |
+          $out = & npm run check:nativeselect 2>&1 | Out-String
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) {
+            $tail = (($out -split "`r?`n") | Where-Object { $_ -ne '' } | Select-Object -Last 25) -join '%0A'
+            $tail = $tail -replace '%', '%25' -replace "`r", '%0D'
+            Write-Host "::error title=check:nativeselect 失败::$tail"
+            exit 1
+          }
+
+      - name: 护栏 - 中断必须发 done
+        # 渲染层的「正在生成」只在收到 done/error 时才清。
+        # 中断分支静默 return 会让「点了停止但还在加载中」——
+        # 两侧单独看都对，只有看出「没人通知前端」才能定位。
+        shell: pwsh
+        run: |
+          $out = & npm run check:abortdone 2>&1 | Out-String
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) {
+            $tail = (($out -split "`r?`n") | Where-Object { $_ -ne '' } | Select-Object -Last 25) -join '%0A'
+            $tail = $tail -replace '%', '%25' -replace "`r", '%0D'
+            Write-Host "::error title=check:abortdone 失败::$tail"
+            exit 1
+          }
+
       - name: 护栏 - 平台契约
         # 契约是发给模型的行为约定，失效方式是静默的（少一段、混入时间戳、
         # 被用户文本伪造）。所以单独扫一遍，失败原因走 ::error 注解。

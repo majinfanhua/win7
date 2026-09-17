@@ -638,6 +638,125 @@ window.__SELFTEST__ = async () => {
     // 两栏都有满高（不再按 --split 分高度）
     checks.bothFullHeight = Boolean(ed && vw && ed.height > 100 && Math.abs(ed.height - vw.height) < 4)
 
+    /*
+     * ★ 拖动提交后，宽度必须真的停在拖到的位置。
+     *
+     * 这条对应「拖完弹回原位」那个 bug，而且是**静默的**：
+     * 拖动期间变量写对了、config.json 里也存对了，只有松手后
+     * React 重写内联 --split 时把它擦掉，宽度回落到 CSS 默认 0.62。
+     * 只查「拖动时有反应」抓不到它，必须查**松手之后**。
+     *
+     * 用真实指针事件走一遍完整拖动（按下 → 移动 → 松开），
+     * 然后等 React 渲染完，再量编辑器宽度是否与拖到的比例一致。
+     */
+    const stage = document.querySelector('.stage') as HTMLElement | null
+    const splitter = document.querySelector('.splitter.is-vertical') as HTMLElement | null
+    /*
+     * ⚠️ 这里要的是**元素**，不是上面那个 ed。
+     * ed 是 getBoundingClientRect() 的快照（DOMRect），拖动后不会更新 ——
+     * 拿它量「拖动后的宽度」永远是旧值，断言会假绿。
+     */
+    const editorEl = document.querySelector('.editor-dock') as HTMLElement | null
+    if (stage && splitter && editorEl) {
+      const beforeW = editorEl.getBoundingClientRect().width
+      const box = splitter.getBoundingClientRect()
+      const startX = box.left + box.width / 2
+      const startY = box.top + box.height / 2
+
+      const fire = (type: string, x: number, buttons: number): void => {
+        splitter.dispatchEvent(
+          new PointerEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            clientX: x,
+            clientY: startY,
+            button: type === 'pointerup' ? 0 : 0,
+            buttons,
+            pointerId: 1,
+            pointerType: 'mouse',
+            isPrimary: true
+          })
+        )
+      }
+
+      /*
+       * ⚠️ pointerdown 之后必须**等一拍**再发 pointermove。
+       *
+       * window 上的 pointermove/pointerup 监听是在 React effect 里注册的，
+       * 而 pointerdown 只是 setDragging(true) —— 要等 React 重渲染、effect 跑完，
+       * 监听才挂上。同步连着发的话 move 全部落在监听注册之前，
+       * 拖动完全不动（第一次写这条断言就是这么假红的）。
+       * 这不是产品 bug，是测试没等 React。
+       */
+      const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 60))
+      fire('pointerdown', startX, 1)
+      await tick()
+      // 往左拖 120px（编辑器变窄）。分多次以便走 rAF 路径
+      for (let i = 1; i <= 6; i++) {
+        fire('pointermove', startX - i * 20, 1)
+        await tick()
+      }
+      fire('pointerup', startX - 120, 0)
+
+      const settled = await waitFor(
+        () => Math.abs(editorEl.getBoundingClientRect().width - beforeW) > 20,
+        3_000
+      )
+
+      const afterW = editorEl.getBoundingClientRect().width
+      const splitAttr = stage.style.getPropertyValue('--split')
+      checks.splitterDragCommitted = settled
+      checks.splitterDragWidths = { before: Math.round(beforeW), after: Math.round(afterW) }
+      // 松手后内联变量必须还在（为空就会回落到默认值）
+      checks.splitterDragVarKept = splitAttr !== ''
+      /*
+       * 指针捕获必须已经释放。
+       *
+       * 残留捕获会让**整个界面点不动** —— 捕获期间所有指针事件都被
+       * 路由给分割条，输入框收不到 mousedown，表现就是
+       * 「拖过一次之后输入框再也选不中」。这也是静默的，
+       * 只查宽度变化看不出来。
+       */
+      const stillCaptured: number[] = []
+      for (let pid = 1; pid <= 12; pid++) {
+        try {
+          if (splitter.hasPointerCapture(pid)) stillCaptured.push(pid)
+        } catch {
+          /* 未捕获时可能抛错，忽略 */
+        }
+      }
+      checks.splitterCaptureReleased = stillCaptured.length === 0
+      checks.splitterCapturedIds = stillCaptured
+
+      /*
+       * 拖动之后输入框还点得中吗 —— 直接量「最后结果」。
+       * 上面两条是分步诊断，这条才是用户真正感知到的东西。
+       */
+      const ta = document.querySelector('.composer textarea') as HTMLTextAreaElement | null
+      if (ta) {
+        ta.blur()
+        const r = ta.getBoundingClientRect()
+        const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+        checks.textareaClickableAfterDrag = Boolean(top && (top === ta || ta.contains(top)))
+      } else {
+        checks.textareaClickableAfterDrag = false
+      }
+      // 复原：把分割比例拖回原位，别把状态留给后面的断言
+      fire('pointerdown', startX - 120, 1)
+      await tick()
+      for (let i = 1; i <= 6; i++) {
+        fire('pointermove', startX - 120 + i * 20, 1)
+        await tick()
+      }
+      fire('pointerup', startX, 0)
+      await tick()
+    } else {
+      checks.splitterDragCommitted = false
+      checks.splitterDragVarKept = false
+      checks.splitterCaptureReleased = false
+      checks.textareaClickableAfterDrag = false
+    }
+
     checks.layoutOk = Boolean(
       checks.sidebarFound &&
         checks.fileTreeFound &&
@@ -650,7 +769,11 @@ window.__SELFTEST__ = async () => {
         checks.splitterBetween &&
         checks.editorDockHasWidth &&
         checks.chatAreaHasWidth &&
-        checks.bothFullHeight
+        checks.bothFullHeight &&
+        checks.splitterDragCommitted &&
+        checks.splitterDragVarKept &&
+        checks.splitterCaptureReleased &&
+        checks.textareaClickableAfterDrag
     )
   } catch (err) {
     checks.layoutOk = false
@@ -661,58 +784,34 @@ window.__SELFTEST__ = async () => {
    * 空态（欢迎页）的几何检查。
    *
    * 只查元素存在是不够的 —— 之前就因为 .stage 忘了改 flex-direction，
-   * 三个子块并排挤在一起，元素全在但界面是坏的。
-   * 这里量实际布局：三个入口要横排、从左往右（允许换行），
-   * 图标必须在上、标题必须在下（否则说明 flex 方向错了）。
+   * 子块并排挤在一起，元素全在但界面是坏的。所以这里量实际布局。
+   *
+   * ⚠️ 原来这里断言「三个预设入口横排」。那三张卡（解读项目 / 修复问题 /
+   * 头脑风暴）已经按用户要求去掉了，相关断言随之删除 ——
+   * 保留会立刻变红，而且量的是不存在的东西。
+   * 现在改为量「欢迎页该有的东西都在、且顺序正确」。
    */
   try {
     const badge = document.querySelector('.welcome-badge') as HTMLElement | null
     const title = document.querySelector('.welcome h1') as HTMLElement | null
-    const starts = Array.from(document.querySelectorAll('.quick-start')) as HTMLElement[]
     const bar = document.querySelector('.composer-bar') as HTMLElement | null
     const send = document.querySelector('.send-btn') as HTMLElement | null
 
     checks.welcomeBadgeFound = Boolean(badge)
     checks.welcomeTitleFound = Boolean(title)
-    checks.quickStartCount = starts.length
+
+    /*
+     * 三个预设入口必须**不存在**。
+     *
+     * 这条是防回归的：用户明确要求去掉它们，而「加回来」很容易在
+     * 后续改动里悄悄发生（比如从别处抄回一段欢迎页代码）。
+     * 断言不存在比断言存在更适合这种「明确不要」的需求。
+     */
+    checks.quickStartsRemoved = document.querySelectorAll('.quick-start').length === 0
 
     // 图标在标题上方：说明欢迎页是竖向堆叠的
     checks.welcomeStackedVertical = Boolean(
       badge && title && badge.getBoundingClientRect().bottom <= title.getBoundingClientRect().top
-    )
-
-    /*
-     * 三个入口要横排、从左往右，但**允许换行**。
-     *
-     * 早先这里断言「三张卡必须在同一行」，在 CI runner 上误报了：
-     * 窗口按 1440x900 创建，而 runner 屏幕只有 1024x768，系统会把窗口夹窄，
-     * 对话面板跟着变窄，三张卡就换行了 —— 而 .quick-starts 本来就写着
-     * flex-wrap: wrap（注释：「窄屏自动换行」）。断言比设计更严格，是断言错了。
-     *
-     * 现在改成量「流式排布是否正常」：按 top 分行，第一行至少两张，
-     * 同一行内 left 递增，换行后新行更低。flex-direction 写错成 column 时，
-     * 第一行只会有一张，仍然会被抓到。
-     */
-    const rects = starts.map((el) => el.getBoundingClientRect())
-    const rows: Array<{ top: number; lefts: number[] }> = []
-    for (const r of rects) {
-      const row = rows.find((x) => Math.abs(x.top - r.top) < 2)
-      if (row) row.lefts.push(r.left)
-      else rows.push({ top: r.top, lefts: [r.left] })
-    }
-    checks.quickStartRows = rows.length
-    // 留一份实际几何：以后布局再出问题，报告里直接能看出窄了多少
-    checks.quickStartRects = rects.map((r) => ({
-      top: Math.round(r.top),
-      left: Math.round(r.left),
-      w: Math.round(r.width)
-    }))
-    checks.quickStartsRowLayout = Boolean(
-      starts.length >= 3 &&
-        rows.length >= 1 &&
-        rows[0].lefts.length >= 2 &&
-        rows.every((row) => row.lefts.every((l, i) => i === 0 || l > row.lefts[i - 1])) &&
-        rows.every((row, i) => i === 0 || row.top > rows[i - 1].top)
     )
 
     checks.composerBarFound = Boolean(bar)
@@ -723,16 +822,60 @@ window.__SELFTEST__ = async () => {
       bar && send && send.getBoundingClientRect().right > bar.getBoundingClientRect().right - 8
     )
 
+    /*
+     * 输入框必须真的可交互。
+     *
+     * 这条对应用户报的「输入框无法选中进行对话」——
+     * 元素存在、看着正常，但被什么东西盖住了（或 pointer-events 被关掉）。
+     * 所以用 elementFromPoint 验证：输入框中心点上最顶层的元素就是它自己。
+     * 只查 tabIndex / disabled 抓不到「被透明浮层盖住」这类问题。
+     */
+    const composer = document.querySelector('.composer') as HTMLElement | null
+    const ta = composer?.querySelector('textarea') as HTMLTextAreaElement | null
+    if (ta) {
+      const r = ta.getBoundingClientRect()
+      const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+      checks.composerTextareaHitTest = Boolean(top && (top === ta || ta.contains(top)))
+      checks.composerTextareaInteractive = Boolean(
+        !ta.readOnly && !ta.disabled && getComputedStyle(ta).pointerEvents !== 'none'
+      )
+      checks.composerTextareaRect = {
+        x: Math.round(r.left),
+        y: Math.round(r.top),
+        w: Math.round(r.width),
+        h: Math.round(r.height)
+      }
+      // 聚焦一次，确认它真的能拿到焦点
+      ta.focus()
+      checks.composerTextareaFocusable = document.activeElement === ta
+    } else {
+      checks.composerTextareaHitTest = false
+      checks.composerTextareaInteractive = false
+      checks.composerTextareaFocusable = false
+    }
+
     checks.welcomeOk = Boolean(
       checks.welcomeBadgeFound &&
         checks.welcomeTitleFound &&
-        checks.quickStartsRowLayout &&
+        checks.quickStartsRemoved &&
         checks.composerBarFound &&
         checks.sendButtonFound &&
         checks.sendButtonAtRightEdge
     )
+    /*
+     * 用独立的名字，**不能叫 composerOk**。
+     * 上面的工具条断言已经在用那个名字了，这里再赋一次会把它覆盖掉 ——
+     * 「两处写同一个 check 名」在自检里是静默的：报告里只看得到后一个，
+     * 前一个永远为 true 也会被掩盖。
+     */
+    checks.composerInputOk = Boolean(
+      checks.composerTextareaHitTest &&
+        checks.composerTextareaInteractive &&
+        checks.composerTextareaFocusable
+    )
   } catch (err) {
     checks.welcomeOk = false
+    checks.composerInputOk = false
     checks.welcomeError = String(err)
   }
 
@@ -1124,6 +1267,7 @@ window.__SELFTEST__ = async () => {
     historyPopoverOk: Boolean(checks.historyPopoverOk),
     layoutOk: Boolean(checks.layoutOk),
     welcomeOk: Boolean(checks.welcomeOk),
+    composerInputOk: Boolean(checks.composerInputOk),
     newLayoutOk: Boolean(checks.newLayoutOk),
     modelPickerOk: Boolean(checks.modelPickerOk),
     modeSwitcherOk: Boolean(checks.modeSwitcherOk),

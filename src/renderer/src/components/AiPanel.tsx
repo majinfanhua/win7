@@ -10,14 +10,7 @@ import { compressImage, humanBytes, withImages } from '../image-input'
 import { useAppStore } from '../store/useAppStore'
 import Select from './ui/Select'
 import ConfirmDialog from './ConfirmDialog'
-import {
-  AtIcon,
-  BulbIcon,
-  CompassIcon,
-  PaperclipIcon,
-  SendIcon,
-  WrenchIcon
-} from './icons'
+import { AtIcon, PaperclipIcon, SendIcon } from './icons'
 
 type Role = 'user' | 'assistant' | 'system' | 'error'
 
@@ -43,6 +36,16 @@ interface ChatItem {
   usage?: AiUsage
   /** AI 对文件做过什么，按发生顺序排 */
   tools?: ToolStep[]
+  /**
+   * 这条消息是否**正在**接收流式内容。
+   *
+   * ⚠️ 必须有这个显式标记，不能靠「text 为空」来判断在加载 ——
+   * 那是「停止后一直转圈」的根因：
+   * 用户点了停止，主进程不再发内容，text 保持为空，
+   * 于是气泡里的三个点永远转下去，看起来像没停下来。
+   * 判定「在加载」要看**请求是否还活着**，而不是看它有没有内容。
+   */
+  streaming?: boolean
 }
 
 function formatTokens(n: number): string {
@@ -121,48 +124,7 @@ function buildReferenceBlock(files: string[]): string {
   return `（用户引用了以下文件，需要时请用 readFile 查看：\n${list}\n）`
 }
 
-/**
- * 欢迎页的三个入口。
- *
- * 每个都带图标 + 颜色，与截图一致：
- * 学生看到的是三个「能直接点的事」，而不是三句话 —— 空态最怕的是不知道能干什么。
- * prompt 才是真正发出去的内容；label 只是给人看的短标签。
- */
-const QUICK_STARTS = [
-  {
-    key: 'explain',
-    label: '解读项目',
-    tone: 'blue',
-    icon: 'compass',
-    prompt: '请帮我解读当前项目的结构，说明每个主要目录和文件的作用。'
-  },
-  {
-    key: 'fix',
-    label: '修复问题',
-    tone: 'amber',
-    icon: 'wrench',
-    prompt: '我的代码有问题，请帮我找出原因并给出可以直接运行的改法。'
-  },
-  {
-    key: 'brainstorm',
-    label: '头脑风暴',
-    tone: 'green',
-    icon: 'bulb',
-    prompt: '我想做一个练习项目，帮我出几个适合入门的点子。'
-  }
-] as const
 
-/**
- * 算一个入口按钮的悬停说明。
- *
- * 返回 null 表示现在就能点。否则返回「为什么现在点不了、点了之后会怎样」——
- * 只写「不可用」是不够的，学生需要知道下一步该干什么。
- */
-function gatingLabel(workspace: string, configured: boolean): string | null {
-  if (!workspace) return '还没有打开项目。点击先选一个文件夹'
-  if (!configured) return '还没配置模型。点击去设置里填地址与密钥'
-  return null
-}
 
 /** 按当前时间给一句问候，比固定的「你好」更像在用真东西 */
 function greeting(): string {
@@ -617,19 +579,31 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
         setItems((prev) =>
           prev.map((it) =>
             it.id === chunk.requestId
-              ? { ...it, role: 'error', text: `${it.text}${chunk.message || ''}` }
+              ? {
+                  ...it,
+                  role: 'error',
+                  text: `${it.text}${chunk.message || ''}`,
+                  streaming: false
+                }
               : it
           )
         )
         setBusy(false)
       } else {
-        // 流正常结束：最后一段文本必须先落地，那是回答的收尾
+        /*
+         * 流结束（正常跑完、或被用户停止 —— 主进程两种情况都会发 done，
+         * 见 ipc/ai.ts 里 abort 分支的注释）。
+         * streaming 必须在这里清掉：它是「还在加载」的唯一依据，
+         * 不清的话气泡会一直转圈。
+         */
         flushDelta()
         setBusy(false)
-        if (chunk.usage) {
-          const usage = chunk.usage
-          setItems((prev) => prev.map((it) => (it.id === chunk.requestId ? { ...it, usage } : it)))
-        }
+        setItems((prev) =>
+          prev.map((it) => {
+            if (it.id !== chunk.requestId) return it
+            return { ...it, streaming: false, ...(chunk.usage ? { usage: chunk.usage } : {}) }
+          })
+        )
       }
     })
   }, [])
@@ -773,7 +747,7 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
       : fullText
 
     const userItem: ChatItem = { id: `u-${Date.now()}`, role: 'user', text: withImageNote }
-    const aiItem: ChatItem = { id: requestId, role: 'assistant', text: '' }
+    const aiItem: ChatItem = { id: requestId, role: 'assistant', text: '', streaming: true }
 
     const history = [...items, userItem].filter((it) => it.role === 'user' || it.role === 'assistant')
     setItems((prev) => [...prev, userItem, aiItem])
@@ -913,6 +887,16 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
   const stop = async (): Promise<void> => {
     if (requestRef.current) await window.api.aiAbort(requestRef.current)
     setBusy(false)
+    /*
+     * 立刻把气泡的 streaming 清掉。
+     *
+     * 主进程在中断时**会**发一个 done（见 ipc/ai.ts），正常路径下
+     * 这一句是冗余的；但不能只依赖它：网络异常、主进程卡住、
+     * 或 abort 期间进程正好退出时，done 可能永远到不了，
+     * 那时界面就会一直转圈 —— 而这个兜底是本地同步生效的，
+     * 用户按了停止就一定看得到停下来。
+     */
+    setItems((prev) => prev.map((it) => (it.streaming ? { ...it, streaming: false } : it)))
     // 主动停止时也要存一次：学生按停止往往正是因为回答已经够用了。
     // 同样要把缓冲区的尾段带上，否则停止时最后几个字会丢
     syncStore(flushDelta())
@@ -1175,39 +1159,6 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
               {/* 用真 logo 而不是手绘的火箭 svg —— 界面上只该有一种火箭 */}
               <img className="welcome-badge" src="./logo.png" alt="" />
               <h1>{greeting()}，今天想从哪里开始？</h1>
-
-              {/*
-                三个入口无论是否配置模型都显示。
-                这三张卡本身就是「这个软件能干什么」的说明书，
-                没配置时恰好是最需要它的时候。点击时的拦截顺序见下面注释。
-              */}
-              <div className="quick-starts">
-                {QUICK_STARTS.map((q) => (
-                  <button
-                    key={q.key}
-                    className="quick-start"
-                    title={gatingLabel(workspace, configured) ?? q.label}
-                    onClick={() => {
-                      // 按顺序拦两件事，每一件都是「现在发出去没意义」的情况：
-                      //   1. 没打开工作区 → 「解读项目」会发给一个看不到任何文件的 AI，
-                      //      它只能瞎猜目录结构。先去选文件夹。
-                      //   2. 没配模型 → 发出去必然失败，引导到设置页
-                      // 少了第 1 条时，学生点「解读项目」得到的是编造的答案，
-                      // 这比直接报错更坏 —— 他不知道那是假的。
-                      if (!workspace) void openWorkspace()
-                      else if (!configured) onOpenSettings()
-                      else void send(q.prompt)
-                    }}
-                  >
-                    <span className={`quick-icon tone-${q.tone}`} aria-hidden="true">
-                      {q.icon === 'compass' ? <CompassIcon /> : null}
-                      {q.icon === 'wrench' ? <WrenchIcon /> : null}
-                      {q.icon === 'bulb' ? <BulbIcon /> : null}
-                    </span>
-                    <span className="quick-label">{q.label}</span>
-                  </button>
-                ))}
-              </div>
 
               {(!workspace || !configured) && (
                 <div className="welcome-actions">
@@ -1630,14 +1581,24 @@ const MessageBubble = memo(function MessageBubble({
         <div className="bubble">
           {item.text ? (
             item.text
-          ) : toolCount > 0 ? (
-            <span className="muted">正在处理…</span>
+          ) : item.streaming ? (
+            // 还在流里但一个字没来：三种点的等待动画
+            toolCount > 0 ? (
+              <span className="muted">正在处理…</span>
+            ) : (
+              <span className="dots">
+                <i />
+                <i />
+                <i />
+              </span>
+            )
           ) : (
-            <span className="dots">
-              <i />
-              <i />
-              <i />
-            </span>
+            /*
+             * 已经不在流里、又没有正文 —— 只可能是用户中途停了、
+             * 而这一轮还没吐出任何文字。明确写出来，不要留一个空气泡
+             * 或一直转的省略号：那会让人以为还在加载。
+             */
+            <span className="muted">已停止</span>
           )}
         </div>
         {item.usage && <div className="usage">{formatUsage(item.usage)}</div>}

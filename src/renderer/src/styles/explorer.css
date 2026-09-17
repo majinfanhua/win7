@@ -87,26 +87,30 @@
   background: var(--bubble-ai);
 }
 
-.tree-sort select {
+/*
+ * 排序下拉（自绘 Select）。
+ *
+ * 这里原来是一整套针对**原生 select** 的覆盖（去边框、去箭头、
+ * 外加一条 `option` 配色补丁）。现在换成自绘组件后全部不需要了 ——
+ * 那个 `option` 补丁本来就是为「深色下白底」打的，而它在 Win7 上
+ * 治不了本（系统主题引擎画列表）。详见 TreeToolbar.tsx 的注释。
+ */
+.tree-sort-select {
   max-width: 76px;
-  padding: 0;
+  height: 20px;
+  padding: 0 2px 0 4px;
   font-size: 11.5px;
   color: inherit;
   background: transparent;
   border: none;
-  outline: none;
-  cursor: pointer;
-  /* 原生下拉箭头在深色主题下几乎看不见，干脆去掉，靠左边的排序图标表意 */
-  appearance: none;
 }
 
-.tree-tools.is-expanded .tree-sort select {
+.tree-sort-select:hover {
+  background: var(--bubble-ai);
+}
+
+.tree-tools.is-expanded .tree-sort-select {
   max-width: 120px;
-}
-
-.tree-sort select option {
-  color: var(--text);
-  background: var(--surface-solid);
 }
 
 /* 节点右侧的次要信息（大小）。只在独立面板里渲染 */

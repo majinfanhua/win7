@@ -13,6 +13,7 @@ import type {
 import { PERMISSION_LABELS, USAGE_KEEP_DAYS } from '@shared/types'
 import { AI_NAME_MAX, HABITS_MAX, USER_NAME_MAX } from '@shared/system-doc'
 import { useAppStore } from '../store/useAppStore'
+import Select from './ui/Select'
 
 /** 把「Key: Value」多行文本解析成请求头对象 */
 function parseHeaders(text: string): Record<string, string> {
@@ -450,17 +451,17 @@ export default function SettingsPage({
                   <label>模型</label>
                   <div className="inline">
                     {models.length > 0 ? (
-                      <select
+                      <Select
                         value={draft.ai.model}
-                        onChange={(e) => patchAi({ model: e.target.value })}
-                      >
-                        <option value="">请选择</option>
-                        {models.map((m) => (
-                          <option key={m} value={m}>
-                            {m}
-                          </option>
-                        ))}
-                      </select>
+                        options={[
+                          { value: '', label: '请选择' },
+                          ...models.map((m) => ({ value: m, label: m }))
+                        ]}
+                        onChange={(v) => patchAi({ model: v })}
+                        ariaLabel="选择模型"
+                        title="从拉取到的列表里选一个模型"
+                        block
+                      />
                     ) : (
                       <input
                         placeholder="先点右侧「拉取列表」，或直接填写模型名"
@@ -856,14 +857,18 @@ export default function SettingsPage({
 
                 <div className="field">
                   <label>放开程度</label>
-                  <select
+                  <Select
                     value={draft.capability.mode}
-                    onChange={(e) => patchCapability({ mode: e.target.value as CapabilityMode })}
-                  >
-                    <option value="auto">自动 — 按本机探测（推荐）</option>
-                    <option value="conservative">保守 — 只放开文件读写，各机器表现一致</option>
-                    <option value="full">全开 — 忽略探测，本机不支持时工具会返回可读错误</option>
-                  </select>
+                    options={[
+                      { value: 'auto', label: '自动 — 按本机探测（推荐）' },
+                      { value: 'conservative', label: '保守 — 只放开文件读写，各机器表现一致' },
+                      { value: 'full', label: '全开 — 忽略探测，本机不支持时工具会返回可读错误' }
+                    ]}
+                    onChange={(v) => patchCapability({ mode: v as CapabilityMode })}
+                    ariaLabel="放开程度"
+                    title="决定 AI 能对文件做什么"
+                    block
+                  />
                 </div>
 
                 {caps && (

@@ -10,18 +10,6 @@
  * 自绘下拉（components/ui/Select.tsx）
  * ========================================================================== */
 
-/*
- * 定位锚点。
- *
- * 弹层用 absolute 挂在它身上（**不能用 fixed**：祖先 .composer 的
- * backdrop-filter 会为 fixed 创建包含块，导致弹层算错位置、
- * 实测偏移到屏幕外 —— 详见 Select.tsx 的注释）。
- */
-.ui-select-wrap {
-  position: relative;
-  display: inline-flex;
-  min-width: 0;
-}
 
 .ui-select {
   display: inline-flex;
@@ -64,19 +52,38 @@
 }
 
 /*
+ * 撑满父容器。
+ *
+ * 设置页那些下拉原来是原生 select（`input, select, textarea` 那条
+ * 全局规则给了 width:100%），换成自绘组件后要显式补上这个变体，
+ * 否则会缩成内容宽度、和上面的输入框对不齐。
+ */
+.ui-select.is-block {
+  width: 100%;
+  justify-content: space-between;
+}
+
+.ui-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/*
  * 弹出列表。
  *
- * position: absolute + bottom: 100% —— **向上展开**。
- * 输入框在最底部，向下展开会直接出屏幕；向上则始终有空间。
- * 坐标完全交给浏览器算，没有任何 JS 测量。
+ * position: fixed —— 它由 Select.tsx **portal 到 document.body**，
+ * 不在 #root 里，所以：
+ *   - body 上没有任何会创建包含块的属性（不似 .composer 的
+ *     backdrop-filter），fixed 在这里是可靠的视口定位
+ *   - 任何祖先的 overflow 都裁不到它（设置页 .page-scroll 会裁）
+ * 坐标由 JS 按按钮 rect 算，方向按可用空间自动上/下翻转。
+ *
+ * z-index 要高于覆盖层：.overlay 是 50，确认弹层也在那一层，
+ * 这个 60 保证下拉在设置页里弹出时不会被别的浮层盖住。
  */
 .ui-select-pop {
-  position: absolute;
-  bottom: calc(100% + 4px);
-  /* 右对齐按钮：两个选择器都在工具条右端，左对齐会向右溢出 */
-  right: 0;
+  position: fixed;
   z-index: 60;
-  min-width: 100%;
   max-height: 280px;
   overflow-y: auto;
   padding: 4px;

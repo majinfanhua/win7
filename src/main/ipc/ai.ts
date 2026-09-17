@@ -500,6 +500,17 @@ async function runStream(
     if (aborted.has(requestId)) {
       aborted.delete(requestId)
       logger.info('ai', `请求 ${requestId} 已被用户停止`)
+      /*
+       * ⚠️ 必须发一个 done 收尾，不能只是 return。
+       *
+       * 渲染层的「正在生成」状态只在收到 done / error 时才清 ——
+       * 静默 return 会让停止按钮点下去后**界面一直转圈**，
+       * 用户以为没停下来（实际主进程早就停了）。
+       * 这个坑踩过：看起来像「停止无效」，其实是没通知前端。
+       *
+       * 不发 usage：这次没有完整跑完，统计口径留给正常结束那条路。
+       */
+      emit({ requestId, kind: 'done' })
       return
     }
 
@@ -600,6 +611,8 @@ async function runStream(
     if (aborted.has(requestId)) {
       aborted.delete(requestId)
       logger.info('ai', `请求 ${requestId} 在工具执行后被停止`)
+      // 同上：必须发 done 让前端清掉「正在生成」，否则一直转圈
+      emit({ requestId, kind: 'done' })
       return
     }
   }

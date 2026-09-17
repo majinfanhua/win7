@@ -224,57 +224,6 @@
   max-width: 420px;
 }
 
-/* 三个入口横排，居中。窄屏自动换行 */
-.quick-starts {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 12px;
-  margin-top: 6px;
-}
-
-.quick-start {
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-  padding: 13px 22px;
-  font-size: 14px;
-  color: var(--text);
-  background: var(--bubble-ai);
-  border-color: transparent;
-  border-radius: 13px;
-  white-space: nowrap;
-}
-
-.quick-start:hover {
-  border-color: var(--border-strong);
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-sm);
-}
-
-/* 图标底色：三个入口用三种色调区分，扫一眼就能分辨 */
-.quick-icon {
-  display: grid;
-  place-items: center;
-  color: var(--text-2);
-}
-
-.quick-icon.tone-blue {
-  color: #4a8fd4;
-}
-
-.quick-icon.tone-amber {
-  color: #d99b3a;
-}
-
-.quick-icon.tone-green {
-  color: #4bab72;
-}
-
-.quick-label {
-  font-weight: 500;
-}
-
 .samples {
   display: flex;
   flex-direction: column;
