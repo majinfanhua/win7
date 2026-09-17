@@ -39,6 +39,13 @@ const api: AppApi = {
   onApprovalRequest: (cb: (req: ApprovalRequest) => void) =>
     subscribe<ApprovalRequest>(IPC.evtApprovalRequest, cb),
 
+  listSkills: () => ipcRenderer.invoke(IPC.skillsList),
+  readSkillText: (id: string) => ipcRenderer.invoke(IPC.skillsRead, id),
+  openSkillsDir: () => ipcRenderer.invoke(IPC.skillsOpenDir),
+
+  mcpStatus: () => ipcRenderer.invoke(IPC.mcpStatus),
+  mcpReconnect: (id: string) => ipcRenderer.invoke(IPC.mcpReconnect, id),
+
   openWorkspace: (preset?: string) => ipcRenderer.invoke(IPC.wsOpen, preset),
   readDir: (dir: string) => ipcRenderer.invoke(IPC.wsReadDir, dir),
   readFile: (file: string) => ipcRenderer.invoke(IPC.wsReadFile, file),

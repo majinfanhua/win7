@@ -1,7 +1,7 @@
 /*
  * 顶栏：品牌、面包屑、主题切换、设置入口。
  *
- * .crumb-model 在这里定义基础样式，空态（未配置模型）的变色在 editor.css 里覆盖。
+ * 只到项目名为止 —— 模型名已移到 AI 输入框下方的选择器。
  */
 
 /* ==========================================================================
@@ -28,17 +28,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.crumb-sep {
-  color: var(--text-3);
-}
-
-.crumb-model {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-3);
 }
 
 .bar-btn {

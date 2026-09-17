@@ -10,6 +10,7 @@ import { readMemory, writeMemory } from '../memory'
  */
 import { listArchive, loadArchive, readArchiveBody } from '../archive-index'
 import { redactSecrets } from '../../shared/secret-scan'
+import { describeSkill, listSkills, readSkill } from '../skills'
 import { SESSION_MESSAGE_CHARS_MAX } from '../../shared/types'
 
 /**
@@ -212,10 +213,66 @@ function baseName(target: string): string {
  */
 const readBody = readArchiveBody
 
+/* ------------------------------------------------------------------ *
+ * 技能（Skills）
+ * ------------------------------------------------------------------ */
+
+interface ListSkillsArgs {
+  keyword?: string
+}
+
+/**
+ * 列出技能。
+ *
+ * 返回**名字 + 一句话说明**，不含正文 —— 这是渐进式披露的第一步，
+ * 正文由 readSkill 按需取。理由与记忆工具一样：正文会变、且大部分
+ * 与当前任务无关，全塞进 prompt 等于每轮为所有技能付费。
+ */
+async function listSkillsTool(args: ListSkillsArgs): Promise<string> {
+  const all = await listSkills()
+  const keyword = typeof args.keyword === 'string' ? args.keyword.trim().toLowerCase() : ''
+  const hits = keyword
+    ? all.filter(
+        (s) =>
+          s.id.toLowerCase().includes(keyword) ||
+          s.name.toLowerCase().includes(keyword) ||
+          s.description.toLowerCase().includes(keyword)
+      )
+    : all
+
+  if (all.length === 0) {
+    return (
+      '当前没有任何技能。技能是「怎么做某件事」的说明书，' +
+      '由用户放在 skills/<目录名>/SKILL.md 里。' +
+      '需要的话可以告诉用户去「设置 → Skills」看怎么写。'
+    )
+  }
+  if (hits.length === 0) {
+    return `没有匹配「${args.keyword}」的技能。当前可用：\n${all.map(describeSkill).join('\n')}`
+  }
+  return (
+    `可用技能（${hits.length} 个）：\n${hits.map(describeSkill).join('\n')}\n\n` +
+    '需要哪一个就用 readSkill 读它的正文，然后照着做。'
+  )
+}
+
+interface ReadSkillArgs {
+  id: string
+}
+
+async function readSkillTool(args: ReadSkillArgs): Promise<string> {
+  const result = await readSkill(args?.id)
+  // 失败也返回文本（不抛错）：模型看到「没有这个技能 + 有哪些可用」
+  // 就能自己改，比抛一个异常让它重试有效
+  return result.text
+}
+
 /** 供 dispatch 使用：名字 -> 实作 */
 export const SESSION_TOOL_HANDLERS: Record<string, (args: never) => Promise<string>> = {
   listSessions: listSessionsTool as (args: never) => Promise<string>,
   readSession: readSessionTool as (args: never) => Promise<string>,
   memoryGet: memoryGetTool as (args: never) => Promise<string>,
-  memoryWrite: memoryWriteTool as (args: never) => Promise<string>
+  memoryWrite: memoryWriteTool as (args: never) => Promise<string>,
+  listSkills: listSkillsTool as (args: never) => Promise<string>,
+  readSkill: readSkillTool as (args: never) => Promise<string>
 }

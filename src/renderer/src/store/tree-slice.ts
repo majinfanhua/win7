@@ -38,6 +38,18 @@ export const createTreeSlice: StateCreator<AppState, [], [], TreeSlice> = (set, 
     set({ config: saved })
   },
 
+  /**
+   * 侧栏上下分割的比例（工作空间 / 文件树）。
+   *
+   * 落盘夹取由主进程的 normalizeExplorer 负责（与界面拖动用同一组常量），
+   * 所以这里不再夹一次 —— 两处都夹的话，以后改常量容易只改一处，
+   * 表现为「拖到某个位置松手后弹回另一个值」。
+   */
+  async setSidebarSplit(sidebarSplit) {
+    const saved = await window.api.setConfig({ explorer: { ...explorerOf(get().config), sidebarSplit } })
+    set({ config: saved })
+  },
+
   select(path) {
     set({ selectedPath: path })
   },

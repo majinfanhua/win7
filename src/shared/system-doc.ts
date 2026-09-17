@@ -1,14 +1,29 @@
+import type { PermissionMode } from './types'
+import {
+  PLATFORM_CONTRACT,
+  TOOL_CONTRACT,
+  DISCIPLINE_CONTRACT,
+  buildRuntimeState,
+  CONTRACT_VERSION
+} from './prompt-contract'
 /**
  * `系统.md` 的组装规则（纯函数，不依赖 Electron / 文件系统）。
  *
  * ## 为什么要有一个「系统.md」
  *
- * 发给模型的 system prompt 原本是设置里的一段自由文本（systemPrompt）。
- * 但实际需要拼进去的东西不止一段：
- *   - AI 叫什么、怎么称呼用户（身份）
- *   - 用户希望它扮演什么（默认提示词）
- *   - 用户的使用习惯
- *   - 本机装了哪些运行时（自动探测，用户没填过）
+ * 发给模型的 system prompt 由**两层**拼成：
+ *
+ *   程序维护（用户看得到、改不了）—— 见 prompt-contract.ts
+ *     - 平台契约：路径语义、工具契约、工作纪律
+ *     - 运行状态：当前权限模式
+ *     - 本机环境：系统 / 工作目录 / 探测到的运行时
+ *   用户可改（设置 → AI 设定）
+ *     - AI 叫什么、怎么称呼用户
+ *     - 用户的使用习惯
+ *
+ * 为什么要分两层：契约那部分是软件的行为定义，用户改错了软件就不按
+ * 设计工作（而他并不知道 writeFile 有先读后写的守卫、也不知道路径怎么校验）；
+ * 但它们又必须**看得见**，否则「AI 到底收到了什么」无法核对。
  *
  * 与其在代码里悄悄拼一串谁也看不见的字符串，不如**拼成一个真实存在的
  * Markdown 文件**放在 userData 下：用户能打开看、能确认「AI 到底收到了什么」。
@@ -68,10 +83,22 @@ export interface SystemDocInput {
   aiName: string
   /** 用户希望 AI 怎么称呼自己 */
   userName: string
-  /** 「告诉 AI 它是什么」的那段默认提示词 */
-  systemPrompt: string
-  /** 用户习惯，自由文本 */
+  /**
+   * 用户习惯，自由文本。
+   *
+   * 注意这里**没有**「用户自定义系统提示词」这一项：
+   * 原来有一项 systemPrompt，已去掉 —— 与模型的约定由代码维护
+   * （见 prompt-contract.ts），用户可改的是身份、称呼、习惯这三样。
+   */
   habits: string
+  /**
+   * 当前权限模式。
+   *
+   * 它决定模型**提前知道自己能做什么**（计划模式只能读、完全允许模式
+   * 无范围限制），而不是撞到工具报错才知道。见 prompt-contract 的
+   * buildRuntimeState。
+   */
+  permissionMode: PermissionMode
   /**
    * 已探测到的运行时。
    *
@@ -117,12 +144,38 @@ export function formatRuntimes(runtimes: RuntimeLine[]): string {
 export function buildSystemDoc(input: SystemDocInput): string {
   const aiName = clipName(input.aiName, AI_NAME_MAX)
   const userName = clipName(input.userName, USER_NAME_MAX)
-  const prompt = (input.systemPrompt || '').trim()
   const habits = (input.habits || '').trim().slice(0, HABITS_MAX)
   const env = formatRuntimes(input.runtimes)
   const envNote = (input.environmentNote || '').trim()
 
   const blocks: string[] = [HEADER]
+
+  /*
+   * ── 程序维护区（用户看得到、改不了）──────────────────────────
+   *
+   * 顺序：契约 → 运行状态 → 环境。
+   *   契约      只随应用升级变（最稳定）→ 放最前，缓存前缀尽量长
+   *   运行状态  随权限模式变（换模式才变）
+   *   环境      随工作区/机器变（最易变）→ 放最后
+   * 反过来的话，换个项目就会让前面几百字的契约一起失去缓存命中。
+   */
+  blocks.push(PLATFORM_CONTRACT)
+  blocks.push(TOOL_CONTRACT)
+  blocks.push(DISCIPLINE_CONTRACT)
+  blocks.push(`## 当前运行状态\n\n${buildRuntimeState(input.permissionMode)}`)
+
+  if (envNote || env) {
+    const lines = [envNote, env].filter(Boolean).join('\n\n')
+    blocks.push(`## 本机环境\n\n${lines}`)
+  }
+
+  /*
+   * ── 用户可改区 ────────────────────────────────────────────
+   *
+   * 插一条显式分界：用户打开 系统.md 时能一眼看出「上面那半我改不了」，
+   * 而不是去改契约段、下次对话又被静默覆盖（那种困惑最难排查）。
+   */
+  blocks.push(USER_EDITABLE_MARK)
 
   /*
    * 身份段。名字和称呼各自可能为空，三种情况分别处理：
@@ -137,21 +190,8 @@ export function buildSystemDoc(input: SystemDocInput): string {
   if (userName) identity.push(`称呼用户为「${userName}」。`)
   if (identity.length > 0) blocks.push(`## 你的身份\n\n${identity.join('')}`)
 
-  // 默认提示词：用户写的「你是什么」。原样保留，不做任何加工 ——
-  // 用户在设置里看到什么，模型就收到什么
-  if (prompt) blocks.push(`## 你要做什么\n\n${prompt}`)
-
-  // 习惯：放提示词之后，因为它是「补充要求」，语义上依附于上面那段
+  // 习惯：用户自己的固定偏好，自由文本、原样保留
   if (habits) blocks.push(`## 用户的习惯\n\n${habits}`)
-
-  /*
-   * 环境段放最后：它是唯一会「换台机器就变」的内容。
-   * 放在最后，即使它变了，前面的稳定前缀仍然能命中缓存。
-   */
-  if (envNote || env) {
-    const lines = [envNote, env].filter(Boolean).join('\n\n')
-    blocks.push(`## 本机环境\n\n${lines}`)
-  }
 
   return `${blocks.join('\n\n')}\n`
 }
@@ -159,14 +199,31 @@ export function buildSystemDoc(input: SystemDocInput): string {
 /**
  * 文件开头的说明。
  *
- * 必须写清楚「手改会被覆盖」，否则用户会很自然地打开这个文件改两行，
- * 然后在下次对话时发现改动没了 —— 那种「我明明改了」的困惑最难排查。
- * 同时给出正确的改法（去设置里改），让这个文件不只是拒绝，而是指路。
+ * 必须写清楚「哪些能动、哪些不能动」，否则用户会很自然地打开这个文件
+ * 改两行契约，然后在下次对话时发现改动没了 —— 那种「我明明改了」的
+ * 困惑最难排查。所以这里给出正确的改法（去设置里改），
+ * 让这个文件不只是拒绝，而是指路。
+ *
+ * 带契约版本号：契约内容变了这个数字会变，用户对比前后两份能看出
+ * 「不是我改坏了，是程序升级改了」。
  */
 const HEADER = `# 系统设定
 
 <!--
-这个文件由「设置 → AI 设定」自动生成，是发给 AI 的 system prompt 全文。
-可以打开看，但**直接在这里改的内容会在下次对话开始时被覆盖**。
-要改请到 设置 → AI 设定（那里改了会立刻同步到这里）。
+这个文件是发给 AI 的 system prompt 全文，由 hangkeIDE 自动生成。
+契约版本：${CONTRACT_VERSION}
+
+可以打开看，但只有**下半部分**（你的身份 / 习惯）能通过设置修改。
+上半部分是程序维护的行为约定，直接在这里改会在下次对话开始时被覆盖。
+
+要改设定请到：设置 → AI 设定
 -->`
+
+/**
+ * 用户可改区的分界标记。
+ *
+ * 它不是给模型看的指令，而是给**人**看的：打开 系统.md 时能一眼看出
+ * 上面那一半是程序维护的、改不了。用 HTML 注释而不是标题，
+ * 是为了不干扰模型对 Markdown 结构的理解。
+ */
+const USER_EDITABLE_MARK = `<!-- ═══════ 以下可以用「设置 → AI 设定」修改 ═══════ -->`

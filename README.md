@@ -1,4 +1,4 @@
-# win7-ai-editor
+# hangke-ide
 
 面向教学场景的 AI 代码编辑器，分发为 **Windows 免安装版**，覆盖 **Windows 7 SP1 ~ Windows 10**（32/64 位）。
 
@@ -18,8 +18,8 @@
 产物（免安装 zip，x64 + ia32）：
 
 ```
-AIEditor-<version>-win7-win10-x64.zip
-AIEditor-<version>-win7-win10-ia32.zip
+hangkeIDE-<version>-win7-win10-x64.zip
+hangkeIDE-<version>-win7-win10-ia32.zip
 ```
 
 > Windows 版本不是打包维度。同一份包在 Win7 SP1 / Win8 / Win10 上都能跑，
@@ -58,7 +58,7 @@ npm run smoke -- --capability-profile=win7   # 强制 Win7 工具能力档
 npm run smoke -- --software --self-test-out=t.json
 ```
 
-> 开发态的用户数据目录是 **`AIEditor-dev`**，与打包版的 `AIEditor` 分开。
+> 开发态的用户数据目录是 **`hangkeIDE-dev`**，与打包版的 `hangkeIDE` 分开。
 > 这样 `npm run dev` 不会和本机已解压的打包版抢单实例锁，也不会写坏真实配置。
 > 启动日志会打印实际目录。
 
@@ -79,7 +79,7 @@ npx vite --config vite.preview.config.ts
 代价是没有真实文件系统与 IPC。
 
 > 另一种情况：本机残留着**上次没退干净的 electron 进程**，它占着
-> `~/.config/AIEditor-dev` 的单实例锁，会让新启动的窗口直接退出。
+> `~/.config/hangkeIDE-dev` 的单实例锁，会让新启动的窗口直接退出。
 > `ps -eo pid,cmd | grep electron` 看一下，有残留就 kill 掉。
 
 ### dev server

@@ -9,6 +9,7 @@ import {
   IMPLEMENTED_TOOLS,
   MEMORY_TOOLS,
   REQUIREMENT_LABELS,
+  SKILL_TOOLS,
   TOOL_LABELS,
   TOOL_REQUIREMENTS
 } from './tools/meta'
@@ -110,7 +111,8 @@ function detection(): Detection {
  */
 export function getCapabilityInfo(): CapabilityInfo {
   const d = detection()
-  const { mode, disabled } = getConfig().capability
+  const cfg = getConfig()
+  const { mode, disabled } = cfg.capability
 
   const allowed =
     mode === 'conservative'
@@ -129,6 +131,18 @@ export function getCapabilityInfo(): CapabilityInfo {
     }
     if (!allowed.has(tool)) {
       filtered.push({ name: tool, reason: '设置未放开（保守模式）' })
+      continue
+    }
+    /*
+     * 技能开关。
+     *
+     * 单独一个开关而不是并进 disabled：技能是「用户写给 AI 的指令」，
+     * 把它与「关掉某个文件工具」混在一起，设置界面里会看不出这条的特殊性。
+     * 放在这里而不是工具层，是为了让模型**看不到**这些工具 ——
+     * 看不到就不会调，比调了再报错干净。
+     */
+    if (SKILL_TOOLS.includes(tool) && !cfg.skills.enabled) {
+      filtered.push({ name: tool, reason: '技能功能已在设置中关闭' })
       continue
     }
     if (disabled.includes(tool)) {

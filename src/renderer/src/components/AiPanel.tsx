@@ -1,7 +1,15 @@
 import { forwardRef, memo, useEffect, useImperativeHandle, useRef, useState } from 'react'
-import type { AiUsage, ApprovalRequest, ChatContentBlock, ChatMessage } from '@shared/types'
+import type {
+  AiUsage,
+  ApprovalRequest,
+  ChatContentBlock,
+  ChatMessage,
+  PermissionMode
+} from '@shared/types'
 import { compressImage, humanBytes, withImages } from '../image-input'
 import { useAppStore } from '../store/useAppStore'
+import Select from './ui/Select'
+import ConfirmDialog from './ConfirmDialog'
 import {
   AtIcon,
   BulbIcon,
@@ -53,8 +61,36 @@ function formatUsage(usage: AiUsage): string {
   ].join(' · ')
 }
 
-/** 单个引用文件最多附这么多字符，防止一个 400KB 的日志把上下文挤爆 */
-const REF_CHAR_LIMIT = 8000
+/** 引用胶囊上只显示文件名，完整路径放 title */
+function baseName(target: string): string {
+  const parts = target.split(/[\\/]/).filter(Boolean)
+  return parts[parts.length - 1] || target
+}
+
+/**
+ * 三种权限模式的选项。
+ *
+ * 放在对话输入框这一侧（而不是编辑器那边）：它决定「AI 现在能不能动手」，
+ * 是**下指令前**要确认的东西 —— 和「我这句话怎么说」在同一个动作里。
+ * 放到编辑器工具栏就跑到写代码那一侧去了，视线与动作都断开。
+ */
+const MODE_OPTIONS: ReadonlyArray<{ value: PermissionMode; label: string; hint: string }> = [
+  {
+    value: 'chat',
+    label: '对话模式',
+    hint: '当前项目内自由读写；要动项目外的文件会先弹卡片问你'
+  },
+  {
+    value: 'plan',
+    label: '计划模式',
+    hint: 'AI 只能查看，先给方案；你点「开始执行」它才会改文件'
+  },
+  {
+    value: 'full',
+    label: '完全允许',
+    hint: '不做任何范围检查，AI 可读写磁盘上任何位置'
+  }
+]
 
 /**
  * 流式文本的合并间隔（毫秒）。
@@ -64,36 +100,25 @@ const REF_CHAR_LIMIT = 8000
  */
 const STREAM_FLUSH_MS = 30
 
-/** 引用胶囊上只显示文件名，完整路径放 title */
-function baseName(target: string): string {
-  const parts = target.split(/[\\/]/).filter(Boolean)
-  return parts[parts.length - 1] || target
-}
-
 /**
- * 把引用文件读成「文件路径 + 正文」拼到提问后面。
+ * 把引用文件转成**路径清单**附到提问后面。
  *
- * 逐个 try/catch：某个文件读不了（二进制、被占用、超过 4MB）
- * 不应该让整条消息发不出去，只在那一块写一行说明，
- * 既告诉学生「这个没读到」，也让 AI 知道缺失的原因。
+ * ⚠️ 这里只给路径，**不读正文**，这一点改过一次设计：
+ *
+ * 原来是把每个文件的正文读出来、整段拼进消息。问题是：
+ *   1. 输入框与气泡里会显示一大坨代码，把真正想说的话淹没
+ *   2. 引用 3 个文件就塞进几万字符，token 白烧；
+ *      历史消息还会一轮轮重复带上，上下文很快就被挤爆
+ *   3. AI 手上本来就有 readFile / grep 工具，**按需读**比一次全塞更准
+ *      （它只读真正相关的那几段）
+ *
+ * 现在只告诉它「用户指名了这几个文件」，读不读、读多少由它自己决定。
+ * 相对路径能直接用：工具层按当前工作区解析（见 main/paths.ts）。
  */
-async function buildReferenceBlock(files: string[]): Promise<string> {
+function buildReferenceBlock(files: string[]): string {
   if (!files.length) return ''
-  const parts: string[] = []
-  for (const file of files) {
-    try {
-      const loaded = await window.api.readFile(file)
-      const body =
-        loaded.content.length > REF_CHAR_LIMIT
-          ? `${loaded.content.slice(0, REF_CHAR_LIMIT)}\n…（已截断，原文共 ${loaded.content.length} 字符）`
-          : loaded.content
-      parts.push(`--- 文件：${file} ---\n\`\`\`${loaded.language || ''}\n${body}\n\`\`\``)
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      parts.push(`--- 文件：${file} ---\n（读取失败：${msg}）`)
-    }
-  }
-  return `以下是引用的文件内容：\n\n${parts.join('\n\n')}`
+  const list = files.map((f) => `- ${f}`).join('\n')
+  return `（用户引用了以下文件，需要时请用 readFile 查看：\n${list}\n）`
 }
 
 /**
@@ -210,7 +235,120 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
 
   /** 权限模式。计划模式下要额外显示「开始执行」 */
   const permissionMode = config?.permission.mode || 'chat'
+
+  /**
+   * 「模型是否配齐」。
+   *
+   * 声明位置提前到用它的地方之前：下面的 loadModels / 发送键都要读它。
+   * 原来在文件靠后处，现在这两处用到，放后面会报「used before declaration」。
+   */
+  const configured = Boolean(config?.ai.baseUrl && config?.ai.apiKey && config?.ai.model)
+
   const [executing, setExecuting] = useState(false)
+  /**
+   * 待用户二次确认的目标模式。
+   *
+   * 只有「完全允许」会走到这里 —— 它没有任何边界检查，误点一下
+   * AI 就能读写磁盘上任意位置，而这是**不可逆**的（对话已经发生）。
+   * 其余两档要么受工作区限制、要么只能读，误点的代价很小，
+   * 弹确认反而会让用户养成「无脑点确定」的习惯，削弱这道确认的意义。
+   */
+  const [pendingMode, setPendingMode] = useState<PermissionMode | null>(null)
+
+  /**
+   * 模型选择（输入框工具条里）。
+   *
+   * 能拉到列表就用下拉；拉不到（中转站不开放 / 还没配好）就退化成
+   * 只读的当前模型名，点它去设置页手填 —— 换模型有两条路，
+   * 比「只有下拉、拉不到就空白」可靠。
+   */
+  const [models, setModels] = useState<string[]>([])
+  const [modelBusy, setModelBusy] = useState(false)
+  const [modelError, setModelError] = useState('')
+
+  const loadModels = async (): Promise<void> => {
+    if (!configured) return
+    setModelBusy(true)
+    try {
+      const result = await window.api.aiListModels()
+      setModels(result.models)
+      setModelError(result.ok ? '' : result.detail)
+    } catch (err) {
+      setModels([])
+      setModelError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setModelBusy(false)
+    }
+  }
+
+  /**
+   * 自动拉一次模型列表。
+   *
+   * 依赖 configured：用户刚在设置里填完模型、切回来就能看到列表，
+   * 不用手动点。拉不到也不打扰 —— 原因写在按钮 title 里。
+   */
+  useEffect(() => {
+    if (configured) void loadModels()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [configured])
+
+  const chooseModel = async (model: string): Promise<void> => {
+    if (!model || model === config?.ai.model) return
+    try {
+      const saved = await window.api.setConfig({ ai: { ...config!.ai, model } })
+      useAppStore.getState().applyConfig(saved)
+    } catch (err) {
+      useAppStore.getState().pushLog({
+        time: '',
+        level: 'warn',
+        scope: 'ai',
+        text: `切换模型失败：${err instanceof Error ? err.message : String(err)}`
+      })
+    }
+  }
+
+  /**
+   * 切权限模式。
+   *
+   * 主进程返回**整份配置**，直接写回 store —— store、设置页、以及下一次
+   * 对话要用的 system prompt（模式会进「当前运行状态」段）全部立刻同步。
+   * 切走计划模式时要清掉「已批准执行」的界面状态：主进程在模式变化时
+   * 也会清，两边必须一致，否则界面显示「已批准」而实际写入仍被拦。
+   */
+  const chooseMode = async (mode: PermissionMode): Promise<void> => {
+    if (mode === permissionMode) return
+    /*
+     * 「完全允许」要二次确认，其余两档直接切。
+     *
+     * 判据是**代价不对称**：完全允许没有边界检查，一次误点就让 AI
+     * 能读写磁盘上任何位置，而已经发生的读写收不回来；而对话/计划模式
+     * 要么受工作区限制、要么只能读，误点最多再点回去。
+     *
+     * 不给所有模式都加确认，是因为「每步都问」会让人形成
+     * 无条件点确定的肌肉记忆 —— 那道确认就白设了。
+     */
+    if (mode === 'full') {
+      setPendingMode(mode)
+      return
+    }
+    await applyMode(mode)
+  }
+
+  /** 真正落盘切换。从 chooseMode 与确认弹层两处调用 */
+  const applyMode = async (mode: PermissionMode): Promise<void> => {
+    try {
+      const saved = await window.api.setPermissionMode(mode)
+      useAppStore.getState().applyConfig(saved)
+      setExecuting(false)
+    } catch (err) {
+      useAppStore.getState().pushLog({
+        time: '',
+        level: 'warn',
+        scope: 'ai',
+        text: `切换权限模式失败：${err instanceof Error ? err.message : String(err)}`
+      })
+    }
+  }
   /** 切会话/切模式后要重置「已批准执行」的显示状态 */
   useEffect(() => {
     setExecuting(false)
@@ -501,8 +639,6 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
     if (el) el.scrollTop = el.scrollHeight
   }, [items])
 
-  const configured = Boolean(config?.ai.baseUrl && config?.ai.apiKey && config?.ai.model)
-
   /**
    * 把任意一份 items 写回 store。
    *
@@ -624,11 +760,9 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
     const requestId = `req-${Date.now()}`
     requestRef.current = requestId
 
-    // 引用文件的正文附在提问末尾。
-    // 不放进 system prompt：system 是所有轮次共用的，塞进去会让缓存立刻失效，
-    // 而引用是「这一轮」的事。
-    const attached = await buildReferenceBlock(refs)
-    const text = (typed || '请看这几个文件')
+    // 引用只附**路径清单**（不读正文，见 buildReferenceBlock 的注释）
+    const attached = buildReferenceBlock(refs)
+    const text = typed || '请看这几个文件'
     const fullText = attached ? `${text}\n\n${attached}` : text
 
     // 图片随这一轮发出去。文本里加一行占位说明，
@@ -895,6 +1029,7 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
   }
 
   return (
+    <>
     <section className="chat">
       {/*
         面板抬头：左侧「历史」按钮（浮层列最近会话），右侧当前会话标题。
@@ -1286,6 +1421,67 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
           {imageBusy && <span className="muted img-note">正在压缩图片…</span>}
 
           {/*
+            权限模式 + 模型选择，放在**输入框的工具条**里。
+            这两个都决定「AI 接下来会怎么干活」，属于下指令前会看一眼的东西，
+            所以贴着输入框最顺手 —— 放到编辑器那一侧会让动作和视线都断开。
+
+            顺序：模式在前。它决定 AI 能不能动手，比换哪个模型更要紧，
+            而且颜色会变（计划=蓝、完全允许=红），靠左更容易被注意到。
+          */}
+          <Select
+            value={permissionMode}
+            options={MODE_OPTIONS}
+            onChange={(v) => void chooseMode(v)}
+            ariaLabel="权限模式"
+            className={`mode-picker mode-${permissionMode}`}
+          />
+
+          {models.length > 0 ? (
+            <Select
+              value={config?.ai.model || ''}
+              options={[
+                // 当前模型不在列表里（手填的）也要列出来，否则下拉会显示空
+                ...(config?.ai.model && !models.includes(config.ai.model)
+                  ? [{ value: config.ai.model, label: config.ai.model, hint: '当前使用的模型' }]
+                  : []),
+                ...models.map((m) => ({ value: m, label: m, hint: '点击切换到该模型' }))
+              ]}
+              onChange={(v) => void chooseModel(v)}
+              ariaLabel="选择模型"
+              title="切换当前对话使用的模型"
+              className="model-picker"
+            />
+          ) : (
+            <button
+              type="button"
+              className="ui-select model-picker is-static"
+              aria-label="选择模型"
+              title={
+                !configured
+                  ? '还没配置模型 —— 点击去设置里填写'
+                  : modelError
+                    ? `拉取模型列表失败：${modelError}（去设置 → AI 模型 里手填）`
+                    : modelBusy
+                      ? '正在读取模型列表…'
+                      : '点这里从服务端拉取模型列表'
+              }
+              /*
+               * 没配模型时**点它直接去设置页**。
+               *
+               * 原来这里是 `undefined`（什么都不做）—— 那是最差的处理：
+               * 用户看到「未配置模型」点下去毫无反应，只会以为是坏的。
+               * 按钮上已经写着「未配置模型」，点它的意图必然是「去配」，
+               * 直接把人送过去比让他自己找设置入口好。
+               */
+              onClick={() => (configured ? void loadModels() : onOpenSettings())}
+            >
+              <span className="ui-select-label">
+                {modelBusy ? '读取中…' : config?.ai.model || '未配置模型'}
+              </span>
+            </button>
+          )}
+
+          {/*
             发送键与停止键是**同一个按钮**，靠图标切换。
             以前是两个并排的按钮，问题在于「停止」只在生成时出现 ——
             它一出现就把发送键挤走，而学生这时候眼睛盯着输入框，
@@ -1309,6 +1505,44 @@ const AiPanel = forwardRef<AiPanelHandle, { onOpenSettings: () => void }>(functi
         </div>
       </div>
     </section>
+
+    {/*
+      「完全允许」的二次确认。
+      放在这里（而不是塞进 .chat 内部）是因为它是覆盖层：
+      .overlay 是 position:fixed，与 .chat 的 flex 布局无关。
+      已确认过祖先里没有 transform / filter / backdrop-filter ——
+      那类属性会创建新的包含块，让 fixed 变成相对它定位、弹层就跑偏了。
+    */}
+    {pendingMode === 'full' && (
+      <ConfirmDialog
+        title="确认切换到「完全允许」？"
+        confirmText="我明白，完全放开"
+        danger
+        onCancel={() => setPendingMode(null)}
+        onConfirm={() => {
+          const target = pendingMode
+          setPendingMode(null)
+          if (target) void applyMode(target)
+        }}
+      >
+        <p>
+          <strong>这个模式下 AI 不再有任何范围限制</strong>
+          ，可以读取和修改磁盘上任意位置的文件 ——
+          不只是当前项目，也包括你的桌面、文档、甚至系统目录。
+        </p>
+        <p>
+          它不会每次操作都问你，所以一次误操作就可能改坏项目之外的文件，
+          而那些改动<strong>无法通过「撤销这次修改」找回</strong>
+          （撤销只覆盖工作区内的文件）。
+        </p>
+        <p>
+          日常写代码请用<strong>对话模式</strong>：在当前项目内自由读写，
+          需要碰项目外的文件时会单独弹卡片问你。只在明确知道自己在做什么时
+          （比如让 AI 批量重构多个项目）才用完全允许。
+        </p>
+      </ConfirmDialog>
+    )}
+    </>
   )
 })
 

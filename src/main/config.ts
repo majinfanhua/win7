@@ -8,6 +8,8 @@ import {
   RECENT_SESSIONS_MAX,
   RECENT_WORKSPACES_MAX,
   SESSION_TITLE_MAX,
+  SIDEBAR_SPLIT_MAX,
+  SIDEBAR_SPLIT_MIN,
   SPLIT_MAX,
   SPLIT_MIN,
   type AppConfig,
@@ -15,13 +17,14 @@ import {
   type EditorSession,
   type ExplorerSortBy,
   type OpenTab,
+  PERMISSION_MODES,
   type PermissionMode,
   type SessionEntry,
   type WorkspaceEntry
 } from '../shared/types'
 import { AI_NAME_MAX, HABITS_MAX, USER_NAME_MAX } from '../shared/system-doc'
 import { logger } from './logger'
-import { PERMISSION_MODES, setPermissionMode } from './permissions'
+import { setPermissionMode } from './permissions'
 
 let cached: AppConfig | null = null
 let configPath = ''
@@ -47,13 +50,26 @@ function normalizeExplorer(raw: unknown): AppConfig['explorer'] {
   const sortBy = EXPLORER_SORT_BY.includes(input.sortBy as ExplorerSortBy)
     ? (input.sortBy as ExplorerSortBy)
     : DEFAULT_CONFIG.explorer.sortBy
+  /*
+   * sidebarSplit 要夹到上下限之间。
+   *
+   * 不夹的话：手改 config.json 写个 5 会让上半段撑满整个侧栏、
+   * 文件树彻底看不见（而界面没有任何办法拖回来，因为分割条也被挤出去了）。
+   * 落盘夹取与界面拖动用**同一组常量**，两边不会跑偏。
+   */
+  const rawSplit = Number(input.sidebarSplit)
+  const sidebarSplit = Number.isFinite(rawSplit)
+    ? Math.min(SIDEBAR_SPLIT_MAX, Math.max(SIDEBAR_SPLIT_MIN, rawSplit))
+    : DEFAULT_CONFIG.explorer.sidebarSplit
+
   return {
     ...DEFAULT_CONFIG.explorer,
     ...input,
     showHidden: Boolean(input.showHidden),
     treeOpen: input.treeOpen === undefined ? DEFAULT_CONFIG.explorer.treeOpen : Boolean(input.treeOpen),
     chatOpen: input.chatOpen === undefined ? DEFAULT_CONFIG.explorer.chatOpen : Boolean(input.chatOpen),
-    sortBy
+    sortBy,
+    sidebarSplit
   }
 }
 
@@ -79,7 +95,6 @@ function normalizeAi(raw: unknown): AppConfig['ai'] {
     temperature: Number.isFinite(Number(input.temperature))
       ? Number(input.temperature)
       : DEFAULT_CONFIG.ai.temperature,
-    systemPrompt: str(input.systemPrompt, DEFAULT_CONFIG.ai.systemPrompt),
     aiName: str(input.aiName, '').trim().slice(0, AI_NAME_MAX),
     userName: str(input.userName, '').trim().slice(0, USER_NAME_MAX),
     habits: str(input.habits, '').slice(0, HABITS_MAX),
@@ -101,6 +116,75 @@ function normalizeAi(raw: unknown): AppConfig['ai'] {
  * 另外 setConfig 的顶层是浅合并，所以每个 section 内部在这里做完整补齐，
  * 保证只传一半字段进来也不会丢其他字段。
  */
+/**
+ * 技能配置收敛。
+ *
+ * 老版本 config.json 没有这个字段，取不到就回落到默认（开启）——
+ * 这不是「猜」，是因为技能是纯读取用户自己的文件，默认可用的
+ * 收益（功能可用）明显大于风险（模型读到一个用户自己写的文件）。
+ */
+function normalizeSkills(raw: unknown): AppConfig['skills'] {
+  const input = (raw && typeof raw === 'object' ? raw : {}) as Partial<AppConfig['skills']>
+  return {
+    enabled: input.enabled === undefined ? DEFAULT_CONFIG.skills.enabled : Boolean(input.enabled)
+  }
+}
+
+/**
+ * MCP 配置收敛。
+ *
+ * ⚠️ 这里做**逐条校验并丢弃坏条目**，而不是整份信任：
+ * config.json 是用户可以手改的，而这里的值会直接拿去 spawn 子进程。
+ * 一个缺 command 的条目会让启动时报一个看不懂的错；
+ * id 含双下划线则会破坏工具名的解析（见 mcp/manager.ts 的分隔符约定）。
+ *
+ * 丢弃而不是报错：一条配坏不该让其他服务器全都用不了。
+ */
+function normalizeMcp(raw: unknown): AppConfig['mcp'] {
+  const input = (raw && typeof raw === 'object' ? raw : {}) as Partial<AppConfig['mcp']>
+  if (!Array.isArray(input.servers)) return { servers: [] }
+
+  const servers: AppConfig['mcp']['servers'] = []
+  const seen = new Set<string>()
+  for (const item of input.servers) {
+    if (!item || typeof item !== 'object') continue
+    const e = item as Partial<AppConfig['mcp']['servers'][number]>
+    const id = typeof e.id === 'string' ? e.id.trim() : ''
+    const command = typeof e.command === 'string' ? e.command.trim() : ''
+    // 没有 id 或命令的条目无法运行，直接丢
+    if (!id || !command) continue
+    // 双下划线是工具名前缀的分隔符，含它会让解析出错
+    if (id.includes('__')) {
+      logger.warn('config', `MCP 服务器 id 含双下划线，已丢弃：${id}`)
+      continue
+    }
+    if (seen.has(id)) {
+      logger.warn('config', `MCP 服务器 id 重复，已丢弃：${id}`)
+      continue
+    }
+    seen.add(id)
+
+    const args = Array.isArray(e.args)
+      ? e.args.filter((a): a is string => typeof a === 'string')
+      : []
+    const env: Record<string, string> = {}
+    if (e.env && typeof e.env === 'object') {
+      for (const [k, v] of Object.entries(e.env)) {
+        if (typeof v === 'string') env[k] = v
+      }
+    }
+    servers.push({
+      id,
+      name: typeof e.name === 'string' && e.name.trim() ? e.name.trim() : id,
+      command,
+      args,
+      ...(Object.keys(env).length ? { env } : {}),
+      enabled: e.enabled === undefined ? true : Boolean(e.enabled)
+    })
+  }
+  return { servers }
+}
+
 function normalize(raw: unknown): AppConfig {
   const input = (raw && typeof raw === 'object' ? raw : {}) as Partial<AppConfig>
   const rawCap = (input.capability || {}) as Partial<AppConfig['capability']>
@@ -129,6 +213,8 @@ function normalize(raw: unknown): AppConfig {
     legacyGraphics: { ...DEFAULT_CONFIG.legacyGraphics, ...(input.legacyGraphics || {}) },
     capability: { mode, disabled },
     permission: { mode: permMode },
+    skills: normalizeSkills(input.skills),
+    mcp: normalizeMcp(input.mcp),
     explorer: normalizeExplorer(input.explorer),
     lastWorkspace: typeof input.lastWorkspace === 'string' ? input.lastWorkspace : '',
     recentWorkspaces: normalizeWorkspaces(input.recentWorkspaces),

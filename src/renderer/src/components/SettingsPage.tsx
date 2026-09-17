@@ -3,13 +3,14 @@ import type {
   AppConfig,
   CapabilityInfo,
   CapabilityMode,
-  PermissionMode,
+  McpServerStatus,
+  SkillEntry,
   SystemDocState,
   UsageBucket,
   UsageByDay,
   UsageStats
 } from '@shared/types'
-import { DEFAULT_SYSTEM_PROMPT, USAGE_KEEP_DAYS } from '@shared/types'
+import { PERMISSION_LABELS, USAGE_KEEP_DAYS } from '@shared/types'
 import { AI_NAME_MAX, HABITS_MAX, USER_NAME_MAX } from '@shared/system-doc'
 import { useAppStore } from '../store/useAppStore'
 
@@ -111,6 +112,75 @@ export default function SettingsPage({
   const [docPreview, setDocPreview] = useState<string | null>(null)
   /** token 用量统计 */
   const [usage, setUsage] = useState<UsageStats | null>(null)
+  /** 已发现的技能与其中一个的正文预览（null = 收起） */
+  const [skills, setSkills] = useState<SkillEntry[]>([])
+  const [skillPreview, setSkillPreview] = useState<string | null>(null)
+  /** 各 MCP 服务器的运行状态 */
+  const [mcpList, setMcpList] = useState<McpServerStatus[]>([])
+
+  /* ---------------- 技能 ---------------- */
+
+  const refreshSkills = async (): Promise<void> => {
+    try {
+      setSkills(await window.api.listSkills())
+    } catch (err) {
+      setStatus(`读取技能失败：${String(err)}`)
+    }
+  }
+
+  const viewSkill = async (id: string): Promise<void> => {
+    try {
+      setSkillPreview(await window.api.readSkillText(id))
+    } catch (err) {
+      setStatus(`读取技能失败：${String(err)}`)
+    }
+  }
+
+  const openSkills = async (): Promise<void> => {
+    try {
+      await window.api.openSkillsDir()
+      setStatus('已打开技能目录')
+    } catch (err) {
+      setStatus(`打开失败：${String(err)}`)
+    }
+  }
+
+  /* ---------------- MCP ---------------- */
+
+  const refreshMcp = async (): Promise<void> => {
+    try {
+      setMcpList(await window.api.mcpStatus())
+    } catch (err) {
+      setStatus(`读取 MCP 状态失败：${String(err)}`)
+    }
+  }
+
+  const reconnect = async (id: string): Promise<void> => {
+    setBusy(true)
+    setStatus(`正在连接 ${id}…`)
+    try {
+      setMcpList(await window.api.mcpReconnect(id))
+      setStatus(`${id} 状态已更新`)
+    } catch (err) {
+      setStatus(`连接失败：${String(err)}`)
+      await refreshMcp()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /**
+   * 切到技能 / MCP 分栏时拉一次。
+   *
+   * 依赖 section 而不是挂载时拉一次：技能是用户**在文件系统里**加的，
+   * MCP 状态也会变（服务器可能自己退出）。每次进这一栏都重新读，
+   * 用户加完技能回来就能看到，不用重启应用。
+   */
+  useEffect(() => {
+    if (section === 'skills') void refreshSkills()
+    if (section === 'mcp') void refreshMcp()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [section])
 
   const patchAi = (patch: Partial<AppConfig['ai']>): void => {
     setDraft((prev) => ({ ...prev, ai: { ...prev.ai, ...patch } }))
@@ -120,8 +190,8 @@ export default function SettingsPage({
     setDraft((prev) => ({ ...prev, capability: { ...prev.capability, ...patch } }))
   }
 
-  const patchPermission = (mode: PermissionMode): void => {
-    setDraft((prev) => ({ ...prev, permission: { mode } }))
+  const patchSkills = (enabled: boolean): void => {
+    setDraft((prev) => ({ ...prev, skills: { enabled } }))
   }
 
   /* ---------------- 「AI 设定」相关的三个动作 ---------------- */
@@ -532,18 +602,6 @@ export default function SettingsPage({
                   </div>
 
                   <div className="field">
-                    <label>默认提示词（告诉 AI 它是什么）</label>
-                    <textarea
-                      rows={7}
-                      value={draft.ai.systemPrompt}
-                      onChange={(e) => patchAi({ systemPrompt: e.target.value })}
-                    />
-                    <div className="hint">
-                      这一段决定它的身份与回答风格。改坏了可以点右下角「恢复默认」。
-                    </div>
-                  </div>
-
-                  <div className="field">
                     <label>习惯</label>
                     <textarea
                       rows={4}
@@ -567,13 +625,57 @@ export default function SettingsPage({
                     <button className="ghost" disabled={busy} onClick={() => void openDocFile()}>
                       打开文件
                     </button>
-                    <button
-                      className="ghost"
-                      disabled={busy}
-                      onClick={() => patchAi({ systemPrompt: DEFAULT_SYSTEM_PROMPT })}
-                    >
-                        恢复默认提示词
-                    </button>
+                  </div>
+                </section>
+
+                {/*
+                  平台契约（只读）。
+                  单独一张卡而不是混在上面：用户需要一眼看出
+                  「这部分我改不了，也不该改」。做成可编辑输入框再提示
+                  「改了不生效」是更差的做法 —— 那会诱使用户去改。
+                */}
+                <section className="card card-locked">
+                  <div className="card-title">
+                    <LockIcon />
+                    平台契约（程序维护）
+                  </div>
+                  <div className="hint card-hint">
+                    这一部分定义 AI 收到的工作约定：路径怎么解析、工具怎么用、
+                    当前处于哪个权限模式、本机有哪些环境。
+                    <b>它由程序维护，不能修改</b> —— 改错了软件就不按设计工作。
+                    想看完整内容点下面的「查看全文」。
+                  </div>
+
+                  <div className="locked-summary">
+                    <div className="locked-item">
+                      <span className="locked-name">平台</span>
+                      <span className="locked-desc">身份、路径语义（相对路径按工作目录解析、越界会先问你）</span>
+                    </div>
+                    <div className="locked-item">
+                      <span className="locked-name">怎么用工具干活</span>
+                      <span className="locked-desc">直接改文件而不是贴代码、先读后写、搜索优先用工具</span>
+                    </div>
+                    <div className="locked-item">
+                      <span className="locked-name">工作纪律</span>
+                      <span className="locked-desc">看命令退出码、不谎报完成、失败不空转</span>
+                    </div>
+                    <div className="locked-item">
+                      <span className="locked-name">当前运行状态</span>
+                      <span className="locked-desc">
+                        权限模式：{PERMISSION_LABELS[draft.permission.mode]}
+                      </span>
+                    </div>
+                    <div className="locked-item">
+                      <span className="locked-name">本机环境</span>
+                      <span className="locked-desc">操作系统、当前工作目录、探测到的运行时</span>
+                    </div>
+                  </div>
+
+                  <div className="hint card-hint">
+                    要调整 AI 的行为，请改上面的「身份」「称呼」「习惯」，
+                    或到「权限模式」里换模式。契约里那几条是软件的硬约定，
+                    例如「整篇覆盖前必须先读文件」—— 那是防止误覆盖的保护，
+                    不是可以商量的偏好。
                   </div>
                 </section>
 
@@ -611,16 +713,22 @@ export default function SettingsPage({
                   决定 AI 的文件操作能伸到哪儿。工具本身没有边界，边界由这里划。
                 </div>
 
-                <div className="field">
-                  <label>当前模式</label>
-                  <select
-                    value={draft.permission.mode}
-                    onChange={(e) => patchPermission(e.target.value as PermissionMode)}
-                  >
-                    <option value="chat">对话模式 — 工作区内自由，越界先问我</option>
-                    <option value="plan">计划模式 — 先给方案，我说开始才动手</option>
-                    <option value="full">完全允许模式 — 不做任何限制，全局可操作</option>
-                  </select>
+                {/*
+                  这里**只显示、不提供切换**。
+                  切换入口在 AI 输入框下方 —— 那是下指令的地方，
+                  改完立刻生效，不用离开对话再跑回来。
+                  设置页保留这一栏是当说明书用：三种模式的差别在这里写全，
+                  而输入框那个下拉放不下这些说明。
+                */}
+                <div className="cap-status">
+                  <div className="cap-line">
+                    <span className="muted">当前模式</span>{' '}
+                    <b>{PERMISSION_LABELS[draft.permission.mode]}</b>
+                  </div>
+                  <div className="cap-line muted">
+                    切换请用 AI 输入框下方的模式选择 —— 在那里改完立即生效，
+                    不用离开对话。
+                  </div>
                 </div>
 
                 <div className="cap-status">
@@ -814,63 +922,158 @@ export default function SettingsPage({
               占着侧栏最显眼的位置反而不划算 —— 侧栏该留给会话与文件树。
             */}
             {section === 'skills' && (
-              <section className="card">
-                <div className="card-title">Skills（工具能力）</div>
-                <div className="hint card-hint">
-                  Skills 决定 AI 手上有什么工具。它由两层共同决定：你在「工具能力」里的设置，
-                  以及本机实际探测到的能力（缺 python / node / PowerShell 时会相应少一批）。
-                </div>
+              <>
+                <section className="card">
+                  <div className="card-title">Skills（技能）</div>
+                  <div className="hint card-hint">
+                    技能是<strong>「怎么做某件事」的说明书</strong>，由你自己写成
+                    Markdown 文件。AI 在做不熟悉的活之前会先看一眼有哪些技能，
+                    需要时才读正文并照着做 —— 所以正文可以写得很具体，不必担心占上下文。
+                  </div>
 
-                {caps ? (
+                  {/*
+                    两个存放位置。列表里每条都会标明来源，
+                    因为「同一个 id 项目级覆盖全局」这条规则如果不显示来源，
+                    用户会疑惑「我改了全局那份怎么没生效」。
+                  */}
                   <div className="cap-status">
                     <div className="cap-line">
-                      <span className="muted">当前生效</span> {caps.effective.length} 个：
-                      {caps.effective.map((name) => caps.labels[name] || name).join('、')}
+                      <span className="muted">全局技能</span>
+                      <code>skills/&lt;目录名&gt;/SKILL.md</code>（所有项目共用）
                     </div>
                     <div className="cap-line">
-                      <span className="muted">本机</span> {caps.profile}
-                      {caps.overridden ? '（已被命令行参数覆盖，仅供测试）' : ''}
+                      <span className="muted">项目技能</span>
+                      <code>.hangke/skills/&lt;目录名&gt;/SKILL.md</code>
+                      （跟着仓库走，同名时覆盖全局）
                     </div>
-                    {caps.filtered.length > 0 && (
-                      <div className="cap-line muted">
-                        未启用：
-                        {caps.filtered
-                          .map((item) => `${caps.labels[item.name] || item.name}（${item.reason}）`)
-                          .join('；')}
+                  </div>
+
+                  <div className="hint card-hint">
+                    frontmatter 里写 <code>name</code> 和 <code>description</code>，
+                    下面写正文。目录名就是技能 id。以 <code>_</code> 开头的目录会被跳过
+                    （草稿可以先这样放着不让 AI 看到）。
+                  </div>
+
+                  <div className="field">
+                    <label>已发现的技能（{skills.length}）</label>
+                    {skills.length === 0 ? (
+                      <div className="empty-line">
+                        还没有技能。点下面的「打开技能目录」建一个，里面有示例可参考。
+                      </div>
+                    ) : (
+                      <div className="skill-list">
+                        {skills.map((sk) => (
+                          <button
+                            key={`${sk.source}-${sk.id}`}
+                            className="skill-row"
+                            title={`${sk.path}\n点击看正文`}
+                            onClick={() => void viewSkill(sk.id)}
+                          >
+                            <span className="skill-name">{sk.name}</span>
+                            <span className="skill-id">{sk.id}</span>
+                            <span className={`skill-src is-${sk.source}`}>
+                              {sk.source === 'project' ? '本项目' : '全局'}
+                            </span>
+                          </button>
+                        ))}
                       </div>
                     )}
-                    <div className="cap-line muted">{caps.notes.join('；')}</div>
                   </div>
-                ) : (
-                  <div className="empty-line">正在读取…</div>
-                )}
 
-                <button className="primary" onClick={() => setSection('capability')}>
-                  去「工具能力」里调整
-                </button>
-              </section>
+                  {skillPreview !== null && (
+                    <>
+                      <div className="hint card-hint">技能正文（AI 读到的就是这些）：</div>
+                      <textarea className="doc-preview" readOnly rows={12} value={skillPreview} />
+                      <div className="card-foot">
+                        <button className="ghost" onClick={() => setSkillPreview(null)}>
+                          收起
+                        </button>
+                      </div>
+                    </>
+                  )}
+
+                  <div className="field">
+                    <label className="toggle">
+                      <input
+                        type="checkbox"
+                        checked={draft.skills.enabled}
+                        onChange={(e) => patchSkills(e.target.checked)}
+                      />
+                      <span>允许 AI 使用技能</span>
+                    </label>
+                    <div className="hint">
+                      关掉后 listSkills / readSkill 不会出现在 AI 的工具表里 ——
+                      它看不到就不会去调。技能正文相当于你写给 AI 的指令，
+                      不确定内容是否合适时可以关掉。
+                    </div>
+                  </div>
+
+                  <div className="card-foot">
+                    <button className="ghost" disabled={busy} onClick={() => void openSkills()}>
+                      打开技能目录
+                    </button>
+                    <button className="ghost" disabled={busy} onClick={() => void refreshSkills()}>
+                      重新扫描
+                    </button>
+                  </div>
+                </section>
+              </>
             )}
 
             {section === 'mcp' && (
               <section className="card">
                 <div className="card-title">MCP 服务器</div>
                 <div className="hint card-hint">
-                  当前版本用中转站直连模型，MCP 外部工具服务尚未接入。
-                  这一栏先占位，接入后在这里配置服务器地址与工具白名单。
+                  MCP（Model Context Protocol）让你把<strong>外部工具服务</strong>接给 AI。
+                  每个服务器是一个本地命令（如 <code>npx</code>），启动后用
+                  JSON-RPC 通信；它提供的工具会自动出现在 AI 的工具表里，
+                  名字带 <code>mcp__服务器__工具</code> 前缀。
                 </div>
 
-                <div className="cap-status">
-                  <div className="cap-line">
-                    <span className="muted">接入状态</span> 未接入
+                {mcpList.length === 0 ? (
+                  <div className="empty-line">
+                    还没有配置服务器。MCP 服务器由「命令 + 参数」启动，
+                    常见的是 <code>npx -y &lt;包名&gt;</code> 形式。
                   </div>
-                </div>
+                ) : (
+                  <div className="mcp-list">
+                    {mcpList.map((sv) => (
+                      <div key={sv.id} className="mcp-row">
+                        <div className="mcp-main">
+                          <div className="mcp-name">
+                            {sv.name}
+                            <span className={`mcp-dot is-${sv.status}`} />
+                            <span className="mcp-status">{sv.detail}</span>
+                          </div>
+                          <div className="mcp-cmd" title={`${sv.command} ${sv.args.join(' ')}`}>
+                            {sv.command} {sv.args.join(' ')}
+                          </div>
+                          {sv.tools.length > 0 && (
+                            <div className="mcp-tools">工具：{sv.tools.join('、')}</div>
+                          )}
+                        </div>
+                        <button
+                          className="ghost btn-sm"
+                          disabled={busy}
+                          onClick={() => void reconnect(sv.id)}
+                        >
+                          {sv.status === 'ready' ? '重连' : '连接'}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
 
                 <div className="hint card-hint">
-                  在接入之前，需要 AI 具备的能力请通过「工具能力」逐项开启。
+                  服务器进程在应用退出时会被一起关掉。配置存在 config.json 的
+                  <code>mcp.servers</code> 里，也可以直接改那个文件后重连。
                 </div>
-                <button className="primary" onClick={() => setSection('ai')}>
-                  配置 AI 模型
-                </button>
+
+                <div className="card-foot">
+                  <button className="ghost" onClick={() => void refreshMcp()}>
+                    刷新状态
+                  </button>
+                </div>
               </section>
             )}
 
@@ -880,7 +1083,7 @@ export default function SettingsPage({
                 <div className="about-brand">
                   <img className="about-logo" src="./logo.png" alt="" />
                   <div>
-                    <div className="about-name">航科教育 · AI 代码编辑器</div>
+                    <div className="about-name">hangkeIDE</div>
                     <div className="hint">带 AI 助手的代码编辑器，支持 Windows 7 SP1 及以上系统</div>
                   </div>
                 </div>
@@ -924,6 +1127,18 @@ export default function SettingsPage({
 }
 
 /** 把 ISO 时间转成「几分钟前」式的中文短描述 */
+/** 锁：表示「这部分程序维护，你改不了」 */
+function LockIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true" style={{ verticalAlign: '-2px' }}>
+      <g fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round">
+        <rect x="5" y="10.5" width="14" height="9.5" rx="2" />
+        <path d="M8 10.5V7.8a4 4 0 0 1 8 0v2.7" strokeLinecap="round" />
+      </g>
+    </svg>
+  )
+}
+
 function BackIcon(): JSX.Element {
   return (
     <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">

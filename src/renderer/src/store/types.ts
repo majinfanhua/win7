@@ -155,6 +155,8 @@ export interface TreeSlice {
   split: number
 
   setTreeOpen: (open: boolean) => Promise<void>
+  /** 侧栏上下分割比例（工作空间 / 文件树），落盘由主进程夹取 */
+  setSidebarSplit: (ratio: number) => Promise<void>
   setChatOpen: (open: boolean) => Promise<void>
   select: (path: string) => void
   openWorkspace: () => Promise<void>

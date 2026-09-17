@@ -37,6 +37,19 @@ export interface SplitterOptions {
   /** 上下限，防止某一侧被拖到不可用 */
   min?: number
   max?: number
+  /**
+   * 拖动期间写哪个 CSS 变量。默认 --split（内容区的左右分割）。
+   * 侧栏那条上下分割用 --sidebar-split，两条互不干扰。
+   */
+  cssVar?: string
+  /**
+   * 变量写到哪个元素上。默认 `.stage`。
+   *
+   * ⚠️ 必须是**样式的实际来源元素**：如果某处用内联 style 设了同名变量
+   * （App.tsx 给 .stage 设了 --split），那么写在更上层的 documentElement
+   * 上会被内联那份遮蔽，拖动完全不生效 —— 这个坑踩过，见下面的注释。
+   */
+  targetSelector?: string
 }
 
 export interface SplitterApi {
@@ -54,7 +67,9 @@ export function useSplitter({
   value,
   onChange,
   min = 0.2,
-  max = 0.85
+  max = 0.85,
+  cssVar = '--split',
+  targetSelector = '.stage'
 }: SplitterOptions): SplitterApi {
   const [dragging, setDragging] = useState(false)
   /** 拖动开始时的指针坐标与当时的比例，用来算增量 */
@@ -70,6 +85,10 @@ export function useSplitter({
   sizeRef.current = containerSize
   const axisRef = useRef(axis)
   axisRef.current = axis
+  const cssVarRef = useRef(cssVar)
+  cssVarRef.current = cssVar
+  const targetRef = useRef(targetSelector)
+  targetRef.current = targetSelector
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
@@ -94,6 +113,24 @@ export function useSplitter({
     let captured: HTMLElement | null = null
     let pointerId = -1
 
+    /*
+     * ⚠️ 变量必须写在 `.stage` 上，不能写 documentElement。
+     *
+     * 这条是实测踩出来的：`App.tsx` 给 `.stage` 设了**内联**的
+     * `--split`（React 的 style 属性），而内联自定义属性会**遮蔽**
+     * 祖先上同名的那一份。所以以前写 documentElement 时：
+     *
+     *   写 documentElement  → 面板宽度 748px 纹丝不动（不生效）
+     *   写 .stage           → 748px → 362px（生效）
+     *
+     * 表现就是「拖动时面板不跟随，松手才跳过去」—— 用户会说「卡顿」，
+     * 但根因不是性能，是变量压根没生效。
+     *
+     * 同时这也让重算范围更小：--split 只被 .stage 的两个子元素用，
+     * 写在这里就不必让整份文档参与样式重算。
+     */
+    const targetEl = (): HTMLElement | null => document.querySelector(targetRef.current)
+
     /** 指针当前坐标 → 比例增量 */
     const ratioAt = (e: PointerEvent): number => {
       const size = sizeRef.current
@@ -103,18 +140,50 @@ export function useSplitter({
       return clamp(startRef.current.ratio + delta, min, max)
     }
 
+    /*
+     * 用 rAF 合帧，而不是每个 pointermove 都写一次。
+     *
+     * pointermove 在 Windows 上能到 120Hz+，而屏幕通常 60Hz —— 多出来的
+     * 那些算出来根本不会被显示，纯粹浪费：每次写都会触发 .stage 子树的
+     * 样式重算 + 布局，而那里包着 Monaco。攒到下一帧只写最终值，
+     * 视觉完全一样，写入次数减半。
+     */
+    let rafId = 0
+    let pending: number | null = null
+
+    const flush = (): void => {
+      rafId = 0
+      if (pending === null) return
+      const el = targetEl()
+      if (el) el.style.setProperty(cssVarRef.current, String(pending))
+      pending = null
+    }
+
+    /** 清掉临时变量，让 CSS 回落到由 state 算出的值 */
+    const clearVar = (): void => {
+      if (rafId !== 0) {
+        window.cancelAnimationFrame(rafId)
+        rafId = 0
+      }
+      pending = null
+      targetEl()?.style.removeProperty(cssVarRef.current)
+    }
+
     const onMove = (e: PointerEvent): void => {
-      // 只写 CSS 变量，不 setState —— 见文件头注释
-      document.documentElement.style.setProperty('--split', String(ratioAt(e)))
+      pending = ratioAt(e)
+      if (rafId === 0) rafId = window.requestAnimationFrame(flush)
       captured = (e.target as HTMLElement) || captured
       pointerId = e.pointerId
     }
 
     const onUp = (e: PointerEvent): void => {
       const next = ratioAt(e)
-      // 松手才提交。清掉变量，让 CSS 回落到由 state 算出的值，
-      // 否则变量会一直是最后拖到的位置，和 state 不一致
-      document.documentElement.style.removeProperty('--split')
+      /*
+       * 松手才提交。顺序要注意：**先清临时变量，再 setState**。
+       * 反过来的话，state 更新后 React 会重写 .stage 的内联 --split，
+       * 而残留的旧变量与它打架，会闪一下。
+       */
+      clearVar()
       setDragging(false)
       onChange(next)
     }
@@ -122,7 +191,7 @@ export function useSplitter({
     const onCancel = (): void => {
       // pointercancel 发生在系统抢走指针时（比如弹出右键菜单、切窗口），
       // 这时不能把当前值提交 —— 用户并没有确认这个位置
-      document.documentElement.style.removeProperty('--split')
+      clearVar()
       setDragging(false)
     }
 
@@ -134,7 +203,7 @@ export function useSplitter({
       window.removeEventListener('pointerup', onUp)
       window.removeEventListener('pointercancel', onCancel)
       // 组件在拖动中被卸载（比如切到设置页）时，别留下一个脏变量
-      document.documentElement.style.removeProperty('--split')
+      clearVar()
       if (captured && pointerId >= 0 && captured.hasPointerCapture?.(pointerId)) {
         captured.releasePointerCapture(pointerId)
       }

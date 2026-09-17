@@ -22,6 +22,7 @@ import { sessionSystemPrompt } from '../system-doc'
 import { buildHeaders, configError } from '../llm'
 import { recordUsage } from '../usage'
 import { executeTool, summarizeCall, toolSchemasForModel } from '../tools'
+import { collectMcpTools, ensureMcpStarted } from '../mcp/manager'
 import {
   describeTruncatedCall,
   ToolArgumentTracker,
@@ -437,6 +438,20 @@ async function runStream(
     return
   }
 
+  /*
+   * 先把 MCP 服务器拉起来再接工具表。
+   *
+   * 必须在 toolSchemasForModel() **之前**：没就绪的服务器不提供工具，
+   * 先取表就会漏掉它们（表现为「配了 MCP 但 AI 看不到工具」）。
+   *
+   * await 的代价：只在第一次真正 spawn 时才有（几秒），
+   * 之后每次都是「已就绪」直接返回。冷启动这几十毫秒到几秒
+   * 换来的是「第一次对话就能用上外部工具」，值得。
+   */
+  if (getConfig().mcp.servers.some((s) => s.enabled)) {
+    await ensureMcpStarted()
+  }
+
   let includeUsage = true
   let useTools = toolSchemasForModel().length > 0
   if (useTools) {
@@ -445,6 +460,9 @@ async function runStream(
   } else {
     logger.info('ai', '本次对话未启用工具（当前环境/设置下无可用工具）')
   }
+  // MCP 工具数单独记一条：出问题时能立刻分清「内置没生效」还是「外部没接上」
+  const mcpCount = collectMcpTools().length
+  if (mcpCount > 0) logger.info('ai', `其中 MCP 外部工具 ${mcpCount} 个`)
 
   // 多轮之间用量累加：一次提问可能包含好几次 HTTP 往返，看到的应该是总数
   const total = { promptTokens: 0, completionTokens: 0, cachedTokens: 0, fromApi: false }

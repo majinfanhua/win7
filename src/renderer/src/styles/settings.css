@@ -574,3 +574,199 @@ kbd {
   white-space: nowrap;
   max-width: 40%;
 }
+
+/* ==========================================================================
+ * 平台契约（只读卡片）
+ *
+ * 视觉上必须与可编辑的卡片**明显不同**：用户看到它就该知道
+ * 「这块我改不了」。所以用浅底 + 左侧竖线，而不是和普通卡片一样 ——
+ * 若做成可编辑输入框再提示「改了不生效」，那是更差的做法：会诱使用户去改。
+ * ========================================================================== */
+
+.card-locked {
+  /* 用微弱底色区分：比周围略暗一点，像「禁用区」而不是另一张普通卡片 */
+  background: var(--bubble-ai);
+  border-left: 3px solid var(--border-strong);
+}
+
+.card-locked .card-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-2);
+}
+
+.locked-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0;
+}
+
+.locked-item {
+  display: flex;
+  gap: 10px;
+  padding: 7px 10px;
+  background: var(--surface-solid);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.locked-name {
+  flex: none;
+  min-width: 104px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.locked-desc {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-3);
+}
+
+/* ==========================================================================
+ * 技能（Skills）
+ * ========================================================================== */
+
+.skill-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.skill-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  text-align: left;
+  color: var(--text-2);
+  background: var(--surface-solid);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.skill-row:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.skill-name {
+  flex: none;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* id 用等宽字体：它同时是目录名，用户要拿它去文件系统里找 */
+.skill-id {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11.5px;
+  color: var(--text-3);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 来源标签：必须显示 —— 否则用户不知道同名时哪一份生效了 */
+.skill-src {
+  flex: none;
+  padding: 1px 6px;
+  font-size: 11px;
+  border-radius: 5px;
+}
+
+.skill-src.is-project {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.skill-src.is-user {
+  color: var(--text-3);
+  background: var(--bubble-ai);
+}
+
+/* ==========================================================================
+ * MCP 服务器
+ * ========================================================================== */
+
+.mcp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mcp-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--surface-solid);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.mcp-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.mcp-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* 状态圆点：颜色即结论，扫一眼就知道连上没有 */
+.mcp-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+
+.mcp-dot.is-ready {
+  background: var(--ok);
+}
+
+.mcp-dot.is-starting {
+  background: var(--warn);
+}
+
+.mcp-dot.is-error {
+  background: var(--danger);
+}
+
+.mcp-status {
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--text-3);
+}
+
+/* 启动命令：等宽 + 可换行。用户要拿它去命令行里自己试 */
+.mcp-cmd {
+  margin-top: 3px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-3);
+  word-break: break-all;
+}
+
+.mcp-tools {
+  margin-top: 3px;
+  font-size: 11.5px;
+  color: var(--text-2);
+}

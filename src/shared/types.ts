@@ -28,15 +28,6 @@ export interface AIConfig {
   model: string
   temperature: number
   /**
-   * 「告诉 AI 它是什么」的那段提示词。
-   *
-   * 名字保持 systemPrompt 是为了兼容老配置（改字段名会让所有已装用户
-   * 的设置被 normalize 吞掉，表现为「我的提示词没了」）。
-   * 它在界面上叫「默认提示词」，最终会和下面的身份 / 习惯 / 环境
-   * 一起组装进 userData/系统.md —— 组装规则见 shared/system-doc.ts。
-   */
-  systemPrompt: string
-  /**
    * AI 给自己起的名字（≤5 字）。
    *
    * 为什么需要：教学场景里学生要反复指代这个助手，
@@ -227,6 +218,98 @@ export interface PermissionConfig {
 }
 
 /**
+ * 权限模式的中文名。
+ *
+ * 放在 shared 而不是 main：设置页要显示它，而渲染层不能 import 主进程模块。
+ * 主进程日志也用这一份，避免两处文案各写各的（那种不一致很难发现）。
+ */
+export const PERMISSION_LABELS: Record<PermissionMode, string> = {
+  chat: '对话模式',
+  plan: '计划模式',
+  full: '完全允许模式'
+}
+
+/** 全部权限模式，供校验与遍历用。顺序即界面上从保守到放开 */
+export const PERMISSION_MODES: PermissionMode[] = ['chat', 'plan', 'full']
+
+/* ------------------------------------------------------------------ *
+ * 技能（Skills）
+ * ------------------------------------------------------------------ */
+
+/**
+ * 技能配置。
+ *
+ * 目前只有一个开关：技能是**文件驱动**的 —— 用户在
+ * `<userData>/skills/<id>/SKILL.md`（或项目里的 `.hangke/skills/`）
+ * 里写文件即可，不需要在设置里登记。这样「加一个技能」和
+ * 「用记事本写一个文件」是同一件事，没有中间状态要同步。
+ */
+export interface SkillsConfig {
+  /**
+   * 是否让 AI 能用技能工具。
+   *
+   * 关掉之后 listSkills / readSkill 都不进工具表，模型看不到就不会调。
+   * 留着这个开关是因为技能正文是**用户自己写的指令**，
+   * 相当于让 AI 按用户的自定义剧本办事 —— 教学场景里可能需要关掉。
+   */
+  enabled: boolean
+}
+
+/* ------------------------------------------------------------------ *
+ * MCP（外部工具服务器）
+ * ------------------------------------------------------------------ */
+
+/** 一个 MCP 服务器。字段与 main/mcp/client.ts 的 McpServerConfig 一致 */
+export interface McpServerEntry {
+  /** 唯一 id。**不能含双下划线**（它是工具名的分隔符，见 mcp/manager.ts） */
+  id: string
+  /** 展示名 */
+  name: string
+  /** 启动命令，如 npx / node / python */
+  command: string
+  /** 命令参数 */
+  args: string[]
+  /** 额外环境变量 */
+  env?: Record<string, string>
+  /** 是否启用。关掉后不启动、工具也不进工具表 */
+  enabled: boolean
+}
+
+export interface McpConfig {
+  servers: McpServerEntry[]
+}
+
+/**
+ * 一个 MCP 服务器的运行状态（发给界面显示）。
+ *
+ * 除了状态，也带上展示名与启动命令：设置页要在一行里说清
+ * 「这是哪个服务器、跑的什么命令、现在怎么样」——
+ * 只给 id 和状态的话，排错时还得去翻 config.json 才知道命令是什么。
+ */
+export interface McpServerStatus {
+  id: string
+  /** 展示名 */
+  name: string
+  /** 启动命令与参数，界面上显示出来便于核对 */
+  command: string
+  args: string[]
+  status: 'stopped' | 'starting' | 'ready' | 'error'
+  /** 状态说明：错误原因 / 工具数 */
+  detail: string
+  /** 这个服务器提供的工具名（服务器那边的原始名） */
+  tools: string[]
+}
+
+/** 一个技能（发给界面显示）。字段与 main/skills.ts 的 SkillSummary 一致 */
+export interface SkillEntry {
+  id: string
+  name: string
+  description: string
+  source: 'user' | 'project'
+  path: string
+}
+
+/**
  * 文件树的排序方式。
  *
  * 排序只在渲染层做（主进程 wsReadDir 已经保证「文件夹优先 + 中文名称序」），
@@ -243,6 +326,16 @@ export interface ExplorerConfig {
   showHidden: boolean
   /** 左侧栏里嵌的文件树是否展开 */
   treeOpen: boolean
+  /**
+   * 左侧栏里「上半段（工作空间）」占的高度比例，0~1。
+   *
+   * 上半段与文件树之间的高度可拖 —— 项目多的时候想多看工作空间，
+   * 项目深的时候想多看文件树，固定 62% 两头都不讨好。
+   *
+   * 与其他界面偏好一样落盘（重启恢复上次拖到的位置）。
+   * 落盘时要夹到 SIDEBAR_SPLIT_MIN/MAX 之间，语义与 --split 一致。
+   */
+  sidebarSplit: number
   /** 右侧对话栏是否展开。收起后编辑器撑满内容区 */
   chatOpen: boolean
   /**
@@ -297,6 +390,25 @@ export const EDITOR_TABS_MAX = 12
 export const SPLIT_MIN = 0.28
 export const SPLIT_MAX = 0.78
 
+
+/**
+ * 左侧栏上下分割的比例上下限。
+ *
+ * 语义与 SPLIT_MIN/MAX 相同（都是「前一段占比」），但数字不同：
+ * 侧栏很窄，上半段压到 28% 以下就只剩两三行、文件树留太多也没用。
+ * 0.2 保证上半段至少能看到一个列表项，0.85 保证文件树至少有几行。
+ */
+export const SIDEBAR_SPLIT_MIN = 0.2
+export const SIDEBAR_SPLIT_MAX = 0.85
+
+/**
+ * 双击分割条时复位到的比例。
+ *
+ * 0.45：文件树通常比工作空间列表长，默认多给它一点。
+ * 与 DEFAULT_CONFIG.explorer.sidebarSplit 取同一个值 —— 两处不一致的话，
+ * 「双击复位」会跳到一个和初始状态不同的位置，很难解释。
+ */
+export const DEFAULT_SIDEBAR_SPLIT = 0.45
 export interface AppConfig {
   ai: AIConfig
   editor: EditorConfig
@@ -304,6 +416,10 @@ export interface AppConfig {
   capability: CapabilityConfig
   /** 权限模式：决定 AI 的工具能伸到哪儿（工作区内 / 越界要授权 / 全局放行） */
   permission: PermissionConfig
+  /** 技能：可复用的「怎么做某件事」的说明书 */
+  skills: SkillsConfig
+  /** MCP：外部工具服务器 */
+  mcp: McpConfig
   explorer: ExplorerConfig
   lastWorkspace: string
   /** 最近打开过的工作区，最新在前，最多 RECENT_WORKSPACES_MAX 条 */
@@ -525,6 +641,8 @@ export type ToolName =
   | 'readSession'
   | 'memoryGet'
   | 'memoryWrite'
+  | 'listSkills'
+  | 'readSkill'
 
 /** 工具执行过程，推给界面展示「AI 正在做什么」 */
 export interface ToolProgress {
@@ -655,6 +773,15 @@ export const IPC = {
   /** 渲染层 → 主进程：我的选择 */
   permissionResolve: 'permission:resolve',
 
+  /* 技能（Skills）：列举、读正文、打开目录 */
+  skillsList: 'skills:list',
+  skillsRead: 'skills:read',
+  skillsOpenDir: 'skills:open-dir',
+
+  /* MCP：状态查询、连接/重连、打开配置目录 */
+  mcpStatus: 'mcp:status',
+  mcpReconnect: 'mcp:reconnect',
+
   wsOpen: 'ws:open',
   wsReadDir: 'ws:read-dir',
   wsReadFile: 'ws:read-file',
@@ -720,21 +847,6 @@ export const IPC = {
   evtFileChanged: 'evt:file-changed'
 } as const
 
-/**
- * 默认 System Prompt：约束回答方式，而不是让它自由发挥。
- *
- * 这段会作为指令发给模型，措辞直接影响回答的口吻与结构，
- * 所以不用「老师 / 学生」这类特定关系设定 —— 使用者可能是任何人，
- * 用一个中性但明确的技术助手口吻反而更稳。
- * 四条要求的核心都是「可操作」：先说在做什么，一次一个点，给出能直接跑的片段。
- */
-export const DEFAULT_SYSTEM_PROMPT =
-  '你是一名中文技术助手。回答时请遵循：\n' +
-  '1. 先一句话说明这段代码在做什么，再指出问题，最后给出可直接运行的完整修改片段。\n' +
-  '2. 每次只讲一个知识点，不要堆砌术语；必要术语用一句话解释。\n' +
-  '3. 回答尽量短，代码用 Markdown 代码块包裹。\n' +
-  '4. 如果代码没有错，也要说明它为什么是对的。'
-
 export const DEFAULT_CONFIG: AppConfig = {
   ai: {
     // 留空强制用户显式配置中转站，避免默认值静默失败
@@ -742,7 +854,6 @@ export const DEFAULT_CONFIG: AppConfig = {
     apiKey: '',
     model: '',
     temperature: 0.3,
-    systemPrompt: DEFAULT_SYSTEM_PROMPT,
     // 身份与习惯默认留空：没有名字时模型用「我」自称，
     // 比塞一个它没同意过的名字更自然
     aiName: '',
@@ -761,8 +872,22 @@ export const DEFAULT_CONFIG: AppConfig = {
   capability: { mode: 'auto', disabled: [] },
   // 默认对话模式：工作区 + 临时区内自由，越界问用户。最安全也最符合直觉的起点
   permission: { mode: 'chat' },
+  /*
+   * 技能默认开。它是用户自己写的说明书，风险由用户自己掌握；
+   * 而且不开的话这个功能装了等于没装（设置页又不会自己弹出来）。
+   */
+  skills: { enabled: true },
+  /* MCP 默认空列表：一个都不配就不起任何外部进程 */
+  mcp: { servers: [] },
   // sortBy 默认按名称：教师视角最可预期，学生也最容易找到自己刚建的文件
-  explorer: { showHidden: false, treeOpen: true, chatOpen: true, sortBy: 'name' },
+  explorer: {
+    showHidden: false,
+    treeOpen: true,
+    chatOpen: true,
+    sortBy: 'name',
+    // 上半段（工作空间）默认占比。与 DEFAULT_SIDEBAR_SPLIT 同一个值
+    sidebarSplit: DEFAULT_SIDEBAR_SPLIT
+  },
   lastWorkspace: '',
   recentWorkspaces: [],
   recentSessions: [],

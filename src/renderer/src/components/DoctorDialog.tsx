@@ -62,7 +62,7 @@ export default function DoctorDialog({ onClose }: { onClose: () => void }): JSX.
 
         <div className="hint" style={{ marginTop: 12 }}>
           如启动异常，请把这份结果连同日志文件一起反馈。日志目录：
-          {report?.runtime.logsPath || '%APPDATA%\\AIEditor\\logs'}
+          {report?.runtime.logsPath || '%APPDATA%\\hangkeIDE\\logs'}
         </div>
         <div className="actions">
           <button onClick={() => void window.api.openLogs()}>打开日志目录</button>

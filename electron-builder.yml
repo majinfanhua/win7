@@ -1,10 +1,10 @@
-appId: com.majinfanhua.aieditor
+appId: com.majinfanhua.hangkeide
 # productName 用 ASCII，避开 Win7 上非 ASCII 路径可能引发的异常。
 # 注意：真正决定 %APPDATA% 下用户数据目录名的是 package.json 的 name
 # （Electron 的 app.getName() 默认取它），不是这里的 productName。
-# 两者现在都是 AIEditor，并在 src/main/index.ts 里用 app.setPath('userData')
+# 两者现在都是 hangkeIDE，并在 src/main/index.ts 里用 app.setPath('userData')
 # 显式固定，避免文档、CI 日志路径与实际目录对不上。
-productName: AIEditor
+productName: hangkeIDE
 copyright: Copyright © 2026 majinfanhua
 
 directories:
@@ -38,7 +38,7 @@ win:
         - x64
         - ia32
   # 产物名带上系统范围，方便分发时判断该给谁
-  artifactName: AIEditor-${version}-win7-win10-${arch}.${ext}
+  artifactName: hangkeIDE-${version}-win7-win10-${arch}.${ext}
   # 不签名：Win7 验签需要 KB4474419，免安装包也用不上。
   # 注意：electron-builder 24.x 的 win 配置里没有 signtoolOptions（25+ 才引入），
   # 且该对象 additionalProperties=false，写了会直接因 schema 校验失败中断打包。

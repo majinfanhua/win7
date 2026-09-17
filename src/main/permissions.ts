@@ -1,4 +1,9 @@
-import type { ApprovalRequest, PermissionMode } from '../shared/types'
+import {
+  PERMISSION_LABELS,
+  PERMISSION_MODES,
+  type ApprovalRequest,
+  type PermissionMode
+} from '../shared/types'
 import { logger } from './logger'
 import { classify, displayPath, isInside, resolveAgainst, type ClassifyResult } from './paths'
 
@@ -34,13 +39,6 @@ import { classify, displayPath, isInside, resolveAgainst, type ClassifyResult } 
 
 export type { PermissionMode }
 export type { ApprovalRequest }
-export const PERMISSION_MODES: PermissionMode[] = ['chat', 'plan', 'full']
-
-export const PERMISSION_LABELS: Record<PermissionMode, string> = {
-  chat: '对话模式',
-  plan: '计划模式',
-  full: '完全允许模式'
-}
 
 /** 当前模式。默认对话模式 —— 最安全也最符合直觉的起点 */
 let mode: PermissionMode = 'chat'

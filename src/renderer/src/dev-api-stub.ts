@@ -87,13 +87,13 @@ function stubSystemDoc(): string {
   return buildSystemDoc({
     aiName: stubConfig.ai.aiName,
     userName: stubConfig.ai.userName,
-    systemPrompt: stubConfig.ai.systemPrompt,
     habits: stubConfig.ai.habits,
     runtimes: [
       { name: 'python', version: '3.11.4', note: '可以跑 .py 脚本' },
       { name: 'node', version: 'v18.17.0', note: '可以跑 .js 脚本与 npm' }
     ],
-    environmentNote: '用户的操作系统：Windows 10 22H2，64 位。（浏览器桩示例）'
+    environmentNote: '用户的操作系统：Windows 10 22H2，64 位。（浏览器桩示例）',
+    permissionMode: stubConfig.permission.mode
   })
 }
 
@@ -395,8 +395,16 @@ const STUB_COMMAND_TOOLS: ToolName[] = ['runCommand', 'jobRun', 'jobPoll', 'jobK
  */
 const STUB_MEMORY_TOOLS: ToolName[] = ['listSessions', 'readSession', 'memoryGet', 'memoryWrite']
 
+/** 技能工具：纯读用户自己的文件，浏览器里没有真实目录，但界面要能演示 */
+const STUB_SKILL_TOOLS: ToolName[] = ['listSkills', 'readSkill']
+
 /** 全部工具，与主进程的 ALL_TOOLS 一致 */
-const STUB_ALL_TOOLS: ToolName[] = [...STUB_FILE_TOOLS, ...STUB_COMMAND_TOOLS, ...STUB_MEMORY_TOOLS]
+const STUB_ALL_TOOLS: ToolName[] = [
+  ...STUB_FILE_TOOLS,
+  ...STUB_COMMAND_TOOLS,
+  ...STUB_MEMORY_TOOLS,
+  ...STUB_SKILL_TOOLS
+]
 
 const STUB_TOOL_LABELS: Record<ToolName, string> = {
   readFile: '读取文件',
@@ -414,7 +422,9 @@ const STUB_TOOL_LABELS: Record<ToolName, string> = {
   listSessions: '翻归档会话',
   readSession: '读会话记录',
   memoryGet: '读记忆',
-  memoryWrite: '记一笔'
+  memoryWrite: '记一笔',
+  listSkills: '查看技能',
+  readSkill: '读取技能'
 }
 
 /**
@@ -495,7 +505,7 @@ function createApi(): AppApi {
         permission: { mode: mode as AppConfig['permission']['mode'] }
       }
       emitLog('permission', `权限模式已切到 ${mode}（浏览器预览模式，无真实边界判定）`, 'warn')
-      return stubConfig.permission.mode
+      return stubConfig
     },
     startExecuting: async (_sessionId: string) => {
       emitLog('permission', '已批准执行（浏览器预览模式，无实际效果）')
@@ -504,6 +514,35 @@ function createApi(): AppApi {
     resolveApproval: async () => false,
     // 浏览器预览里不会有越界请求（没有主进程），但接口要能对上
     onApprovalRequest: () => () => {},
+
+    /*
+     * 技能：浏览器里没有真实文件系统，给一份**固定的示例数据**。
+     * 不用内存虚拟 FS 造：那样用户会以为在浏览器里建的技能真能生效。
+     * 列表里明确写着「示例」，点开也能看到说明。
+     */
+    listSkills: async () => [
+      {
+        id: 'example',
+        name: '示例技能',
+        description: '浏览器预览模式的固定示例。真实技能在 userData/skills 下。',
+        source: 'user' as const,
+        path: '(浏览器预览模式：无真实路径)'
+      }
+    ],
+    readSkillText: async (id: string) =>
+      `【技能：${id}】\n----\n（浏览器预览模式）这是桩数据。\n` +
+      '真实环境下这里会显示 skills/<id>/SKILL.md 的正文。',
+    openSkillsDir: async () => {
+      emitLog('skill', '浏览器预览模式无法打开系统文件管理器', 'warn')
+      return false
+    },
+
+    /* MCP：浏览器里没有子进程，不假装能连 */
+    mcpStatus: async () => [],
+    mcpReconnect: async () => {
+      emitLog('mcp', '浏览器预览模式无法启动 MCP 子进程', 'warn')
+      return []
+    },
 
     openWorkspace: async (preset?: string) => {
       /*

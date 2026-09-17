@@ -78,6 +78,20 @@ jobs:
             exit 1
           }
 
+      - name: 护栏 - 平台契约
+        # 契约是发给模型的行为约定，失效方式是静默的（少一段、混入时间戳、
+        # 被用户文本伪造）。所以单独扫一遍，失败原因走 ::error 注解。
+        shell: pwsh
+        run: |
+          $out = & npm run check:contract 2>&1 | Out-String
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0) {
+            $tail = (($out -split "`r?`n") | Where-Object { $_ -ne '' } | Select-Object -Last 25) -join '%0A'
+            $tail = $tail -replace '%', '%25' -replace "`r", '%0D'
+            Write-Host "::error title=check:contract 失败::$tail"
+            exit 1
+          }
+
       - name: 构建（electron-vite）
         shell: pwsh
         run: |
@@ -98,11 +112,11 @@ jobs:
         run: |
           $dir = 'release/win-unpacked'
           if (-not (Test-Path $dir)) { throw "未找到解包目录 $dir，打包可能未产出预期结构" }
-          $exe = Join-Path $dir 'AIEditor.exe'
+          $exe = Join-Path $dir 'hangkeIDE.exe'
           if (-not (Test-Path $exe)) { throw "未找到可执行文件 $exe" }
           Write-Host "自检目标: $exe"
 
-          # 关键：AIEditor.exe 是 GUI 子系统程序，PowerShell 用 & 调用它不会等待，
+          # 关键：hangkeIDE.exe 是 GUI 子系统程序，PowerShell 用 & 调用它不会等待，
           # 且 $LASTEXITCODE 不会被赋值 —— 之前因此把「自检其实已经通过」
           # 误报成了「退出码为空」。必须用 Start-Process -Wait -PassThru 取退出码。
           # --software：runner 上没有真实 GPU，强制软件渲染让结果可复现
@@ -165,7 +179,7 @@ jobs:
         # 断言写成「子集关系」而不是「数量不同」：以后再加工具也不会让这里失效。
         shell: pwsh
         run: |
-          $exe = 'release/win-unpacked/AIEditor.exe'
+          $exe = 'release/win-unpacked/hangkeIDE.exe'
           if (-not (Test-Path $exe)) { throw "未找到可执行文件 $exe" }
           if (-not (Test-Path 'selftest.json')) { throw '缺少默认档的 selftest.json，上一步可能未产出' }
 
@@ -223,7 +237,7 @@ jobs:
         continue-on-error: true
         shell: pwsh
         run: |
-          $exe = 'release/win-unpacked/AIEditor.exe'
+          $exe = 'release/win-unpacked/hangkeIDE.exe'
           if (-not (Test-Path $exe)) { throw "未找到可执行文件 $exe" }
           $argList = @('--self-test', '--self-test-out=selftest-default-gpu.json')
           $proc = Start-Process -FilePath $exe -ArgumentList $argList -WorkingDirectory (Get-Location).Path -NoNewWindow -Wait -PassThru
@@ -235,8 +249,8 @@ jobs:
         if: failure()
         shell: pwsh
         run: |
-          # 目录名由 src/main/index.ts 的 app.setPath('userData') 固定为 AIEditor
-          $logDir = Join-Path $env:APPDATA 'AIEditor\logs'
+          # 目录名由 src/main/index.ts 的 app.setPath('userData') 固定为 hangkeIDE
+          $logDir = Join-Path $env:APPDATA 'hangkeIDE\logs'
           if (Test-Path $logDir) {
             Get-ChildItem $logDir | ForEach-Object { Write-Host "===== $($_.Name) ====="; Get-Content $_.FullName -Raw }
           } else { Write-Host "未生成日志目录 $($logDir)" }
@@ -259,7 +273,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AIEditor-win7-win10-portable
+          name: hangkeIDE-win7-win10-portable
           if-no-files-found: error
           path: |
             release/*.zip
@@ -288,5 +302,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Continue'
-          gh release create "${{ github.ref_name }}" release/*.zip --title "AI 教学编辑器 ${{ github.ref_name }}" --notes "免安装版 zip：x64 包用于 64 位系统，ia32 包用于 32 位系统。支持 Windows 7 SP1 ~ Windows 10，不支持 Windows 11。解压到纯英文无空格目录后双击 AIEditor.exe，详见包内使用说明。"
+          gh release create "${{ github.ref_name }}" release/*.zip --title "AI 教学编辑器 ${{ github.ref_name }}" --notes "免安装版 zip：x64 包用于 64 位系统，ia32 包用于 32 位系统。支持 Windows 7 SP1 ~ Windows 10，不支持 Windows 11。解压到纯英文无空格目录后双击 hangkeIDE.exe，详见包内使用说明。"
           if ($LASTEXITCODE -ne 0) { throw "发布正式 Release 失败，退出码 $($LASTEXITCODE)" }

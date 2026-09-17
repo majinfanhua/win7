@@ -183,3 +183,54 @@
   direction: rtl;
   text-align: left;
 }
+
+/* ==========================================================================
+ * 确认弹层（ConfirmDialog）
+ *
+ * 复用 .overlay / .dialog 外壳，只补正文与「实心危险按钮」两处。
+ * ========================================================================== */
+
+.confirm-body {
+  font-size: 13.5px;
+  line-height: 1.75;
+  color: var(--text-2);
+}
+
+.confirm-body p {
+  margin: 0 0 10px;
+}
+
+.confirm-body p:last-child {
+  margin-bottom: 0;
+}
+
+/* 强调某一句（如「AI 可以读写磁盘上任何位置」） */
+.confirm-body strong {
+  color: var(--danger);
+}
+
+.confirm-body code {
+  padding: 1px 5px;
+  font-size: 12.5px;
+  background: var(--bubble-ai);
+  border-radius: 4px;
+}
+
+/*
+ * 实心危险按钮。
+ *
+ * 与 settings.css 里的 `button.danger` 不同：那个是**描边**式
+ * （用于「删除」这类可撤销的动作，视觉上不该太抢眼）。
+ * 而放开权限是不可逆的，确认按钮要用实心红 ——
+ * 让它在弹层里是唯一的视觉重心，用户不会看错要按哪个。
+ */
+button.danger-solid {
+  color: #fff;
+  font-weight: 600;
+  background: var(--danger);
+  border-color: transparent;
+}
+
+button.danger-solid:hover:not(:disabled) {
+  filter: brightness(1.08);
+}

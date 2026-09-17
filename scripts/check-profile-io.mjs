@@ -173,7 +173,6 @@ async function systemDocTests() {
       baseUrl: 'https://relay.example.com',
       apiKey: 'sk-test',
       model: 'gpt-4o-mini',
-      systemPrompt: '你是一名中文技术助手，回答要短。',
       aiName: '小助',
       userName: '同学',
       habits: '- 我只用 Windows，命令按 cmd 写'
@@ -185,7 +184,9 @@ async function systemDocTests() {
   check('文件真的落盘了', fs.existsSync(DOC))
   check('hash 旁文件也写了', fs.existsSync(HASH))
   check('内容含身份', first.includes('小助') && first.includes('同学'))
-  check('内容含默认提示词', first.includes('回答要短'))
+  // 「默认提示词」已移除（用户可自定义提示词那一项去掉了）。
+  //   改为断言契约段在 —— 它是现在 system prompt 的固定组成部分
+  check('内容含平台契约', first.includes('## 平台') && first.includes('## 工作纪律'))
   check('内容含习惯', first.includes('我只用 Windows'))
 
   // ★ 第二次调用不重写：内容一致时一个字都不动。

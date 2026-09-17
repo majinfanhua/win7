@@ -1,6 +1,7 @@
 import type { ToolName } from '../../shared/types'
 import { getCapabilityInfo } from '../capabilities'
 import { logger } from '../logger'
+import { callMcpTool, collectMcpTools, mcpToolName, parseMcpToolName } from '../mcp/manager'
 import { COMMAND_TOOL_HANDLERS } from './command-tools'
 import { FILE_TOOL_HANDLERS } from './file-tools'
 import { SESSION_TOOL_HANDLERS } from './session-tools'
@@ -40,10 +41,45 @@ export interface ToolExecResult {
   summary: string
 }
 
-/** 当前生效的工具定义，直接放进请求体的 tools 字段 */
+/**
+ * 当前生效的工具定义，直接放进请求体的 tools 字段。
+ *
+ * 两部分拼起来：
+ *   1. 内置工具 —— 用封闭的 ToolName 过滤（门控已经在 capabilities 里算过）
+ *   2. MCP 工具 —— 运行时从已连接的服务器拿，**名字动态**
+ *
+ * 第 2 部分是这个文件里唯一「名字不受类型系统保护」的地方，
+ * 所以下面单独写着，并在调度处（executeTool）用同一套前缀解析回来。
+ */
 export function toolSchemasForModel(): ToolSchema[] {
   const { effective } = getCapabilityInfo()
-  return TOOL_SCHEMAS.filter((schema) => effective.includes(schema.function.name))
+  const builtin = TOOL_SCHEMAS.filter((schema) =>
+    effective.includes(schema.function.name as ToolName)
+  )
+
+  /*
+   * MCP 工具只在服务器**已就绪**时出现。
+   *
+   * 这里不主动去连接（那会让每次取工具表都变成可能几秒的等待）——
+   * 启动由 ensureMcpStarted() 在对话开始前调用一次。
+   * 没就绪就不给模型看：与其给它一个必然失败的工具，不如让它先用内置能力。
+   */
+  const mcp = collectMcpTools().map((route) => ({
+    type: 'function' as const,
+    function: {
+      name: mcpToolName(route.serverId, route.original),
+      description:
+        (route.def.description || `来自 MCP 服务器「${route.serverId}」的工具`).trim() +
+        `\n（外部工具，由 MCP 服务器 ${route.serverId} 提供）`,
+      // inputSchema 是协议字段名，OpenAI 要的是 parameters，形状本来就一致
+      parameters: (route.def.inputSchema as Record<string, unknown>) || {
+        type: 'object',
+        properties: {}
+      }
+    }
+  }))
+
+  return [...builtin, ...mcp]
 }
 
 /**
@@ -141,6 +177,43 @@ export async function executeTool(
   call: ToolCallRequest,
   ctx: ToolContext = {}
 ): Promise<ToolExecResult> {
+  /*
+   * MCP 工具先分流。
+   *
+   * 它们的名字是运行时才知道的，不在 ToolName 里，也不在这张 HANDLERS 表里 ——
+   * 所以必须在走内置那套「未实现 / 被门控」判断**之前**处理，
+   * 否则每个 MCP 调用都会被当成「本版本未实现」。
+   *
+   * 前缀解析用 manager 里的同一个函数（不要在这里自己切字符串）：
+   * 分隔符约定只有一处定义，两边各切一次迟早不一致。
+   */
+  const mcpRoute = parseMcpToolName(call.name)
+  if (mcpRoute) {
+    const parsedMcp = parseArgs(call.arguments)
+    if (!parsedMcp.ok) {
+      return {
+        ok: false,
+        summary: `${call.name}：参数错误`,
+        text: `ERROR: ${parsedMcp.message}。请检查后重新调用。`
+      }
+    }
+    const mcpLabel = `MCP ${mcpRoute.serverId}/${mcpRoute.tool}`
+    try {
+      const text = await callMcpTool(call.name, parsedMcp.args)
+      return { ok: true, text, summary: mcpLabel }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      logger.warn('tool', `${call.name} 执行失败: ${message}`)
+      // MCP 服务器可能已经被停掉/改了配置，所以明确提示「不要重试」，
+      // 否则模型会对着一个死连接反复尝试
+      return {
+        ok: false,
+        text: `ERROR: ${message}。这个外部工具当前不可用，请不要重试；改用内置工具完成，或告诉用户去设置里检查 MCP 服务器。`,
+        summary: `${mcpLabel}（失败）`
+      }
+    }
+  }
+
   const name = call.name as ToolName
   const label = TOOL_LABELS[name] || call.name
 

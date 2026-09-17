@@ -955,3 +955,41 @@
 .plan-bar.is-executing .plan-bar-text {
   color: var(--ok);
 }
+
+/* ==========================================================================
+ * 输入框工具条里的权限模式与模型选择
+ *
+ * 两个都是自绘下拉（components/ui/Select.tsx，基础样式在 ui.css）。
+ * 这里只补它们的**位置与语义颜色**。
+ *
+ * 模式必须有颜色区分：它决定 AI 能不能动手改文件，
+ * 看错的代价不是「点错了」，而是「AI 做了你不想要的事」。
+ * 计划=强调色（提示只读），完全允许=警示色（提示边界没了）。
+ * ========================================================================== */
+
+.mode-picker.mode-plan {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.mode-picker.mode-full {
+  color: var(--danger);
+  background: rgba(240, 119, 110, 0.12);
+  border-color: var(--danger);
+}
+
+/*
+ * 拉不到模型列表时退化的按钮。
+ *
+ * 它**是可点的**（点了重新拉列表；没配模型则直接去设置页），
+ * 所以不能写成 cursor:default —— 那会让人以为点不动。
+ * 只把文字调暗一点，表示「这里还不是一个正常的下拉」。
+ */
+.model-picker.is-static {
+  color: var(--text-3);
+}
+
+.model-picker.is-static:hover {
+  color: var(--text);
+}

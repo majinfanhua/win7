@@ -118,8 +118,13 @@
 
 /* 上半段：动作键与工作区/会话列表。内容长了只滚这里 */
 .sidenav-top {
+  /*
+   * 高度由 --sidebar-split 决定（用户拖分割条改它，见 Sidebar.tsx）。
+   * flex: none + height 而不是 max-height：max-height 下内容少时
+   * 这一块会缩到内容高度，分割条跟着往上跑，拖动的手感会飘。
+   */
   flex: none;
-  max-height: 62%;
+  height: calc(var(--sidebar-split, 0.45) * 100%);
   overflow-y: auto;
   overflow-x: hidden;
   padding-bottom: 4px;
@@ -130,14 +135,16 @@
  * flex:1 + min-height:0 是关键 —— 少了 min-height:0，
  * flex 子项的最小高度是内容高度，树就会被撑成无限长（经典 flex 陷阱）。
  */
+/*
+ * 文件树段：吃掉剩余高度，内部自己滚。
+ * 上下分割条现在负责分配高度，所以这里不再写 margin-top / border-top ——
+ * 那条分隔线由分割条自己的 grip 画，两个都画会出现双线。
+ */
 .nav-group-tree {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
   overflow: hidden;
 }
 
@@ -679,4 +686,48 @@
   color: var(--text-2);
   background: var(--accent-soft);
   border-radius: 5px;
+}
+
+/* ==========================================================================
+ * 侧栏上下分割条（工作空间 / 文件树）
+ *
+ * 与 .stage 的左右分割条共用 .splitter 基础样式，这里只描述
+ * 「它是横的」这件事：一条细线，鼠标悬停时变粗并显示可拖动的光标。
+ * ========================================================================== */
+
+.sidebar-splitter {
+  flex: none;
+  /* 自己不占高度：负 margin 把可点区域叠到相邻两栏上，
+     这样分界处不会多出一条空白带 */
+  height: 9px;
+  margin: -4px 0;
+  cursor: row-resize;
+  display: grid;
+  place-items: center;
+  /* 提到上面，否则会被相邻的面板盖住、点不到 */
+  position: relative;
+  z-index: 2;
+}
+
+.sidebar-splitter .splitter-grip {
+  width: 100%;
+  height: 1px;
+  background: var(--border);
+}
+
+/* 悬停 / 拖动中：线变明显，给出「这里可以拖」的反馈 */
+.sidebar-splitter:hover .splitter-grip,
+.sidebar-splitter.is-dragging .splitter-grip {
+  height: 2px;
+  background: var(--accent);
+}
+
+/* 键盘聚焦时也要看得出选中了它（无障碍：Tab 能到） */
+.sidebar-splitter:focus-visible {
+  outline: none;
+}
+
+.sidebar-splitter:focus-visible .splitter-grip {
+  height: 2px;
+  background: var(--accent);
 }

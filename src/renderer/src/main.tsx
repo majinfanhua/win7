@@ -348,6 +348,50 @@ window.__SELFTEST__ = async () => {
   }
 
   /*
+   * 侧栏上下分割条（工作空间 / 文件树）。
+   *
+   * 防的是「元素在但拖不动」：它依赖 --sidebar-split 与 .sidenav-top 的
+   * height 配合，两边任一处写错都不会报错，只是拖动没反应。
+   * 这里量**实际高度是否随比例变化** —— 只查元素存在查不出这个问题。
+   */
+  try {
+    const splitter = document.querySelector('.sidebar-splitter') as HTMLElement | null
+    const top = document.querySelector('.sidenav-top') as HTMLElement | null
+    checks.sidebarSplitterFound = Boolean(splitter)
+    checks.sidebarSplitterRole = splitter?.getAttribute('role') === 'separator'
+    checks.sidebarSplitterHorizontal = splitter?.getAttribute('aria-orientation') === 'horizontal'
+    checks.sidebarSplitterFocusable = splitter?.getAttribute('tabindex') === '0'
+
+    const h = Math.round(top?.getBoundingClientRect().height || 0)
+    checks.sidebarTopHeight = h
+    // 上半段必须真的占了高度（塌成 0 说明变量没生效）
+    checks.sidebarTopHasHeight = h > 20
+
+    /*
+     * 量「上下之和 ≈ 侧栏内容高度」—— 只查上半段有高度不够，
+     * 还要确认它没有把文件树挤出去或溢出。
+     */
+    const tree = document.querySelector('.nav-group-tree') as HTMLElement | null
+    const body = document.querySelector('.sidenav-body') as HTMLElement | null
+    const th = Math.round(tree?.getBoundingClientRect().height || 0)
+    const bh = Math.round(body?.getBoundingClientRect().height || 0)
+    checks.sidebarSplitHeights = { top: h, tree: th, body: bh }
+    checks.sidebarSplitNoOverflow = Boolean(bh > 0 && h + th <= bh + 2 && th > 20)
+
+    checks.sidebarSplitterOk = Boolean(
+      checks.sidebarSplitterFound &&
+        checks.sidebarSplitterRole &&
+        checks.sidebarSplitterHorizontal &&
+        checks.sidebarSplitterFocusable &&
+        checks.sidebarTopHasHeight &&
+        checks.sidebarSplitNoOverflow
+    )
+  } catch (err) {
+    checks.sidebarSplitterOk = false
+    checks.sidebarSplitterError = String(err)
+  }
+
+  /*
    * 输入框贴底 + 发送/停止合成一个按钮 + 工具条只留可用入口。
    *
    * 「贴底」是这次改的：.chat 少了 flex:1，高度由内容决定，
@@ -468,7 +512,13 @@ window.__SELFTEST__ = async () => {
    * SPLIT_MIN / SPLIT_MAX，断言 aria 上暴露的值与常量一致即可钉住它。
    */
   try {
-    const divider = document.querySelector('.splitter') as HTMLElement | null
+    /*
+     * 选择器必须写明 `.splitter.is-vertical`。
+     * 侧栏如今也有一条分割条（.sidebar-splitter，横向），裸的
+     * `.splitter` 会先匹配到它 —— 那样量到的是侧栏那条的 aria 值，
+     * 断言就会误报。这条是加了侧栏分割条之后自检抓出来的。
+     */
+    const divider = document.querySelector('.splitter.is-vertical') as HTMLElement | null
     checks.splitterAriaMin = divider?.getAttribute('aria-valuemin') || ''
     checks.splitterAriaMax = divider?.getAttribute('aria-valuemax') || ''
     // SPLIT_MIN / SPLIT_MAX 是 0.28 / 0.78，界面上按百分比取整显示
@@ -540,7 +590,9 @@ window.__SELFTEST__ = async () => {
     const tree = document.querySelector('.filetree') as HTMLElement | null
     const editor = document.querySelector('.editor-dock') as HTMLElement | null
     const view = document.querySelector('.view.is-active') as HTMLElement | null
-    const divider = document.querySelector('.splitter') as HTMLElement | null
+    // 必须指定 .is-vertical：侧栏那条横向分割条也叫 .splitter，
+    // 裸选择器会先匹配到它，于是「是否竖向」永远为假
+    const divider = document.querySelector('.splitter.is-vertical') as HTMLElement | null
 
     checks.sidebarFound = Boolean(sidebar)
     checks.fileTreeFound = Boolean(tree)
@@ -687,11 +739,13 @@ window.__SELFTEST__ = async () => {
   /*
    * 本轮新逻辑的断言。
    *
-   * 重点验证三件以前缺失、现在必须成立的事：
+   * 重点验证两件以前缺失、现在必须成立的事：
    *   1. 编辑器标签为空时不给一个假的「欢迎.md」占位
    *   2. 编辑器有真正的空态提示（而不是一片空白）
-   *   3. 顶栏模型名读的是真实配置，不是硬编码的字符串
-   * 第 3 条的写法：未配置时应该显示「未配置模型」，任何具体模型名都说明又问硬编码了。
+   *
+   * 第 3 条（模型名读真实配置）原来查的是顶栏的 .crumb-model，
+   * 那个位置已经取消 —— 模型选择移到了 AI 输入框下方，
+   * 断言也随之改到新位置（见下面「模型选择器」那段）。
    */
   try {
     checks.editorEmptyStateFound = Boolean(document.querySelector('.editor-empty'))
@@ -702,20 +756,231 @@ window.__SELFTEST__ = async () => {
       (el.textContent || '').includes('欢迎')
     )
 
-    const crumbModel = document.querySelector('.crumb-model')?.textContent?.trim() || ''
-    checks.crumbModel = crumbModel
-    // 配置里模型为空，所以顶栏必须显示「未配置模型」。
-    // 如果显示的是某个具体模型名，说明又写成硬编码了。
-    checks.crumbModelFromConfig = crumbModel === '未配置模型'
+    // 顶栏不该再显示模型名（已移到输入框下方）
+    checks.topbarHasNoModel = !document.querySelector('.topbar .crumb-model')
 
     checks.newLayoutOk = Boolean(
-      checks.editorPaneFound &&
-        checks.noWelcomeTab &&
-        checks.crumbModelFromConfig
+      checks.editorPaneFound && checks.noWelcomeTab && checks.topbarHasNoModel
     )
   } catch (err) {
     checks.newLayoutOk = false
     checks.newLayoutError = String(err)
+  }
+
+  /*
+   * 编辑器工具条：模型选择 + 权限模式。
+   *
+   * 这两个控件在 **AI 输入框的工具条**里（.composer-bar），不在编辑器那一侧。
+   * 断言要跟着改，而且要注意它们不再是原生 <select> 了 ——
+   * 原生 select 的展开列表由系统绘制、CSS 管不到，已换成自绘的
+   * ui/Select.tsx。所以交互也从「设 value + 派发 change」变成
+   * 「点按钮 → 点弹出层里的选项」。
+   *
+   * 三条断言，各自防一种坏法：
+   *   1. 控件在**输入框工具条**里（它们决定「AI 接下来怎么干活」，
+   *      属于下指令前会看一眼的东西，贴输入框最顺）
+   *   2. 点开真的弹出列表（防触发器与弹层没接上）
+   *   3. 选中真的写回配置（防「看着能点、其实没生效」）
+   *      —— 第 3 条最要紧：用户以为换了模式，AI 却按旧的干活
+   */
+  try {
+    const bar = document.querySelector('.composer-bar')
+    const modeBtn = bar?.querySelector('.mode-picker') as HTMLElement | null
+    const modelBtn = bar?.querySelector('.model-picker') as HTMLElement | null
+
+    checks.editorToolbarFound = Boolean(bar)
+    checks.modeSwitcherFound = Boolean(modeBtn)
+    checks.modelPickerFound = Boolean(modelBtn)
+    // 两个控件都必须在输入框工具条里，且**不在**编辑器那一侧
+    checks.pickersInComposer = Boolean(
+      modeBtn?.closest('.composer-bar') && !modeBtn?.closest('.editor-dock')
+    )
+
+    // 模型控件在没配模型时应显示「未配置模型」（防硬编码具体模型名）
+    checks.modelPickerText = modelBtn?.textContent?.trim() || ''
+    checks.modelPickerFromConfig = checks.modelPickerText === '未配置模型'
+
+    /*
+     * 打开权限模式下拉，点选「计划模式」，验证真的写回配置。
+     * 自检环境默认是对话模式。
+     */
+    checks.modeSwitcherDefault = (modeBtn?.textContent || '').includes('对话模式')
+
+    let popupOpened = false
+    let applied = false
+    if (modeBtn instanceof HTMLElement) {
+      modeBtn.click()
+      popupOpened = await waitFor(() => Boolean(document.querySelector('.ui-select-pop')), 3_000)
+
+      /*
+       * ★ 弹层必须**出现在视口里**，而不只是存在于 DOM。
+       *
+       * 这条是踩了一个真 bug 之后补的：弹层原来用 position:fixed +
+       * 视口坐标，而祖先 .composer 的 backdrop-filter 会为 fixed
+       * 创建新的包含块，于是弹层按 .composer 的坐标系渲染 ——
+       * 实测偏移 779px、跑到屏幕外（按钮 x=1231，弹层 x=2213，
+       * 视口只有 1439 宽）。用户看到的是「点了没反应」。
+       *
+       * 而当时「弹层存在」这条断言是**通过的** —— 它在 DOM 里，
+       * 只是不在屏幕内。所以只查存在性根本挡不住这类问题，
+       * 必须量它和按钮的相对位置。
+       */
+      const pop = document.querySelector('.ui-select-pop') as HTMLElement | null
+      if (pop && modeBtn) {
+        const pr = pop.getBoundingClientRect()
+        const br = modeBtn.getBoundingClientRect()
+        checks.popupRect = {
+          pop: { left: Math.round(pr.left), top: Math.round(pr.top), w: Math.round(pr.width), h: Math.round(pr.height) },
+          btn: { left: Math.round(br.left), top: Math.round(br.top), bottom: Math.round(br.bottom) },
+          viewport: { w: window.innerWidth, h: window.innerHeight }
+        }
+        // 在视口内
+        checks.popupInViewport = Boolean(
+          pr.top >= 0 && pr.left >= 0 && pr.bottom <= window.innerHeight + 1 && pr.right <= window.innerWidth + 1
+        )
+        // 并且**贴着按钮上方**（向上展开）。容差 12px：4px 间距 + 边框与取整
+        checks.popupAnchoredToButton = Boolean(
+          Math.abs(pr.bottom - br.top) <= 12 && pr.right >= br.left - 2 && pr.left <= br.right + 2
+        )
+        // 用 elementFromPoint 验证它真的没被别的东西盖住
+        const inPop = document.elementFromPoint(pr.left + pr.width / 2, pr.top + pr.height / 2)
+        checks.popupNotCovered = Boolean(inPop && pop.contains(inPop))
+      } else {
+        checks.popupInViewport = false
+        checks.popupAnchoredToButton = false
+        checks.popupNotCovered = false
+      }
+      const opt = Array.from(
+        document.querySelectorAll('.ui-select-pop .ui-select-item-label')
+      ).find((el) => (el.textContent || '').includes('计划模式')) as HTMLElement | undefined
+      if (opt) {
+        // 用 mousedown：组件监听的是 mousedown（click 会先让按钮失焦）
+        opt.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+        applied = await waitFor(
+          () =>
+            (document.querySelector('.composer-bar .mode-picker')?.textContent || '').includes(
+              '计划模式'
+            ),
+          3_000
+        )
+      }
+      /*
+       * 复原成交付模式。
+       *
+       * ⚠️ 两步缺一不可：**API 落盘 + 把配置同步回 store**。
+       *
+       * 只调 API 的话，主进程配置确实回到 chat 了，但渲染层的 store
+       * 还停在旧模式 —— 界面按钮继续显示「计划模式」，而后面
+       * chooseMode 会因「目标模式 === 当前模式」直接 return，
+       * 于是「再切一次计划模式」什么都没发生，断言莫名其妙地红。
+       * 这个坑踩过一次，当时误以为是功能问题。
+       *
+       * 不用「点界面复原」：那依赖选择器始终正确，控件一换位置就会
+       * 静默失效并把状态残留到下次自检。API + 同步 store 与界面无关。
+       */
+      await window.api.setPermissionMode('chat')
+      const { useAppStore } = await import('./store/useAppStore')
+      useAppStore.getState().applyConfig(await window.api.getConfig())
+    }
+    checks.modeSwitcherPopupOpened = popupOpened
+    checks.modeSwitcherApplies = applied
+    checks.popupVisibleOk = Boolean(
+      popupOpened && checks.popupInViewport && checks.popupAnchoredToButton && checks.popupNotCovered
+    )
+
+    /*
+     * 「完全允许」必须二次确认。
+     *
+     * 这是**安全性断言**，不是体验断言：它没有边界检查，误点一下 AI 就能
+     * 读写磁盘任意位置，而且已经发生的读写收不回来。
+     *
+     * 分三步验证，每步都防一种坏法：
+     *   1. 选「完全允许」后**不能立刻生效**，必须先弹出确认
+     *      —— 只断言「弹层出现」不够：如果代码先落盘再弹层，
+     *      那弹层只是个装饰，用户点取消也来不及了
+     *   2. 点「取消」后模式**保持原样**
+     *   3. 点「确认」后才真的切过去
+     */
+    let fullNeedsConfirm = false
+    let fullHeldBack = false
+    let cancelKeepsMode = false
+    if (modeBtn instanceof HTMLElement) {
+      modeBtn.click()
+      await waitFor(() => Boolean(document.querySelector('.ui-select-pop')), 3_000)
+      const fullOpt = Array.from(
+        document.querySelectorAll('.ui-select-pop .ui-select-item-label')
+      ).find((el) => (el.textContent || '').includes('完全允许')) as HTMLElement | undefined
+      if (fullOpt) {
+        fullOpt.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+        fullNeedsConfirm = await waitFor(
+          () => Boolean(document.querySelector('.dialog-confirm')),
+          3_000
+        )
+        /*
+         * 关键：确认弹层出现时，配置里的模式**必须还是 chat**。
+         * 先落盘再问 = 确认形同虚设。
+         */
+        const cfgNow = await window.api.getPermissionMode()
+        fullHeldBack = cfgNow === 'chat'
+        // 点取消：模式不该变
+        const cancelBtn = document.querySelector(
+          '.dialog-confirm .dialog-actions .ghost'
+        ) as HTMLElement | null
+        cancelBtn?.click()
+        cancelKeepsMode = await waitFor(
+          () => !document.querySelector('.dialog-confirm'),
+          3_000
+        )
+        const afterCancel = await window.api.getPermissionMode()
+        cancelKeepsMode = cancelKeepsMode && afterCancel === 'chat'
+      }
+    }
+    checks.fullModeNeedsConfirm = fullNeedsConfirm
+    checks.fullModeNotAppliedBeforeConfirm = fullHeldBack
+    checks.fullModeCancelKeepsMode = cancelKeepsMode
+
+    checks.fullModeConfirmOk = Boolean(fullNeedsConfirm && fullHeldBack && cancelKeepsMode)
+
+    /*
+     * 另外两档**不该**弹确认。
+     *
+     * 每步都问会让用户形成无脑点确定的习惯，那道确认就白设了。
+     * 这里用「计划模式」验一次：选了它应当直接生效、没有弹层。
+     */
+    let planDirect = false
+    if (modeBtn instanceof HTMLElement) {
+      modeBtn.click()
+      await waitFor(() => Boolean(document.querySelector('.ui-select-pop')), 3_000)
+      const planOpt = Array.from(
+        document.querySelectorAll('.ui-select-pop .ui-select-item-label')
+      ).find((el) => (el.textContent || '').includes('计划模式')) as HTMLElement | undefined
+      if (planOpt) {
+        planOpt.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+        await waitFor(() => !document.querySelector('.ui-select-pop'), 2_000)
+        // 没有确认弹层，且模式已经变了
+        planDirect =
+          !document.querySelector('.dialog-confirm') &&
+          (await window.api.getPermissionMode()) === 'plan'
+      }
+    }
+    checks.planModeNoConfirm = planDirect
+    /*
+     * 复原：同样是「API 落盘 + 同步 store」两步，理由见上面那段注释。
+     * 这里重新动态 import 一次，因为上面那次是在另一个 if 块里声明的，
+     * 出了块就不在作用域内。
+     */
+    await window.api.setPermissionMode('chat')
+    const storeMod = await import('./store/useAppStore')
+    storeMod.useAppStore.getState().applyConfig(await window.api.getConfig())
+
+    checks.modeSwitcherOk = Boolean(
+      checks.modeSwitcherFound && checks.modeSwitcherDefault && popupOpened && applied
+    )
+    checks.modelPickerOk = Boolean(checks.modelPickerFound && checks.modelPickerFromConfig)
+  } catch (err) {
+    checks.modeSwitcherOk = false
+    checks.modelPickerOk = false
+    checks.editorToolbarError = String(err)
   }
 
   /*
@@ -853,12 +1118,20 @@ window.__SELFTEST__ = async () => {
     splitterRangeConsistent: Boolean(checks.splitterRangeConsistent),
     previewOk: Boolean(checks.previewOk),
     sidebarToggleOk: Boolean(checks.sidebarToggleOk),
+    sidebarSplitterOk: Boolean(checks.sidebarSplitterOk),
     composerOk: Boolean(checks.composerOk),
     atRefOk: Boolean(checks.atRefOk),
     historyPopoverOk: Boolean(checks.historyPopoverOk),
     layoutOk: Boolean(checks.layoutOk),
     welcomeOk: Boolean(checks.welcomeOk),
     newLayoutOk: Boolean(checks.newLayoutOk),
+    modelPickerOk: Boolean(checks.modelPickerOk),
+    modeSwitcherOk: Boolean(checks.modeSwitcherOk),
+    fullModeConfirmOk: Boolean(checks.fullModeConfirmOk),
+    popupVisibleOk: Boolean(checks.popupVisibleOk),
+    planModeNoConfirm: Boolean(checks.planModeNoConfirm),
+    editorToolbarFound: Boolean(checks.editorToolbarFound),
+    pickersInComposer: Boolean(checks.pickersInComposer),
     allNeededLanguagesRegistered: Boolean(checks.allNeededLanguagesRegistered),
     languageCountReasonable: Boolean(checks.languageCountReasonable),
     noDevApiStub: !checks.devApiStub

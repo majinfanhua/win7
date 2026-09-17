@@ -17,8 +17,7 @@
  *      不报错，只是窄屏下不变形。
  *
  *   3. editor.css 在所有拆分文件之后。
- *      .editor-host 与 .crumb-model 在 dormant.css / topbar.css 里各有一份
- *      基础定义，editor.css 是覆盖的那一份，必须在后。
+ *      .editor-host 在 dormant.css 里有基础定义，editor.css 是覆盖的那一份，必须在后。
  *
  *   4. explorer.css 在 sidebar.css 之后、responsive.css 之前。
  *      它补的是 sidebar.css 里 .filetree / .tree-* 的工具栏、排序、面包屑，
@@ -29,11 +28,18 @@
  *      dormant.css 里有一份 .logs（等宽字体 + warn/error 配色），
  *      logs.css 是把它装进抽屉外壳的那一份，必须在后。
  *
+ *   6. ui.css 紧跟 base。
+ *      它只定义通用原语（自绘下拉），依赖 base 的 CSS 变量，
+ *      且应当被后面的组件样式覆盖，所以在最前。
+ *
  * 另外 .nav-item 在 settings.css 与 sidebar.css 里各有一份，靠顺序共存。
  * 往中间插新文件时，确认上面这几条没被破坏。
  */
 
 @import './base.css';
+/* ui.css 紧跟 base：它只定义通用原语（自绘下拉），依赖 base 的变量，
+   且会被后面的组件样式覆盖，所以放在最前面 */
+@import './ui.css';
 @import './chat.css';
 @import './dialog.css';
 @import './settings.css';

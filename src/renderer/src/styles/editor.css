@@ -100,10 +100,3 @@
   max-width: 300px;
   line-height: 1.7;
 }
-
-/* 顶栏面包屑：模型名未配置时用警觉色，提示这里还没填 */
-.crumb-model.is-empty {
-  color: var(--danger);
-  opacity: 0.8;
-}
-

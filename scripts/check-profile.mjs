@@ -44,15 +44,31 @@ function check(name, ok, detail = '') {
   if (!ok) failures += 1
 }
 
+/**
+ * 把一个 TS 模块打成 CJS 再 require。
+ *
+ * ⚠️ 必须用 buildSync 而**不是** transformSync：后者只翻译单个文件、
+ * 不解析 import，一旦被测模块 depend on 别的本地模块就会在 require 时
+ * 报「Cannot find module」。system-doc.ts 现在 import 了 prompt-contract.ts，
+ * 所以这里必须 bundle。
+ */
 function loadTs(relPath) {
   const esbuild = require('esbuild')
-  const out = esbuild.transformSync(fs.readFileSync(path.join(root, relPath), 'utf8'), {
-    loader: 'ts',
+  const out = esbuild.buildSync({
+    stdin: {
+      contents: `export * from ${JSON.stringify(path.join(root, relPath))}`,
+      resolveDir: root,
+      loader: 'ts'
+    },
+    bundle: true,
+    platform: 'node',
     format: 'cjs',
-    target: 'node16'
+    target: 'node16',
+    write: false,
+    logLevel: 'silent'
   })
   const tmp = path.join(os.tmpdir(), `profile-${process.pid}-${path.basename(relPath)}.cjs`)
-  fs.writeFileSync(tmp, out.code)
+  fs.writeFileSync(tmp, out.outputFiles[0].text)
   const mod = require(tmp)
   fs.rmSync(tmp, { force: true })
   return mod
@@ -70,13 +86,13 @@ const { scanSecrets, hasSecret, redactSecrets, describeSecretBlock } = secret
   const input = {
     aiName: '小助',
     userName: '同学',
-    systemPrompt: '你是一名中文技术助手。',
     habits: '- 我只用 Windows\n- 解释尽量短',
     runtimes: [
       { name: 'python', version: 'Python 3.11.4', note: '可以跑 .py 脚本' },
       { name: 'node', version: 'v18.17.0', note: '可以跑 .js 脚本与 npm' }
     ],
-    environmentNote: '用户的操作系统：Windows 10，64 位。'
+    environmentNote: '用户的操作系统：Windows 10，64 位。',
+    permissionMode: 'chat'
   }
   const first = buildSystemDoc(input)
   const second = buildSystemDoc({ ...input })
@@ -98,7 +114,6 @@ const { scanSecrets, hasSecret, redactSecrets, describeSecretBlock } = secret
   // 内容确实被拼进去了
   check('包含 AI 名字', first.includes('小助'))
   check('包含对用户的称呼', first.includes('同学'))
-  check('包含默认提示词', first.includes('你是一名中文技术助手。'))
   check('包含习惯', first.includes('我只用 Windows'))
   check('包含运行时清单', first.includes('python') && first.includes('3.11.4'))
   check('包含系统环境说明', first.includes('Windows 10'))
@@ -110,22 +125,41 @@ const { scanSecrets, hasSecret, redactSecrets, describeSecretBlock } = secret
   const text = buildSystemDoc({
     aiName: '小助',
     userName: '同学',
-    systemPrompt: '提示词内容',
     habits: '习惯内容',
     runtimes: [{ name: 'python', version: '3.11', note: '跑脚本' }],
-    environmentNote: '环境说明'
+    environmentNote: '环境说明',
+    permissionMode: 'chat'
   })
-  const atIdentity = text.indexOf('你的身份')
-  const atPrompt = text.indexOf('你要做什么')
-  const atHabits = text.indexOf('用户的习惯')
-  const atEnv = text.indexOf('本机环境')
+  const atPlatform = text.indexOf('## 平台')
+  const atTools = text.indexOf('## 怎么用工具干活')
+  const atDiscipline = text.indexOf('## 工作纪律')
+  const atState = text.indexOf('## 当前运行状态')
+  const atEnv = text.indexOf('## 本机环境')
+  const atMark = text.indexOf('以下可以用「设置 → AI 设定」修改')
+  const atIdentity = text.indexOf('## 你的身份')
+  const atHabits = text.indexOf('## 用户的习惯')
 
-  check('身份段在最前', atIdentity > 0 && atIdentity < atPrompt)
-  check('提示词在身份之后', atPrompt > 0 && atPrompt < atHabits)
-  check('习惯在提示词之后', atHabits > 0 && atHabits < atEnv)
-  // ★ 环境最后：装了个 python 就该只影响它后面（其实没有后面），
-  //   前面的稳定前缀照样命中缓存。反过来放，一次环境变化会废掉全部缓存
-  check('环境段在最后', atEnv > atHabits)
+  /*
+   * 契约内部顺序固定：平台 → 工具 → 纪律。
+   * 它们只随应用升级变，是最稳定的内容，所以排在最前面。
+   */
+  check('平台在工具之前', atPlatform > 0 && atPlatform < atTools)
+  check('工具在纪律之前', atTools > 0 && atTools < atDiscipline)
+  check('纪律在运行状态之前', atDiscipline > 0 && atDiscipline < atState)
+  // ★ 运行状态随权限模式变、环境随项目/机器变，都排在契约之后 ——
+  //   这样换个模式或换个项目，前面几百字契约照样命中缓存
+  check('运行状态在环境之前', atState > 0 && atState < atEnv)
+
+  /*
+   * 用户可改区必须在**所有**程序维护段之后。
+   * 这条是这次改造的核心：用户打开系统.md 要能一眼看出分界。
+   */
+  check('分界存在', atMark > 0)
+  check('分界在全部契约段之后', atPlatform < atMark && atTools < atMark && atDiscipline < atMark)
+  check('分界在运行状态之后', atState < atMark)
+  check('分界在环境之后', atEnv < atMark)
+  check('身份在分界之后', atIdentity > atMark)
+  check('习惯在分界之后', atHabits > atMark)
 }
 
 /* ══ 3. 空值处理：绝不产生空壳段落 ══════════════════════════ */
@@ -134,22 +168,27 @@ const { scanSecrets, hasSecret, redactSecrets, describeSecretBlock } = secret
   const bare = buildSystemDoc({
     aiName: '',
     userName: '',
-    systemPrompt: '',
     habits: '',
     runtimes: [],
-    environmentNote: ''
+    environmentNote: '',
+    permissionMode: 'chat'
   })
-  check('全空时不出现「你的身份」段', !bare.includes('你的身份'))
+  // 查段**标题**而不是字样：文件头注释里提到了「你的身份」
+  //   （说明哪部分可改），那是文字说明不是段
+  check('全空时不出现「你的身份」段', !/^## 你的身份/m.test(bare))
+  // 契约段**永远在**（由程序维护，与用户填了什么无关）—— 这是这次改造的设计
+  check('全空时契约段仍然在', bare.includes('## 平台') && bare.includes('## 工作纪律'))
   check('全空时不出现空名字「」', !bare.includes('「」'))
   check('全空时不出现「你要做什么」段', !bare.includes('你要做什么'))
-  check('全空时不出现「本机环境」段', !bare.includes('本机环境'))
+  // 注意：契约里有一句「见下面的「本机环境」段」是对模型的指引，
+  //   所以这里查的是**段标题**而不是字样
+  check('全空时不出现「本机环境」段标题', !/^## 本机环境/m.test(bare))
   check('全空时仍然有文件头说明', bare.includes('系统设定') && bare.includes('自动生成'))
 
   // 只有名字没有称呼：不该出现「称呼用户为「」」
   const onlyName = buildSystemDoc({
     aiName: '小助',
     userName: '',
-    systemPrompt: '',
     habits: '',
     runtimes: []
   })
@@ -159,7 +198,6 @@ const { scanSecrets, hasSecret, redactSecrets, describeSecretBlock } = secret
   const onlyUser = buildSystemDoc({
     aiName: '',
     userName: '同学',
-    systemPrompt: '',
     habits: '',
     runtimes: []
   })
@@ -186,13 +224,14 @@ const { scanSecrets, hasSecret, redactSecrets, describeSecretBlock } = secret
   const long = buildSystemDoc({
     aiName: '一二三四五六七八九十',
     userName: '甲乙丙丁戊己庚',
-    systemPrompt: 'x',
     habits: 'y'.repeat(HABITS_MAX + 500),
-    runtimes: []
+    runtimes: [],
+    permissionMode: 'chat'
   })
   check('超长名字被夹到上限', long.includes('一二三四五') && !long.includes('一二三四五六'))
   check('超长称呼被夹到上限', long.includes('甲乙丙丁戊') && !long.includes('甲乙丙丁戊己'))
-  check('习惯被夹到上限', long.length < HABITS_MAX + 1000)
+  // 契约段让总长度不再是「习惯长度」，所以断言习惯内容本身被夹住
+  check('习惯被夹到上限', !long.includes('y'.repeat(HABITS_MAX + 100)) && long.includes('y'.repeat(100)))
 
   check('AI_NAME_MAX 是 5', AI_NAME_MAX === 5)
   check('USER_NAME_MAX 是 5', USER_NAME_MAX === 5)

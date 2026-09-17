@@ -58,8 +58,22 @@ export const COMMAND_TOOLS: ToolName[] = ['runCommand', 'jobRun', 'jobPoll', 'jo
  */
 export const MEMORY_TOOLS: ToolName[] = ['listSessions', 'readSession', 'memoryGet', 'memoryWrite']
 
+/**
+ * 技能工具。
+ *
+ * 与记忆工具同类（都是应用自有数据，不是用户的代码），但单独一组：
+ * 技能正文是**用户自己写的指令**，模型会照着执行 —— 这与「AI 记了点什么」
+ * 是不同的信任层级。设置界面里分开列，用户才能单独关掉它。
+ */
+export const SKILL_TOOLS: ToolName[] = ['listSkills', 'readSkill']
+
 /** 全部工具，用于设置界面展示与门控计算 */
-export const ALL_TOOLS: ToolName[] = [...CROSS_OS_TOOLS, ...COMMAND_TOOLS, ...MEMORY_TOOLS]
+export const ALL_TOOLS: ToolName[] = [
+  ...CROSS_OS_TOOLS,
+  ...COMMAND_TOOLS,
+  ...MEMORY_TOOLS,
+  ...SKILL_TOOLS
+]
 
 /**
  * 已经实现、可以真正交给模型的工具。
@@ -68,7 +82,12 @@ export const ALL_TOOLS: ToolName[] = [...CROSS_OS_TOOLS, ...COMMAND_TOOLS, ...ME
  * 命令类四个已经实现（command-tools.ts），但能不能进工具表还要看门控：
  * 只有 Windows 10/11 且真的找到 powershell.exe 才会出现。
  */
-export const IMPLEMENTED_TOOLS: ToolName[] = [...CROSS_OS_TOOLS, ...COMMAND_TOOLS, ...MEMORY_TOOLS]
+export const IMPLEMENTED_TOOLS: ToolName[] = [
+  ...CROSS_OS_TOOLS,
+  ...COMMAND_TOOLS,
+  ...MEMORY_TOOLS,
+  ...SKILL_TOOLS
+]
 
 export const TOOL_REQUIREMENTS: Record<ToolName, ToolRequirement> = {
   readFile: 'none',
@@ -87,7 +106,10 @@ export const TOOL_REQUIREMENTS: Record<ToolName, ToolRequirement> = {
   listSessions: 'none',
   readSession: 'none',
   memoryGet: 'none',
-  memoryWrite: 'none'
+  memoryWrite: 'none',
+  // 技能是读用户自己写的 Markdown 文件，不碰工作区、不需要外部程序
+  listSkills: 'none',
+  readSkill: 'none'
 }
 
 export const TOOL_LABELS: Record<ToolName, string> = {
@@ -106,7 +128,9 @@ export const TOOL_LABELS: Record<ToolName, string> = {
   listSessions: '翻归档会话',
   readSession: '读会话记录',
   memoryGet: '读记忆',
-  memoryWrite: '记一笔'
+  memoryWrite: '记一笔',
+  listSkills: '查看技能',
+  readSkill: '读取技能'
 }
 
 /** 要求对应的人类说法，用于「本机不支持」的原因文案 */
@@ -120,7 +144,16 @@ export const REQUIREMENT_LABELS: Record<ToolRequirement, string> = {
 export interface ToolSchema {
   type: 'function'
   function: {
-    name: ToolName
+    /*
+     * 内置工具用 ToolName（封闭联合），**MCP 工具名是运行时才知道的**
+     * （形如 mcp__server__tool），所以这里放宽成 string。
+     *
+     * 放宽的代价是内置工具名不再被类型检查钉住 —— 所以 TOOL_SCHEMAS
+     * 里每一项的 name 仍然写 ToolName 字面量，由下面这一行的类型收口：
+     * 真正的约束是 TOOL_LABELS/TOOL_REQUIREMENTS 那两个 Record，它们
+     * 要求每个 ToolName 都有条目，漏了会编译不过。
+     */
+    name: string
     description: string
     parameters: Record<string, unknown>
   }
@@ -456,6 +489,46 @@ export const TOOL_SCHEMAS: ToolSchema[] = [
           }
         },
         required: ['content']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'listSkills',
+      description:
+        '列出当前可用的技能（Skills）—— 也就是「怎么做某件事」的说明书，' +
+        '由用户预先写好。**开始一项不熟悉的活之前先看一眼这里**：' +
+        '如果用户为这类任务写了技能，按它做出来的结果会符合他的习惯。\n' +
+        '这里只返回名字和一句话说明，很便宜。确定要用某一个时，' +
+        '再用 readSkill 读它的正文。',
+      parameters: {
+        type: 'object',
+        properties: {
+          keyword: {
+            type: 'string',
+            description: '只列名字或说明含这个词的技能。不填则列全部'
+          }
+        },
+        required: []
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'readSkill',
+      description:
+        '读一个技能的完整正文。正文是用户写的具体做法与约定，' +
+        '**读到之后要照着做**，不要只当成参考资料。\n' +
+        'id 从 listSkills 的结果里取。一次只读一个：确实需要多个时再多次调用，' +
+        '避免把不相关的说明读进来占上下文。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: '技能 id，来自 listSkills 的结果' }
+        },
+        required: ['id']
       }
     }
   }

@@ -6,6 +6,7 @@ import { app } from 'electron'
 import { buildSystemDoc, SYSTEM_DOC_NAME, type RuntimeLine } from '../shared/system-doc'
 import { atomicWriteFile, withLock } from './atomic-file'
 import { getConfig } from './config'
+import { getPermissionMode } from './permissions'
 import { detectRuntimes } from './runtimes'
 import { detectPlatform } from './platform-compat'
 import { getScratchRoot, getWorkspaceRoot } from './paths'
@@ -91,10 +92,15 @@ async function render(): Promise<string> {
   return buildSystemDoc({
     aiName: ai.aiName,
     userName: ai.userName,
-    systemPrompt: ai.systemPrompt,
     habits: ai.habits,
     runtimes,
-    environmentNote: describeEnvironment()
+    environmentNote: describeEnvironment(),
+    /*
+     * 权限模式要进 prompt：让模型**提前知道自己的边界**
+     * （计划模式只能读、完全允许模式无范围限制），
+     * 而不是撞到工具报错才知道。
+     */
+    permissionMode: getPermissionMode()
   })
 }
 
@@ -215,8 +221,8 @@ export async function regenerateSystemDoc(): Promise<DocState> {
  * 用户说过「我只能在设置里改；如果自己去改了，你发起会话前就重新覆盖一遍」。
  * 这里就是那道覆盖。返回的内容直接进 system prompt。
  *
- * 返回 null 表示组装失败（读不到配置等极端情况）——
- * 调用方应当退回用设置里的 systemPrompt，而不是发一个空的 system prompt。
+ * 返回 null 表示组装失败（读不到配置等极端情况）。
+ * 返回 null 时调用方应退回一个最小的 system prompt，而不是发空串。
  */
 export async function ensureSystemDoc(): Promise<string | null> {
   try {

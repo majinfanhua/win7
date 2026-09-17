@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { AppConfig } from '@shared/types'
 import { SPLIT_MAX, SPLIT_MIN } from '@shared/types'
 import AiPanel, { type AiPanelHandle } from './components/AiPanel'
 import DoctorDialog from './components/DoctorDialog'
@@ -22,17 +21,6 @@ import { applyTheme, readTheme, type Theme } from './theme'
  * DOM 顺序「编辑器 → 分割条 → 对话」是踩过坑的契约，加栏会连锁破坏它。
  */
 type View = 'chat' | 'settings' | 'explorer'
-
-/**
- * 顶栏显示的模型名。
- *
- * 读真实配置而不是写死字符串 —— 以前这里硬编码了 'deepseek-v4-flash'，
- * 在设置里换了模型，顶栏纹丝不动，还带个点不动的下拉箭头。
- */
-function modelLabel(config: AppConfig | null): string {
-  const model = config?.ai.model?.trim()
-  return model || '未配置模型'
-}
 
 /**
  * 双击分割条时回到的默认比例。
@@ -376,23 +364,19 @@ export default function App(): JSX.Element {
             */}
 
             {/*
-              面包屑：项目名 / 模型名。
-              点一下去设置页 —— 以前它带个 ▾ 箭头却点不动（点了是开工作区），
-              看着像可以切换模型。要么让它真的能改，要么不装那个箭头；
-              这里选后者：模型统一在设置页改，指过去就好。
+              面包屑：只显示项目名。
+              模型名以前也在这里，现已移到 AI 输入框下方的模型选择器 ——
+              换模型是「聊天」这件事的一部分，眼睛不该跑到左上角。
+              这里保留「点一下去设置页」的行为（设置里能改模型/工具能力等）。
             */}
             <button
               className="crumb"
-              title={workspace ? `${workspace}\n点击去设置里切换模型` : '还没有选择项目'}
+              title={workspace ? `${workspace}\n点击打开设置` : '还没有选择项目'}
               onClick={openSettings}
             >
               <FolderIcon />
               <span className="crumb-text">
                 {workspace ? workspace.split(/[\\/]/).filter(Boolean).pop() : '未打开项目'}
-              </span>
-              <span className="crumb-sep">/</span>
-              <span className={`crumb-model${config?.ai.model ? '' : ' is-empty'}`}>
-                {modelLabel(config)}
               </span>
             </button>
 

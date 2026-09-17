@@ -11,10 +11,13 @@ import { getRuntimeInfo, registerDiagnosticsIpc, setCompatState } from './ipc/di
 import { closePreviewServer, registerWorkspaceIpc, restoreLastWorkspace } from './ipc/workspace'
 import { registerSessionIpc } from './ipc/sessions'
 import { registerAiIpc } from './ipc/ai'
+import { registerExtensionIpc } from './ipc/extensions'
 import { registerProfileIpc, flushProfile, scheduleArchiveCatchUp } from './ipc/profile'
 import { invalidateSystemPrompt } from './system-doc'
 import { drainWrites } from './atomic-file'
 import { killAllJobs } from './tools/jobs'
+import { stopAllMcp } from './mcp/manager'
+import { ensureSkillsDir } from './skills'
 import { setFileChangeEmitter, stopWatching, watchWorkspace } from './watcher'
 import { initRoots } from './paths'
 import {
@@ -65,7 +68,7 @@ function createWindow(): BrowserWindow {
     show: false,
     // 和默认主题（深色）的底色一致，避免启动瞬间闪一下别的颜色
     backgroundColor: '#0e1116',
-    title: '航科教育 · AI 代码编辑器',
+    title: 'hangkeIDE',
     icon: windowIconPath(),
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
@@ -153,8 +156,22 @@ function registerConfigIpc(): void {
      * 两处都不依赖这个 handler，所以这里 fire-and-forget 反而曾经
      * 制造过一个竞态：设置页点「查看全文」时生成可能还没落盘，
      * 于是显示的是**改之前**的内容，用户以为设置没生效。
+     *
+     * ⚠️ 哪些 section 变了要丢快照 —— 这里曾经漏掉 permission：
+     * permission 会被写进 system prompt 的「当前运行状态」段
+     * （见 prompt-contract.ts 的 buildRuntimeState），但漏掉它之后，
+     * 在输入框下方切到计划模式时快照仍是旧的，模型收到的还是
+     * 「对话模式」—— 表现为「明明切了计划模式，AI 却照旧动手改文件」。
+     * 这条是实测发现的（切模式后 getSystemDoc 仍报旧模式）。
+     *
+     * 判据：**任何会进 system prompt 的 section 都要在这里**。
+     * 目前是 ai（身份/习惯）与 permission（运行状态）。
      */
-    if (patch && typeof patch === 'object' && 'ai' in patch) {
+    const touchesPrompt =
+      patch &&
+      typeof patch === 'object' &&
+      ('ai' in patch || 'permission' in patch)
+    if (touchesPrompt) {
       invalidateSystemPrompt()
     }
     return next
@@ -173,11 +190,19 @@ function registerConfigIpc(): void {
  */
 function registerPermissionIpc(): void {
   ipcMain.handle(IPC.permissionGetMode, () => getPermissionMode())
-  ipcMain.handle(IPC.permissionSetMode, (_e, mode: string) => {
+  /**
+   * 切权限模式。
+   *
+   * 返回**整份配置**而不是只回模式字符串：渲染层切换后要让各处立刻同步 ——
+   * store 里的 config（顶栏、设置页）以及下一次对话要用的 system prompt
+   * （权限模式会写进「当前运行状态」段）。
+   * 只回字符串的话渲染层还得再发一次 getConfig，多一次往返，
+   * 而且中间存在两边不一致的窗口。
+   */
+  ipcMain.handle(IPC.permissionSetMode, (_e, mode: string): AppConfig => {
     // 走 setConfig 而不是直接调 setPermissionMode：这样模式会落盘，
     // 重启后保持用户的选择（setConfig 内部会把值灌进权限层）
-    setConfig({ permission: { mode: mode as AppConfig['permission']['mode'] } })
-    return getPermissionMode()
+    return setConfig({ permission: { mode: mode as AppConfig['permission']['mode'] } })
   })
   ipcMain.handle(IPC.permissionStartExecuting, (_e, sessionId: string) => {
     /*
@@ -318,7 +343,7 @@ function runSelfTest(win: BrowserWindow): void {
 
 /**
  * 用户数据目录名。
- * 打包版必须是 AIEditor —— 随包《使用说明》、测试清单、CI 的日志导出路径写的都是它。
+ * 打包版必须是 hangkeIDE —— 随包《使用说明》、测试清单、CI 的日志导出路径写的都是它。
  * 开发态（npm run dev / npm run smoke）另起一个 -dev 目录，原因有两个：
  *   1. 不和本机已解压的打包版抢 requestSingleInstanceLock()
  *   2. 开发调试不会写坏真实配置（apiKey / lastWorkspace 都在 config.json 里）
@@ -327,7 +352,7 @@ function runSelfTest(win: BrowserWindow): void {
  * 自检是一次性诊断进程，不能因为「用户正开着编辑器 / dev 里还跑着一个 Electron」
  * 就直接失败退出（本地 npm run smoke 会稳定撞到），也不该把自检日志混进正常日志。
  */
-const BASE_USER_DATA_DIR = app.isPackaged ? 'AIEditor' : 'AIEditor-dev'
+const BASE_USER_DATA_DIR = app.isPackaged ? 'hangkeIDE' : 'hangkeIDE-dev'
 const USER_DATA_DIR = cli.selfTest ? `${BASE_USER_DATA_DIR}-selftest` : BASE_USER_DATA_DIR
 
 /**
@@ -347,7 +372,7 @@ function main(): void {
   // 必须在任何 getPath('userData') 之前固定目录名。
   // Electron 的 app.getName() 默认取 package.json 的 name（也就是 win7-ai-editor），
   // 不是 productName —— 上一轮 CI 实际落在 %APPDATA%\win7-ai-editor\logs，
-  // 而使用说明和 CI 里写的都是 AIEditor，文档会指向一个不存在的目录。
+  // 而使用说明和 CI 里写的都是 hangkeIDE，文档会指向一个不存在的目录。
   app.setName(USER_DATA_DIR)
   app.setPath('userData', path.join(app.getPath('appData'), USER_DATA_DIR))
 
@@ -432,11 +457,18 @@ function main(): void {
       registerWorkspaceIpc()
       registerSessionIpc()
       registerAiIpc()
+      registerExtensionIpc()
       registerProfileIpc()
       restoreLastWorkspace()
       buildMenu()
       // 补做上次没做完的归档总结（延迟执行，不抢启动资源）
       scheduleArchiveCatchUp()
+      /*
+       * 建出技能目录并放一个示例。
+       * 只建一次、只在不存在时写 —— 用户删掉示例后不该被塞回来。
+       * 不 await：它只是建目录 + 写一个小文件，不该拖慢开屏。
+       */
+      void ensureSkillsDir()
 
       mainWindow = createWindow()
       /*
@@ -513,6 +545,12 @@ function main(): void {
   app.on('before-quit', (event) => {
     closePreviewServer()
     stopWatching()
+    /*
+     * MCP 子进程必须显式停掉。
+     * 它们是独立进程，父进程退出**不会**自动带走它们 ——
+     * 不清就会留下孤儿 npx/node 进程，用户下次开机发现一堆莫名的进程。
+     */
+    stopAllMcp()
     // 后台任务（npm run dev / python -m http.server 之类）不杀的话会变成孤儿进程，
     // 继续占着端口与 CPU，下次启动就变成「端口被占用」这种查不到原因的故障
     killAllJobs()

@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
+import { DEFAULT_SIDEBAR_SPLIT, SIDEBAR_SPLIT_MAX, SIDEBAR_SPLIT_MIN } from '@shared/types'
 import { useAppStore } from '../store/useAppStore'
+import { useSplitter } from '../hooks/useSplitter'
 import FileTree from './FileTree'
 import TreeOverlays from './file-tree/TreeOverlays'
 import { useFileTreeController } from './file-tree/useFileTreeController'
@@ -42,6 +44,41 @@ export default function Sidebar({
   const removeWorkspace = useAppStore((s) => s.removeWorkspace)
   const treeOpen = useAppStore((s) => s.treeOpen)
   const setTreeOpen = useAppStore((s) => s.setTreeOpen)
+  const sidebarSplit = useAppStore((s) => s.config?.explorer.sidebarSplit ?? DEFAULT_SIDEBAR_SPLIT)
+  const setSidebarSplit = useAppStore((s) => s.setSidebarSplit)
+
+  /**
+   * 上下分割条。
+   *
+   * 容器尺寸量的是 `.sidenav-body` 的高度（两侧都在它里面）。
+   * 收起态没有可分配的高度，所以传 0 —— 那时 splitter 也不会被渲染。
+   */
+  const bodyRef = useRef<HTMLDivElement | null>(null)
+  const [bodyHeight, setBodyHeight] = useState(0)
+  useEffect(() => {
+    const el = bodyRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver((entries) => {
+      const box = entries[0]?.contentRect
+      if (box) setBodyHeight(box.height)
+    })
+    ro.observe(el)
+    setBodyHeight(el.getBoundingClientRect().height)
+    return () => ro.disconnect()
+  }, [collapsed])
+
+  const sidebarSplitter = useSplitter({
+    axis: 'horizontal',
+    containerSize: bodyHeight,
+    value: sidebarSplit,
+    onChange: (ratio) => void setSidebarSplit(ratio),
+    min: SIDEBAR_SPLIT_MIN,
+    max: SIDEBAR_SPLIT_MAX,
+    // 与内容区那条区分开：侧栏用 --sidebar-split，写到 .sidenav-body 上
+    // （那正是它高度的来源，写这里才不会被别的内联值遮蔽）
+    cssVar: '--sidebar-split',
+    targetSelector: '.sidenav-body'
+  })
 
   const [wsMenu, setWsMenu] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
@@ -88,7 +125,7 @@ export default function Sidebar({
       ) : (
         <div className="sidenav-head">
           <img className="sidenav-logo" src="./logo.png" alt="" />
-          <span className="sidenav-title">航科教育</span>
+          <span className="sidenav-title">hangkeIDE</span>
           <span className="spacer" />
           <button
             className="sidenav-icon"
@@ -102,7 +139,11 @@ export default function Sidebar({
         </div>
       )}
 
-      <div className="sidenav-body">
+      <div
+        className="sidenav-body"
+        ref={bodyRef}
+        style={{ '--sidebar-split': String(sidebarSplit) } as React.CSSProperties}
+      >
         {/*
           上半段：动作键 + 工作区/会话两个列表。
           单独包一层是为了让它在文件树很长时自己滚动，
@@ -250,7 +291,32 @@ export default function Sidebar({
             </button>
           </div>
         ) : (
-          <div className={`nav-group nav-group-tree${treeOpen ? ' is-open' : ''}`}>
+          <>
+            {/*
+              上下分割条：拖它调整「上半段（工作空间）」与「文件树」的高度。
+
+              只在上半段与文件树**都展开**时才给 —— 收起态只有图标列，
+              没有可分配的高度。放在两者之间而不是文件树标题栏上：
+              拖动的语义是「分配高度」，贴在分界处最直观。
+            */}
+            <div
+              className={`splitter sidebar-splitter${sidebarSplitter.dragging ? ' is-dragging' : ''}`}
+              role="separator"
+              aria-orientation="horizontal"
+              aria-label="调整工作空间与文件树的高度"
+              aria-valuenow={Math.round(sidebarSplit * 100)}
+              aria-valuemin={Math.round(SIDEBAR_SPLIT_MIN * 100)}
+              aria-valuemax={Math.round(SIDEBAR_SPLIT_MAX * 100)}
+              tabIndex={0}
+              title="拖动调整高度（双击复位）"
+              onPointerDown={sidebarSplitter.onPointerDown}
+              onKeyDown={sidebarSplitter.onKeyDown}
+              onDoubleClick={() => void setSidebarSplit(DEFAULT_SIDEBAR_SPLIT)}
+            >
+              <span className="splitter-grip" aria-hidden="true" />
+            </div>
+
+            <div className={`nav-group nav-group-tree${treeOpen ? ' is-open' : ''}`}>
             <button
               className="nav-group-head is-clickable"
               aria-expanded={treeOpen}
@@ -272,6 +338,7 @@ export default function Sidebar({
             {/* 用 display 控制而不是条件渲染：树展开时保留滚动位置与展开的目录 */}
             {treeOpen && <FileTree embedded />}
           </div>
+          </>
         )}
 
         {/* 收起态只留图标，悬停用原生 title 提示，不做浮层（老系统上浮层容易闪） */}

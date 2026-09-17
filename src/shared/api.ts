@@ -12,9 +12,11 @@ import type {
   FileNode,
   LoadedFile,
   LogLine,
+  McpServerStatus,
   ModelListResult,
   RuntimeInfo,
   SessionEntry,
+  SkillEntry,
   SnapshotSummary,
   StoredSession,
   SystemDocState,
@@ -39,8 +41,14 @@ export interface AppApi {
 
   /** 当前权限模式（对话 / 计划 / 完全允许） */
   getPermissionMode(): Promise<string>
-  /** 切换权限模式。切换会清掉本会话的越界授权，避免上个模式的放行残留 */
-  setPermissionMode(mode: string): Promise<string>
+  /**
+   * 切换权限模式，返回**整份配置**。
+   *
+   * 返回整份而不是只回模式：调用方（输入框下方的切换器）要立刻把新配置
+   * 写回 store，让顶栏、设置页与下一次对话的 system prompt 都同步。
+   * 切换会清掉本次运行内已授予的越界授权，避免上个模式的放行残留。
+   */
+  setPermissionMode(mode: string): Promise<AppConfig>
   /**
    * 计划模式：用户点了「开始执行」，本会话放行写入。
    * 必须带上 sessionId —— 批准是按会话记的，主进程不自己猜是哪个会话。
@@ -48,6 +56,18 @@ export interface AppApi {
   startExecuting(sessionId: string): Promise<boolean>
   /** 回一个越界审批请求（allow-once / allow-dir / deny） */
   resolveApproval(id: string, choice: string): Promise<boolean>
+
+  /** 列出可用技能（用户级 + 项目级合并，项目级优先） */
+  listSkills(): Promise<SkillEntry[]>
+  /** 读一个技能的正文（设置页的预览用） */
+  readSkillText(id: string): Promise<string>
+  /** 用系统文件管理器打开技能目录，方便用户放自己的技能 */
+  openSkillsDir(): Promise<boolean>
+
+  /** 各 MCP 服务器的运行状态与工具列表 */
+  mcpStatus(): Promise<McpServerStatus[]>
+  /** 连接 / 重连一个 MCP 服务器 */
+  mcpReconnect(id: string): Promise<McpServerStatus[]>
   /** 有越界请求等用户决定 */
   onApprovalRequest(cb: (req: ApprovalRequest) => void): () => void
 
